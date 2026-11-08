@@ -24,6 +24,10 @@ struct FormatArgument {
     /// Whether the value is a real's double, which `%f`, `%e` and `%g` render as C does, and
     /// every other conversion as the integer it rounds to.
     bool isReal = false;
+
+    /// For a string whose length only the run knows, its characters, which every conversion
+    /// shows as they are; the value is then its handle.
+    const std::string* text = nullptr;
 };
 
 /// Everything a conversion may need besides the arguments themselves.

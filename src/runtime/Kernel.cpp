@@ -56,6 +56,25 @@ bool isNegedge(eir::Logic before, eir::Logic after) noexcept {
     return before == eir::Logic::One || after == eir::Logic::Zero;
 }
 
+/// The most characters a string of run-time length may hold: more than any VHDL integer range
+/// spans but the whole of one, so that a mistaken bound is a failure and not an allocation
+/// that fails.
+constexpr std::uint64_t MaxStringLength = std::uint64_t{1} << 31;
+
+/// The character whose code is the byte of `bits` from `lowBit` up; an unknown bit reads as 0.
+char characterAt(eir::ConstBitRef bits, std::uint64_t lowBit) {
+    eir::BitVector code(8);
+    bitops::partSelectAt(code.mutableRef(), bits, lowBit);
+    const eir::ConstBitRef known = code.ref();
+    return static_cast<char>(known.aval()[0] & ~known.bval()[0] & 0xFFU);
+}
+
+/// Writes `character`'s code into the byte of `bits` from `lowBit` up.
+void putCharacter(eir::BitRef bits, std::uint64_t lowBit, char character) {
+    bitops::assignPartAt(
+        bits, eir::BitVector::fromUInt64(static_cast<unsigned char>(character), 8).ref(), lowBit);
+}
+
 /// The words a windowed signal's old value needs, for the widest such signal.
 std::size_t windowScratchWords(const Image& image) {
     std::uint32_t widest = 0;
@@ -234,6 +253,7 @@ void Kernel::initialize() {
     // The lines it allocated go too, so that the run that follows allocates the same handles.
     heap.clear();
     freedHandles.clear();
+    scratch.clear();
     for (EdgeWaiterList& list : edgeWaiters) {
         list.waiters.clear();
         list.sweepAt = MinimumWaiterSweep;
@@ -1490,8 +1510,11 @@ void Kernel::runSystemTask(std::uint32_t processIndex, const Activation& activat
             argument.isConstant
                 ? body.constant(argument.location)
                 : frameAt(activation.frameOffset + argument.location, argument.bitWidth);
-        arguments.push_back(FormatArgument{
-            .value = value, .isSigned = argument.isSigned, .isReal = argument.isReal});
+        arguments.push_back(
+            FormatArgument{.value = value,
+                           .isSigned = argument.isSigned,
+                           .isReal = argument.isReal,
+                           .text = argument.isString ? &scratchAt(value.aval()[0]).text : nullptr});
     }
 
     // The file tasks take a descriptor first, which is not part of what they print. An
@@ -1604,6 +1627,20 @@ void Kernel::runSystemTask(std::uint32_t processIndex, const Activation& activat
         if (!arguments.empty()) freeLine(arguments.front().value.toUInt64());
         return;
 
+    case eir::SysTaskKind::StringSplice: {
+        ScratchString& string = scratchAt(arguments[0].value.toUInt64());
+        const auto index = static_cast<std::int64_t>(arguments[1].value.toUInt64());
+        const eir::ConstBitRef characters = arguments[2].value;
+        const std::uint32_t count = characters.width() / 8;
+        if (!withinOrFailure(string, index, count, descriptor.location)) return;
+        const auto from = static_cast<std::size_t>(string.position(index));
+        for (std::uint32_t at = 0; at < count; ++at)
+            string.text[from + at] = characterAt(characters, std::uint64_t{count - 1 - at} * 8);
+        return;
+    }
+
+    case eir::SysTaskKind::StringRelease: releaseScratch(arguments[0].value.toUInt64()); return;
+
     case eir::SysTaskKind::FileWriteValue: {
         if (arguments.size() < 2) return;
         const auto file = static_cast<std::uint32_t>(arguments[0].value.toUInt64());
@@ -1648,6 +1685,14 @@ void Kernel::runSystemTask(std::uint32_t processIndex, const Activation& activat
     case eir::SysTaskKind::FileEnd:
     case eir::SysTaskKind::LineAppend:
     case eir::SysTaskKind::FileReadValue:
+    case eir::SysTaskKind::StringNew:
+    case eir::SysTaskKind::StringBounds:
+    case eir::SysTaskKind::StringSlice:
+    case eir::SysTaskKind::StringFromArray:
+    case eir::SysTaskKind::StringIntoArray:
+    case eir::SysTaskKind::StringCompare:
+    case eir::SysTaskKind::StringRead:
+    case eir::SysTaskKind::StringMark:
         ENZAN_ASSERT(false, "a system function run as a system task; run the EIR verifier");
         return;
     }
@@ -1697,12 +1742,15 @@ void Kernel::runSystemFunction(std::uint32_t processIndex, const Activation& act
         std::vector<FormatArgument> rest;
         for (std::size_t index = 3; index < descriptor.arguments.size(); ++index) {
             const codegen::SysTaskDescriptor::Argument& compiled = descriptor.arguments[index];
+            const eir::ConstBitRef shown =
+                compiled.isConstant
+                    ? body.constant(compiled.location)
+                    : frameAt(activation.frameOffset + compiled.location, compiled.bitWidth);
             rest.push_back(FormatArgument{
-                .value = compiled.isConstant ? body.constant(compiled.location)
-                                             : frameAt(activation.frameOffset + compiled.location,
-                                                       compiled.bitWidth),
+                .value = shown,
                 .isSigned = compiled.isSigned,
-                .isReal = compiled.isReal});
+                .isReal = compiled.isReal,
+                .text = compiled.isString ? &scratchAt(shown.aval()[0]).text : nullptr});
         }
         const elab::Instance& instance =
             designImage->elaboratedDesign().instances()[state.instanceIndex];
@@ -1770,11 +1818,11 @@ void Kernel::runSystemFunction(std::uint32_t processIndex, const Activation& act
         const codegen::SysTaskDescriptor::Argument& into = descriptor.arguments[1];
         std::ranges::fill(result.avalWords(), 0);
         std::ranges::fill(result.bvalWords(), 0);
-        bitops::assignPartAt(
-            result,
-            into.isConstant ? body.constant(into.location)
-                            : frameAt(activation.frameOffset + into.location, into.bitWidth),
-            0);
+        bitops::assignPartAt(result,
+                             into.isConstant
+                                 ? body.constant(into.location)
+                                 : frameAt(activation.frameOffset + into.location, into.bitWidth),
+                             0);
         const std::uint32_t count = (result.width() - 1) / 8;
         std::string* line = lineAt(argument(0));
         const std::size_t held = line != nullptr ? line->size() : 0;
@@ -1896,6 +1944,138 @@ void Kernel::runSystemFunction(std::uint32_t processIndex, const Activation& act
         }
         return;
     }
+
+    // Strings whose lengths only the run knows, in the scratch the running process makes them in.
+    case eir::SysTaskKind::StringNew: {
+        const auto left = static_cast<std::int64_t>(argument(0));
+        const auto right = static_cast<std::int64_t>(argument(1));
+        const bool ascending = argument(2) != 0;
+        const std::int64_t span = ascending ? right - left : left - right;
+        std::uint64_t length = span < 0 ? 0 : static_cast<std::uint64_t>(span) + 1;
+        if (length > MaxStringLength) {
+            report(eir::SeverityFailure, descriptor.location,
+                   std::format("a string of {} characters, more than {}", length, MaxStringLength));
+            length = 0;
+        }
+        scratch.push_back(
+            ScratchString{.left = left,
+                          .right = right,
+                          .ascending = ascending,
+                          .text = std::string(length, static_cast<char>(argument(3) & 0xFFU))});
+        value = scratch.size();
+        break;
+    }
+
+    case eir::SysTaskKind::StringBounds: {
+        const ScratchString& string = scratchAt(argument(0));
+        std::ranges::fill(result.avalWords(), 0);
+        std::ranges::fill(result.bvalWords(), 0);
+        const auto put = [&](std::uint64_t number, std::uint64_t lowBit) {
+            bitops::assignPartAt(result, eir::BitVector::fromUInt64(number, 64).ref(), lowBit);
+        };
+        put(static_cast<std::uint64_t>(string.left), 128);
+        put(static_cast<std::uint64_t>(string.right), 64);
+        put(string.text.size(), 0);
+        return;
+    }
+
+    case eir::SysTaskKind::StringSlice: {
+        std::ranges::fill(result.avalWords(), 0);
+        std::ranges::fill(result.bvalWords(), 0);
+        const ScratchString& string = scratchAt(argument(0));
+        const auto index = static_cast<std::int64_t>(argument(1));
+        const std::uint32_t count = result.width() / 8;
+        if (!withinOrFailure(string, index, count, descriptor.location)) return;
+        const auto from = static_cast<std::size_t>(string.position(index));
+        for (std::uint32_t at = 0; at < count; ++at)
+            putCharacter(result, std::uint64_t{count - 1 - at} * 8, string.text[from + at]);
+        return;
+    }
+
+    // A slice of an array, whose bounds the run gives, as a string of its own; its elements are
+    // where they are in the array, the right bound's lowest.
+    case eir::SysTaskKind::StringFromArray:
+    case eir::SysTaskKind::StringIntoArray: {
+        const codegen::SysTaskDescriptor::Argument& compiled = descriptor.arguments[0];
+        const eir::ConstBitRef array =
+            compiled.isConstant
+                ? body.constant(compiled.location)
+                : frameAt(activation.frameOffset + compiled.location, compiled.bitWidth);
+        const auto arrayLeft = static_cast<std::int64_t>(argument(1));
+        const auto arrayRight = static_cast<std::int64_t>(argument(2));
+        const auto offsetOf = [&](std::int64_t index, bool ascending) {
+            return static_cast<std::uint64_t>(ascending ? arrayRight - index : index - arrayRight)
+                   * 8;
+        };
+        if (descriptor.kind == eir::SysTaskKind::StringIntoArray) {
+            const ScratchString& string = scratchAt(argument(3));
+            bitops::assignPartAt(result, array, 0);
+            for (std::size_t at = 0; at < string.text.size(); ++at) {
+                const auto step = static_cast<std::int64_t>(at);
+                const std::int64_t index =
+                    string.ascending ? string.left + step : string.left - step;
+                putCharacter(result, offsetOf(index, string.ascending), string.text[at]);
+            }
+            return;
+        }
+        const auto left = static_cast<std::int64_t>(argument(3));
+        const auto right = static_cast<std::int64_t>(argument(4));
+        const bool ascending = argument(5) != 0;
+        const std::int64_t span = ascending ? right - left : left - right;
+        const std::uint64_t length = span < 0 ? 0 : static_cast<std::uint64_t>(span) + 1;
+        ScratchString string{.left = left,
+                             .right = right,
+                             .ascending = ascending,
+                             .text = std::string(length, '\0')};
+        const std::int64_t arrayLow = std::min(arrayLeft, arrayRight);
+        const std::int64_t arrayHigh = std::max(arrayLeft, arrayRight);
+        if (length > 0 && (std::min(left, right) < arrayLow || std::max(left, right) > arrayHigh)) {
+            const std::string_view direction = ascending ? "to" : "downto";
+            report(eir::SeverityFailure, descriptor.location,
+                   std::format("{} {} {} is outside the bounds {} {} {}", left, direction, right,
+                               arrayLeft, direction, arrayRight));
+        } else {
+            for (std::uint64_t at = 0; at < length; ++at) {
+                const auto step = static_cast<std::int64_t>(at);
+                string.text[at] =
+                    characterAt(array, offsetOf(ascending ? left + step : left - step, ascending));
+            }
+        }
+        scratch.push_back(std::move(string));
+        value = scratch.size();
+        break;
+    }
+
+    // Character by character, as a VHDL array of characters orders by their positions, and a
+    // prefix first (IEEE 1076 section 9.2.3); std::string compares its characters unsigned.
+    case eir::SysTaskKind::StringCompare: {
+        const int order = scratchAt(argument(0)).text.compare(scratchAt(argument(1)).text);
+        if (order < 0) value = 0xFFU;
+        if (order > 0) value = 1U;
+        break;
+    }
+
+    case eir::SysTaskKind::StringRead: {
+        ScratchString& string = scratchAt(argument(0));
+        std::string* line = lineAt(argument(1));
+        const std::size_t count = string.text.size();
+        const std::size_t held = line != nullptr ? line->size() : 0;
+        if (held < count) {
+            if (descriptor.arguments.size() > 2 && argument(2) != 0) {
+                report(eir::SeverityFailure, descriptor.location,
+                       std::format("a read of {} characters from a line holding {}", count, held));
+            }
+            break;
+        }
+        if (line != nullptr) {
+            string.text.assign(*line, 0, count);
+            line->erase(0, count);
+        }
+        value = 1;
+        break;
+    }
+
+    case eir::SysTaskKind::StringMark: value = scratch.size(); break;
 
     case eir::SysTaskKind::Random:
         if (descriptor.arguments.empty()) {
@@ -2042,6 +2222,32 @@ const std::string* Kernel::lineOrFailure(std::uint64_t handle, std::int64_t inde
         return nullptr;
     }
     return line;
+}
+
+Kernel::ScratchString& Kernel::scratchAt(std::uint64_t handle) {
+    ENZAN_ALWAYS_ASSERT(handle != 0 && handle <= scratch.size(),
+                        "a string of run-time length used once released");
+    return scratch[handle - 1];
+}
+
+void Kernel::releaseScratch(std::uint64_t mark) {
+    if (mark < scratch.size()) scratch.resize(mark);
+}
+
+bool Kernel::withinOrFailure(const ScratchString& string, std::int64_t index, std::uint32_t count,
+                             const SourceLocation& location) {
+    const std::int64_t from = string.position(index);
+    if (count == 0
+        || (from >= 0 && std::cmp_less_equal(from + std::int64_t{count}, string.text.size())))
+        return true;
+    const std::string_view direction = string.ascending ? "to" : "downto";
+    const std::int64_t last = string.ascending ? index + count - 1 : index - count + 1;
+    const std::string reached = count == 1 ? std::format("index {}", index)
+                                           : std::format("{} {} {}", index, direction, last);
+    report(eir::SeverityFailure, location,
+           std::format("{} is outside the bounds {} {} {}", reached, string.left, direction,
+                       string.right));
+    return false;
 }
 
 std::uint64_t Kernel::allocateLine(std::string text) {

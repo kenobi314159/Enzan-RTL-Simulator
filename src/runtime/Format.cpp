@@ -256,6 +256,10 @@ std::string formatSystemTask(std::string_view format, std::span<const FormatArgu
         }
 
         const FormatArgument& argument = arguments[nextArgument++];
+        if (argument.text != nullptr) {
+            result += widened(*argument.text, fieldWidth, leftJustify, false);
+            continue;
+        }
 
         // A real by an integer's conversion is the integer it rounds to: in decimal as short as
         // it is, as Icarus Verilog shows one, and in a radix as 64 bits.

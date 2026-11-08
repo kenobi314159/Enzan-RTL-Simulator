@@ -723,6 +723,38 @@ private:
     const std::string* lineOrFailure(std::uint64_t handle, std::int64_t index, std::uint32_t count,
                                      const SourceLocation& location);
 
+    /// A string whose length only the run knows (DESIGN_GUIDE.md section 4.1): its bounds, and its
+    /// characters from the left one.
+    struct ScratchString {
+        std::int64_t left = 0;
+        std::int64_t right = 0;
+        bool ascending = true;
+        std::string text;
+
+        /// Where the character at `index` is in `text`, which may be outside it.
+        [[nodiscard]] std::int64_t position(std::int64_t index) const noexcept {
+            return ascending ? index - left : left - index;
+        }
+    };
+
+    /// The strings of run-time length the running process has made, by handle: handle `n` is
+    /// entry `n - 1`. A stack, released to a mark as the subprogram or the statement that made
+    /// them is done with them, and emptied whenever a process suspends, so that a run makes the
+    /// same handles every time.
+    std::vector<ScratchString> scratch;
+
+    /// The string `handle` designates, which translation never leaves a register holding once
+    /// it is released.
+    ScratchString& scratchAt(std::uint64_t handle);
+
+    /// Releases the strings of run-time length made since `mark`, how many there were then.
+    void releaseScratch(std::uint64_t mark);
+
+    /// True when the `count` characters of `string` from `index` lie inside its bounds; else
+    /// false, having ended the run with a failure at `location`.
+    bool withinOrFailure(const ScratchString& string, std::int64_t index, std::uint32_t count,
+                         const SourceLocation& location);
+
     /// Reports `text` at `location` as a VHDL report of `severity` does, the position of
     /// std.standard.severity_level: note, warning, error or failure, one at or above the
     /// severity the run stops at ending it.

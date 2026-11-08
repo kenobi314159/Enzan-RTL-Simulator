@@ -30,8 +30,9 @@ public:
         /// change detection have the one value path of every other value; only arithmetic,
         /// comparison and Convert read the bits as the double.
         Real,
-        /// A character string. Held in the constant pool rather than the state
-        /// arena, which is enough for `$display` format strings.
+        /// A character string. As a system task's argument, one whose length only the run
+        /// knows, its register holding the string's handle into the kernel's scratch: a `%s`
+        /// shows its characters.
         String,
     };
 

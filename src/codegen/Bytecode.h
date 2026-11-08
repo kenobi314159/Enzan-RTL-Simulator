@@ -98,6 +98,10 @@ struct SysTaskDescriptor {
 
         /// Whether the value is a real, which the formatter renders as one.
         bool isReal = false;
+
+        /// Whether the value is the handle of a string whose length only the run knows, which
+        /// the formatter shows as its characters.
+        bool isString = false;
     };
 
     std::vector<Argument> arguments;

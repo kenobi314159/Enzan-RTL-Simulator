@@ -63,6 +63,17 @@ enum class SysTaskKind : std::uint8_t {
     /// four bytes, the lowest first, for a read to learn its length from.
     FileWriteValue,
 
+    // Strings whose lengths only the run knows, held in the kernel's scratch (DESIGN_GUIDE.md
+    // section 4.1) by handle: the first argument of each, but StringMark's and StringRelease's.
+    // The kernel keeps each one's bounds, and an index of one is of those bounds.
+
+    /// Writes the characters of the second argument, the leftmost in its highest bits, into the
+    /// string from the index the first after the handle holds; a part reaching outside the string
+    /// ends the run with a failure.
+    StringSplice,
+    /// Releases every string made since the mark the argument holds, which StringMark gave.
+    StringRelease,
+
     // System functions, run by SysFunction, which have a result.
 
     /// `$random`, IEEE 1364's generator. With no argument it draws from the simulation's
@@ -130,6 +141,34 @@ enum class SysTaskKind : std::uint8_t {
     /// in its top 32 bits, and below them the array with its leftmost elements replaced by the
     /// value's leftmost, as many as fit.
     FileReadValue,
+
+    /// A new string of run-time length, of the bounds the first two arguments give, ascending
+    /// where the third is not 0, each character the fourth's code. The result is its handle.
+    StringNew,
+    /// The string's left bound in the highest 64 bits of the result, its right below that, and
+    /// its length in the lowest 64.
+    StringBounds,
+    /// The characters of the string from the index the second argument holds, as many as fill
+    /// the result, the leftmost in its highest bits; one is an element. A part reaching outside
+    /// the string ends the run with a failure.
+    StringSlice,
+    /// A new string holding the elements of the array the first argument holds, of the bounds the
+    /// second and third give, from the index the fourth holds to the one the fifth does, in the
+    /// direction the sixth says, ascending where it is not 0. A slice reaching outside the array
+    /// ends the run with a failure. The result is its handle.
+    StringFromArray,
+    /// The array the first argument holds, of the bounds the second and third give, with the
+    /// elements at the indices of the string the fourth designates replaced by its characters.
+    StringIntoArray,
+    /// How the string compares with the one the second argument designates, character by
+    /// character from the left and a shorter one first where one runs out: -1, 0 or 1, in 8 bits.
+    StringCompare,
+    /// std.textio's `read` into the string: as many characters as it holds taken off the line
+    /// the second argument designates, where it holds that many, as LineReadString takes them,
+    /// with the third argument as LineReadString's. The result is whether it did.
+    StringRead,
+    /// How many strings of run-time length there are, the mark StringRelease releases to.
+    StringMark,
 };
 
 /// The severities a Report takes as its first argument: the positions of

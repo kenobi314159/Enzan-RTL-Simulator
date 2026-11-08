@@ -369,6 +369,7 @@ bool Compiler::compileSysTaskCalls(const eir::ModuleDefinition& definition, cons
             SysTaskDescriptor::Argument compiled;
             compiled.isSigned = argument.type.isSigned();
             compiled.isReal = argument.type.isReal();
+            compiled.isString = argument.type.kind() == eir::Type::Kind::String;
             compiled.bitWidth = argument.type.bitWidth();
 
             switch (argument.value.kind()) {

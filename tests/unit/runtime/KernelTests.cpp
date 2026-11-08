@@ -736,6 +736,157 @@ TEST(Kernel, TextioLinesLiveInTheHeapAndAreWrittenWhole) {
     EXPECT_EQ(simulation.value("/tb/after", Radix::Decimal), "1");
 }
 
+/// Strings of run-time length in the kernel's scratch: "aaaaa" from 1 to 5 with "bc" written from
+/// index 2, shown whole and as the slice of three from 2; its bounds stored in `bounds`, and the
+/// handle the next string has once the first is released to the mark before it in `again`. With
+/// `waits`, the process waits between the two instead of releasing.
+Design makeScratchStrings(bool waits) {
+    ProcessBuilder builder(ProcessKind::Initial, "strings");
+    const Type handle = Type::bits(64, false, false);
+    const Type index = Type::bits(64, true, false);
+    const std::uint32_t mark = builder.reg(handle);
+    const std::uint32_t string = builder.reg(handle);
+    const std::uint32_t one = builder.reg(index);
+    const std::uint32_t two = builder.reg(index);
+    const std::uint32_t five = builder.reg(index);
+    const std::uint32_t up = builder.reg(Type::bits(1, false, false));
+    const std::uint32_t fill = builder.reg(Type::bits(8, false, false));
+    const std::uint32_t pair = builder.reg(Type::bits(16, false, false));
+    const std::uint32_t bounds = builder.reg(Type::bits(192, false, false));
+    const std::uint32_t part = builder.reg(Type::bits(24, false, false));
+    const std::uint32_t again = builder.reg(handle);
+    const std::uint32_t delay = builder.reg(Type::bits(64, false, false));
+
+    const auto argument = [](std::uint32_t reg, Type type) {
+        return SysTaskArgument{.value = Operand::reg(reg), .type = type};
+    };
+    const auto call = [&](SysTaskKind kind, std::vector<SysTaskArgument> arguments,
+                          std::string_view format = {}) {
+        SysTaskCall made;
+        made.kind = kind;
+        made.arguments = std::move(arguments);
+        if (!format.empty()) made.formatIndex = builder.string(std::string(format));
+        return builder.sysCall(std::move(made));
+    };
+    const std::uint32_t marking = call(SysTaskKind::StringMark, {});
+    const std::uint32_t making =
+        call(SysTaskKind::StringNew, {argument(one, index), argument(five, index),
+                                      argument(up, Type::bits(1, false, false)),
+                                      argument(fill, Type::bits(8, false, false))});
+    const std::uint32_t splicing =
+        call(SysTaskKind::StringSplice, {argument(string, handle), argument(two, index),
+                                         argument(pair, Type::bits(16, false, false))});
+    const std::uint32_t measuring = call(SysTaskKind::StringBounds, {argument(string, handle)});
+    const std::uint32_t slicing =
+        call(SysTaskKind::StringSlice, {argument(string, handle), argument(two, index)});
+    const std::uint32_t showing = call(
+        SysTaskKind::Display,
+        {argument(string, Type::string()), argument(part, Type::bits(24, false, false))}, "%s|%s");
+    const std::uint32_t releasing = call(SysTaskKind::StringRelease, {argument(mark, handle)});
+
+    const auto load = [&](std::uint32_t reg, std::string_view literal) {
+        builder.emit(Instruction::make(Opcode::LoadConstant, Operand::reg(reg),
+                                       Operand::constant(builder.constant(literal))));
+    };
+    const auto function = [&](std::uint32_t result, std::uint32_t descriptor) {
+        builder.emit(Instruction::make(Opcode::SysFunction, Operand::reg(result),
+                                       Operand::sysCall(descriptor)));
+    };
+    builder.block("entry");
+    load(one, "64'sd1");
+    load(two, "64'sd2");
+    load(five, "64'sd5");
+    load(up, "1'b1");
+    load(fill, "8'h61");
+    load(pair, "16'h6263");
+    load(delay, "64'd10");
+    function(mark, marking);
+    function(string, making);
+    builder.emit(Instruction::make(Opcode::SysTask, {}, Operand::sysCall(splicing)));
+    function(bounds, measuring);
+    function(part, slicing);
+    builder.emit(Instruction::make(Opcode::SysTask, {}, Operand::sysCall(showing)));
+    builder.store(0, bounds);
+    if (waits) {
+        builder.emit(
+            Instruction::make(Opcode::WaitTime, {}, Operand::reg(delay), Operand::block(1)));
+        builder.block("after");
+    } else {
+        builder.emit(Instruction::make(Opcode::SysTask, {}, Operand::sysCall(releasing)));
+    }
+    function(again, making);
+    builder.store(1, again);
+    builder.emit(Instruction::make(Opcode::Return));
+
+    return designOf(makeTop({builder.finish()},
+                            {Object{.name = "bounds", .type = Type::bits(192, false, false)},
+                             Object{.name = "again", .type = handle}}));
+}
+
+TEST(Kernel, AStringOfRunTimeLengthLivesInScratchUntilReleasedToAMark) {
+    Simulation simulation(makeScratchStrings(false), "tb");
+    ASSERT_TRUE(simulation.ready()) << simulation.messages().front();
+    simulation.run();
+    EXPECT_EQ(simulation.transcript(), "abcaa|bca\n");
+    EXPECT_EQ(simulation.value("/tb/bounds", Radix::Hexadecimal),
+              "000000000000000100000000000000050000000000000005");
+    EXPECT_EQ(simulation.value("/tb/again", Radix::Decimal), "1");
+}
+
+TEST(Kernel, AProcessThatSuspendsReleasesItsStringsOfRunTimeLength) {
+    Simulation simulation(makeScratchStrings(true), "tb");
+    ASSERT_TRUE(simulation.ready()) << simulation.messages().front();
+    simulation.run();
+    EXPECT_EQ(simulation.value("/tb/again", Radix::Decimal), "1");
+}
+
+TEST(Kernel, AnIndexOutsideAStringOfRunTimeLengthEndsTheRun) {
+    ProcessBuilder builder(ProcessKind::Initial, "strings");
+    const Type handle = Type::bits(64, false, false);
+    const Type index = Type::bits(64, true, false);
+    const std::uint32_t string = builder.reg(handle);
+    const std::uint32_t three = builder.reg(index);
+    const std::uint32_t one = builder.reg(index);
+    const std::uint32_t down = builder.reg(Type::bits(1, false, false));
+    const std::uint32_t fill = builder.reg(Type::bits(8, false, false));
+    const std::uint32_t four = builder.reg(index);
+    const std::uint32_t element = builder.reg(Type::bits(8, false, false));
+    const auto argument = [](std::uint32_t reg, Type type) {
+        return SysTaskArgument{.value = Operand::reg(reg), .type = type};
+    };
+    SysTaskCall making;
+    making.kind = SysTaskKind::StringNew;
+    making.arguments = {argument(three, index), argument(one, index),
+                        argument(down, Type::bits(1, false, false)),
+                        argument(fill, Type::bits(8, false, false))};
+    const std::uint32_t make = builder.sysCall(std::move(making));
+    SysTaskCall slicing;
+    slicing.kind = SysTaskKind::StringSlice;
+    slicing.arguments = {argument(string, handle), argument(four, index)};
+    const std::uint32_t slice = builder.sysCall(std::move(slicing));
+
+    const auto load = [&](std::uint32_t reg, std::string_view literal) {
+        builder.emit(Instruction::make(Opcode::LoadConstant, Operand::reg(reg),
+                                       Operand::constant(builder.constant(literal))));
+    };
+    builder.block("entry");
+    load(three, "64'sd3");
+    load(one, "64'sd1");
+    load(down, "1'b0");
+    load(fill, "8'h20");
+    load(four, "64'sd4");
+    builder.emit(
+        Instruction::make(Opcode::SysFunction, Operand::reg(string), Operand::sysCall(make)));
+    builder.emit(
+        Instruction::make(Opcode::SysFunction, Operand::reg(element), Operand::sysCall(slice)));
+    builder.emit(Instruction::make(Opcode::Return));
+
+    Simulation simulation(designOf(makeTop({builder.finish()})), "tb");
+    ASSERT_TRUE(simulation.ready()) << simulation.messages().front();
+    EXPECT_EQ(simulation.run(), RunStatus::Error);
+    EXPECT_EQ(simulation.messages().front(), "index 4 is outside the bounds 3 downto 1");
+}
+
 TEST(Kernel, FinishEndsTheRun) {
     ProcessBuilder builder(ProcessKind::Initial, "quitter");
     SysTaskCall call;

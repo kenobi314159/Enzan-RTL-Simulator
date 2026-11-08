@@ -501,8 +501,11 @@ names it by that definition and its name. Nothing in it is particular to VHDL.
   elaboration for the deepest chain of calls the design can make; a recursive design is given a
   configurable depth limit, past which the run stops with a diagnostic, as the delta limit does.
 - **A caller's read and write sets include its callees'**, bound to the instances they touch.
-- **A value whose length is known only when it is computed** — `integer'image`, `to_string` — lives
-  in scratch the kernel resets whenever a process suspends.
+- **A string whose length is known only when it is computed** — a subprogram's `string(1 to n)`, a
+  slice `s(1 to i)` — lives in scratch the kernel owns: a register holds its handle, and the kernel
+  its bounds and characters. A subprogram releases what it made as it returns, a statement what it
+  made for a call once the call is done, and the kernel all of it whenever a process suspends, so a
+  subprogram holding one cannot wait. Only strings are held so yet.
 
 ### 4.2 The core invariant
 

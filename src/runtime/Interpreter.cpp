@@ -221,7 +221,10 @@ ExecutionResult Interpreter::run(std::uint32_t processIndex) {
                          .calls = state.calls};
     const std::uint32_t pc = state.resumePc;
     state.resumePc = 0;
-    return execute(processIndex, own, pc, 0);
+    const ExecutionResult result = execute(processIndex, own, pc, 0);
+    // Whatever strings of run-time length it made are gone once it has suspended.
+    kernel.releaseScratch(0);
+    return result;
 }
 
 ExecutionResult Interpreter::call(std::uint32_t processIndex, const Activation& callee) {
