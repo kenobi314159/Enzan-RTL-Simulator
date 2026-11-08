@@ -21,11 +21,6 @@ namespace enzan::frontend::vhdl {
 
 namespace {
 
-/// The positions of `std.standard.severity_level`.
-constexpr std::int64_t SeverityNote = 0;
-constexpr std::int64_t SeverityError = 2;
-constexpr std::int64_t SeverityFailure = 3;
-
 /// True when `name`, a subprogram's mangled name, is `prefix` or one of its overloads.
 bool names(ident_t name, std::string_view prefix) {
     const std::string_view text = istr(name);
@@ -635,7 +630,7 @@ std::optional<BodyTranslator::Translated> BodyTranslator::translateSubprogram() 
             report.location = owner.locate(source);
             report.arguments.push_back(eir::SysTaskArgument{
                 .value = eir::Operand::reg(
-                    constant(SeverityFailure, eir::Type::bits(8, false, false), nullptr).reg),
+                    constant(eir::SeverityFailure, eir::Type::bits(8, false, false), nullptr).reg),
                 .type = eir::Type::bits(8, false, false)});
             report.formatIndex = addString("function " + simpleName(tree_ident(source))
                                            + " reached its end without a return");
@@ -1746,7 +1741,8 @@ bool BodyTranslator::assertion(tree_t statement) {
     }
     // An assertion's default severity is error, and its default message the standard's own
     // (IEEE 1076 section 10.3).
-    if (!severity) severity = constant(SeverityError, eir::Type::bits(8, false, false), nullptr);
+    if (!severity)
+        severity = constant(eir::SeverityError, eir::Type::bits(8, false, false), nullptr);
     if (!emitReport(statement, *severity,
                     tree_has_message(statement) ? tree_message(statement) : nullptr,
                     "Assertion violation."))
@@ -1762,7 +1758,7 @@ bool BodyTranslator::report(tree_t statement) {
         severity = expression(tree_severity(statement));
         if (!severity) return false;
     } else {
-        severity = constant(SeverityNote, eir::Type::bits(8, false, false), nullptr);
+        severity = constant(eir::SeverityNote, eir::Type::bits(8, false, false), nullptr);
     }
     return emitReport(statement, *severity, tree_message(statement), "");
 }
@@ -2646,6 +2642,7 @@ std::optional<BodyTranslator::Value> BodyTranslator::expression(tree_t expressio
     case T_ARRAY_SLICE: {
         // A part of a signal or a variable is read without reading the rest of it.
         tree_t prefix = tree_value(expression);
+        if (isDereferencedLine(prefix)) return linePart(expression, type);
         if (designatesStorage(expression)) {
             const std::optional<Place> part = place(expression);
             if (!part) return std::nullopt;
@@ -2834,6 +2831,11 @@ std::optional<BodyTranslator::Value> BodyTranslator::attribute(tree_t expression
     const auto kind = static_cast<attr_kind_t>(tree_subkind(expression));
     type_t resultType = tree_type(expression);
     const std::optional<eir::Type> storage = scalarStorage(resultType);
+
+    // Where a line ends only the runtime holding it knows; where it starts folds.
+    if (isDereferencedLine(tree_name(expression))
+        && (kind == ATTR_LENGTH || kind == ATTR_HIGH || kind == ATTR_RIGHT))
+        return lineLength(expression);
 
     switch (kind) {
     // Of a whole signal, which the kernel keeps them of (DESIGN_GUIDE.md section 3.4).
@@ -3474,7 +3476,7 @@ void BodyTranslator::failAtRun(tree_t where, std::string message, const Value* a
     report.location = owner.locate(where);
     report.arguments.push_back(eir::SysTaskArgument{
         .value = eir::Operand::reg(
-            constant(SeverityFailure, eir::Type::bits(8, false, false), nullptr).reg),
+            constant(eir::SeverityFailure, eir::Type::bits(8, false, false), nullptr).reg),
         .type = eir::Type::bits(8, false, false)});
     if (argument != nullptr) {
         report.arguments.push_back(eir::SysTaskArgument{.value = eir::Operand::reg(argument->reg),

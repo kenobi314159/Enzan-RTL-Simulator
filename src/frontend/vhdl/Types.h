@@ -122,6 +122,10 @@ arrayLayout(const Folder::Range& index, type_t elementType, const Folder& folder
 /// The storage of a scalar `type`, which needs no folding; nothing for anything else.
 [[nodiscard]] std::optional<eir::Type> scalarStorage(type_t type);
 
+/// True when `name` dereferences a line, an access to a string as std.textio's `line` is: `l.all`,
+/// as NVC writes `l` indexed, sliced or given an attribute.
+[[nodiscard]] bool isDereferencedLine(tree_t name);
+
 /// What an object of `type` shows as outside the simulation: `std_ulogic`'s codes, and arrays of
 /// them, as four-state bits; `bit`'s and `boolean`'s as two-state ones; a real as the number it
 /// is; anything else, an array of reals among it, as its own bits.

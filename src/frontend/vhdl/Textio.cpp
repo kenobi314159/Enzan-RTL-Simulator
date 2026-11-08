@@ -270,6 +270,76 @@ std::optional<BodyTranslator::Value> BodyTranslator::endOfFile(tree_t call) {
     return booleanOf(ended.reg, tree_type(call));
 }
 
+std::optional<BodyTranslator::Value> BodyTranslator::lineLength(tree_t attribute) {
+    type_t type = tree_type(attribute);
+    const std::optional<eir::Type> storage = scalarStorage(type);
+    if (!storage) {
+        fail(attribute, "this attribute of a line");
+        return std::nullopt;
+    }
+    const std::optional<Value> line = expression(tree_value(tree_name(attribute)));
+    if (!line) return std::nullopt;
+    eir::SysTaskCall function;
+    function.kind = eir::SysTaskKind::LineLength;
+    function.location = owner.locate(attribute);
+    function.arguments.push_back(
+        eir::SysTaskArgument{.value = eir::Operand::reg(line->reg), .type = line->type});
+    Value length = resize(systemFunction(std::move(function), eir::Type::bits(32, false, false)),
+                          storage->bitWidth());
+    length.vhdlType = type;
+    return length;
+}
+
+std::optional<BodyTranslator::Value> BodyTranslator::linePart(tree_t expression, type_t type) {
+    const std::optional<Value> line = this->expression(tree_value(tree_value(expression)));
+    if (!line) return std::nullopt;
+    eir::SysTaskCall function;
+    function.location = owner.locate(expression);
+    function.arguments.push_back(
+        eir::SysTaskArgument{.value = eir::Operand::reg(line->reg), .type = line->type});
+    const eir::Type position = eir::Type::bits(64, true, false);
+
+    if (tree_kind(expression) == T_ARRAY_REF) {
+        const std::optional<eir::Type> storage = scalarStorage(type);
+        if (tree_params(expression) != 1 || !storage) {
+            fail(expression, "this element of a line");
+            return std::nullopt;
+        }
+        const std::optional<Value> index = this->expression(tree_value(tree_param(expression, 0)));
+        if (!index) return std::nullopt;
+        const Value at = resize(*index, position.bitWidth());
+        function.kind = eir::SysTaskKind::LineElement;
+        function.arguments.push_back(
+            eir::SysTaskArgument{.value = eir::Operand::reg(at.reg), .type = position});
+        Value character =
+            resize(systemFunction(std::move(function), eir::Type::bits(8, false, false)),
+                   storage->bitWidth());
+        character.vhdlType = type;
+        return character;
+    }
+
+    // A slice's bounds fold where they are counted from the line's start, as `l(l'low to l'low +
+    // 2)` is; its length then does.
+    const std::optional<Folder::Range> bounds = folder().range(tree_range(expression, 0));
+    if (!bounds || !bounds->ascending || bounds->length() <= 0) {
+        fail(expression, "a slice of a line other than one rising over bounds that fold");
+        return std::nullopt;
+    }
+    const std::optional<Layout> layout = arrayLayout(*bounds, type_elem(type), folder());
+    if (!layout) {
+        fail(expression, "this slice of a line");
+        return std::nullopt;
+    }
+    function.kind = eir::SysTaskKind::LineSlice;
+    function.arguments.push_back(eir::SysTaskArgument{
+        .value = eir::Operand::reg(constant(bounds->left, position, nullptr).reg),
+        .type = position});
+    Value slice = systemFunction(std::move(function), layout->storage);
+    slice.vhdlType = type;
+    slice.layout = *layout;
+    return slice;
+}
+
 std::optional<bool> BodyTranslator::nativeProcedure(tree_t call, tree_t declaration) {
     const auto kind = static_cast<subprogram_kind_t>(tree_subkind(declaration));
     const bool predefinedFile = kind == S_FILE_OPEN1 || kind == S_FILE_OPEN2 || kind == S_FILE_CLOSE

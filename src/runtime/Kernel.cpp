@@ -1553,20 +1553,7 @@ void Kernel::runSystemTask(std::uint32_t processIndex, const Activation& activat
         diagnostics.report(DiagCode::UserInfo, descriptor.location, text);
         return;
 
-    // The positions of std.standard.severity_level: note, warning, error, failure.
-    case eir::SysTaskKind::Report:
-        switch (severity) {
-        case 0: diagnostics.report(DiagCode::UserInfo, descriptor.location, text); break;
-        case 1: diagnostics.report(DiagCode::UserWarning, descriptor.location, text); break;
-        case 2: diagnostics.report(DiagCode::UserError, descriptor.location, text); break;
-        default: diagnostics.report(DiagCode::AssertionFailure, descriptor.location, text); break;
-        }
-        if (severity >= options.stopSeverity) {
-            finishRequested = true;
-            errorRequested = true;
-            finishStatus = 1;
-        }
-        return;
+    case eir::SysTaskKind::Report: report(severity, descriptor.location, text); return;
 
     case eir::SysTaskKind::DumpFile:
         for (ValueChangeListener* listener : listeners) listener->onDumpFile(text);
@@ -1654,6 +1641,9 @@ void Kernel::runSystemTask(std::uint32_t processIndex, const Activation& activat
     case eir::SysTaskKind::LineWriteLine:
     case eir::SysTaskKind::LineReadLine:
     case eir::SysTaskKind::LineReadCharacter:
+    case eir::SysTaskKind::LineLength:
+    case eir::SysTaskKind::LineElement:
+    case eir::SysTaskKind::LineSlice:
     case eir::SysTaskKind::FileEnd:
     case eir::SysTaskKind::LineAppend:
     case eir::SysTaskKind::FileReadValue:
@@ -1774,6 +1764,37 @@ void Kernel::runSystemFunction(std::uint32_t processIndex, const Activation& act
             line->erase(0, 1);
         }
         break;
+
+    case eir::SysTaskKind::LineLength:
+        if (const std::string* line = lineAt(argument(0))) {
+            value = line->size();
+        } else {
+            report(eir::SeverityFailure, descriptor.location, "'length of a null line");
+        }
+        break;
+
+    case eir::SysTaskKind::LineElement: {
+        const auto index = static_cast<std::int64_t>(argument(1));
+        if (const std::string* line = lineOrFailure(argument(0), index, 1, descriptor.location))
+            value = static_cast<unsigned char>((*line)[static_cast<std::size_t>(index - 1)]);
+        break;
+    }
+
+    case eir::SysTaskKind::LineSlice: {
+        std::ranges::fill(result.avalWords(), 0);
+        std::ranges::fill(result.bvalWords(), 0);
+        const auto left = static_cast<std::int64_t>(argument(1));
+        const std::uint32_t count = result.width() / 8;
+        const std::string* line = lineOrFailure(argument(0), left, count, descriptor.location);
+        if (line == nullptr) return;
+        for (std::uint32_t at = 0; at < count; ++at) {
+            const auto character =
+                static_cast<unsigned char>((*line)[static_cast<std::size_t>(left - 1) + at]);
+            bitops::assignPartAt(result, eir::BitVector::fromUInt64(character, 8).ref(),
+                                 std::uint64_t{count - 1 - at} * 8);
+        }
+        return;
+    }
 
     // A byte, or EOF, -1 in the 32 bits of an `int`.
     case eir::SysTaskKind::FileGetCharacter: {
@@ -1956,6 +1977,39 @@ std::uint32_t Kernel::openFile(const std::string& name, const std::string& mode,
     openFiles.push_back(
         OpenFile{.descriptor = descriptor, .stream = std::move(stream), .input = {}});
     return descriptor;
+}
+
+void Kernel::report(std::uint64_t severity, const SourceLocation& location,
+                    const std::string& text) {
+    switch (severity) {
+    case eir::SeverityNote: diagnostics.report(DiagCode::UserInfo, location, text); break;
+    case eir::SeverityWarning: diagnostics.report(DiagCode::UserWarning, location, text); break;
+    case eir::SeverityError: diagnostics.report(DiagCode::UserError, location, text); break;
+    default: diagnostics.report(DiagCode::AssertionFailure, location, text); break;
+    }
+    if (severity >= options.stopSeverity) {
+        finishRequested = true;
+        errorRequested = true;
+        finishStatus = 1;
+    }
+}
+
+const std::string* Kernel::lineOrFailure(std::uint64_t handle, std::int64_t index,
+                                         std::uint32_t count, const SourceLocation& location) {
+    const std::string* line = lineAt(handle);
+    if (line == nullptr) {
+        report(eir::SeverityFailure, location, "a null line is indexed");
+        return nullptr;
+    }
+    const auto length = static_cast<std::int64_t>(line->size());
+    if (index < 1 || index + count - 1 > length) {
+        const std::string reached = count == 1 ? std::format("index {}", index)
+                                               : std::format("{} to {}", index, index + count - 1);
+        report(eir::SeverityFailure, location,
+               std::format("{} is outside the bounds 1 to {} of the line", reached, length));
+        return nullptr;
+    }
+    return line;
 }
 
 std::uint64_t Kernel::allocateLine(std::string text) {

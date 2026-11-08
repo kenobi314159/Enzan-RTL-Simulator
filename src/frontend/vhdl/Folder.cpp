@@ -415,6 +415,12 @@ std::optional<std::int64_t> Folder::attribute(tree_t expression) const {
     case ATTR_LENGTH:
     case ATTR_ASCENDING: {
         if (!tree_has_type(prefix)) return std::nullopt;
+        // A line the runtime holds rises from 1, as NVC's textio makes every one; where it ends
+        // only the run knows.
+        if (isDereferencedLine(prefix)) {
+            if (kind == ATTR_LEFT || kind == ATTR_LOW || kind == ATTR_ASCENDING) return 1;
+            return std::nullopt;
+        }
         // An array's attribute names a dimension, the first unless a parameter says otherwise.
         unsigned dimension = 0;
         if (tree_params(expression) > 0) {

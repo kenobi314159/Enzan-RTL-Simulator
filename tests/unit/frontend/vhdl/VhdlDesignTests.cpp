@@ -1136,6 +1136,81 @@ end architecture;
     EXPECT_EQ(sources.lineNumber(refused->notes[0].location), 11U);
 }
 
+TEST_F(VhdlDesignTest, ALinesBoundsElementsAndSlicesAreReadFromTheRuntime) {
+    // As Altera's memories read an initialisation file: a line indexed from its 'LOW, sliced from
+    // it, and its 'LENGTH. A line rises from 1, after a read too, as NVC indexes one.
+    std::unique_ptr<enzan::eir::Design> design = translate(R"(
+use std.textio.all;
+
+entity tb is
+end entity;
+
+architecture test of tb is
+begin
+  process
+    variable l : line;
+    variable c : character;
+    variable i, spaces : integer := 0;
+  begin
+    write(l, string'("end of it"));
+    assert l'length = 9 report "length " & integer'image(l'length) severity failure;
+    assert l'low = 1 and l'left = 1 report "low" severity failure;
+    assert l'high = 9 and l'right = 9 report "high" severity failure;
+    assert l(l'low) = 'e' and l(l'high) = 't' report "an end" severity failure;
+    assert l(l'low to l'low + 2) = "end" report "slice" severity failure;
+    while i < l'length loop
+      if l(l'low + i) = ' ' then
+        spaces := spaces + 1;
+      end if;
+      i := i + 1;
+    end loop;
+    assert spaces = 2 report "spaces " & integer'image(spaces) severity failure;
+    read(l, c);
+    assert l'low = 1 and l'length = 8 and l(l'low) = 'n' report "after a read" severity failure;
+    report "PASS";
+    wait;
+  end process;
+end architecture;
+)",
+                                                           "tb");
+    ASSERT_NE(design, nullptr) << transcript();
+
+    Simulation simulation(std::move(*design), "tb");
+    ASSERT_TRUE(simulation.ready()) << simulation.messages().front();
+    simulation.run();
+    EXPECT_EQ(simulation.messages(), std::vector<std::string>{"PASS"});
+}
+
+TEST_F(VhdlDesignTest, AnIndexOutsideALineEndsTheRun) {
+    std::unique_ptr<enzan::eir::Design> design = translate(R"(
+use std.textio.all;
+
+entity tb is
+end entity;
+
+architecture test of tb is
+begin
+  process
+    variable l : line;
+    variable c : character;
+  begin
+    write(l, string'("abc"));
+    c := l(l'high + 1);
+    report "unreachable";
+    wait;
+  end process;
+end architecture;
+)",
+                                                           "tb");
+    ASSERT_NE(design, nullptr) << transcript();
+
+    Simulation simulation(std::move(*design), "tb");
+    ASSERT_TRUE(simulation.ready()) << simulation.messages().front();
+    EXPECT_EQ(simulation.run(), RunStatus::Error);
+    EXPECT_TRUE(simulation.reportedCode(DiagCode::AssertionFailure));
+    EXPECT_EQ(simulation.messages().front(), "index 4 is outside the bounds 1 to 3 of the line");
+}
+
 TEST_F(VhdlDesignTest, AGenericsDefaultThatCannotBeComputedSaysWhereItsCallStopped) {
     // As OFM's splitter wrapper initialises its address bases: a default computed by a function
     // that calls a procedure for random numbers.

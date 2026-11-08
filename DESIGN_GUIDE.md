@@ -540,7 +540,9 @@ dereferences a handle has it in its read or write set (4.2).
 **std.textio runs natively.** Its body grows lines through strings of run-time lengths, which
 fixed-width registers cannot hold, so textio's subprograms and VHDL's predefined file operations are
 system functions the runtime runs over its heap and its files. A file of a type other than text
-holds its values' bits in Enzan's own format, as each simulator has its own.
+holds its values' bits in Enzan's own format, as each simulator has its own. A line is indexed from
+1 after a `read` takes characters off it, as NVC indexes one; GHDL keeps the indexes of what
+remains, so a design reading a line's bounds after a `read` is no case to hold to GHDL.
 
 ### 4.4 Libraries
 

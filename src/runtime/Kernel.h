@@ -718,6 +718,16 @@ private:
     /// Frees the line `handle` designates; freeing `null` does nothing.
     void freeLine(std::uint64_t handle);
 
+    /// The line `handle` designates, when it holds the `count` characters from `index`; else
+    /// null, having ended the run with a failure at `location`.
+    const std::string* lineOrFailure(std::uint64_t handle, std::int64_t index, std::uint32_t count,
+                                     const SourceLocation& location);
+
+    /// Reports `text` at `location` as a VHDL report of `severity` does, the position of
+    /// std.standard.severity_level: note, warning, error or failure, one at or above the
+    /// severity the run stops at ending it.
+    void report(std::uint64_t severity, const SourceLocation& location, const std::string& text);
+
     /// Runs `$readmemh` or `$readmemb`, whose arguments are the file name and the optional
     /// start and end addresses.
     void readMemory(std::span<const std::uint32_t> objectSignals,

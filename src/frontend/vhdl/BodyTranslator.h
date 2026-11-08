@@ -376,6 +376,13 @@ private:
     /// `endfile(f)`.
     std::optional<Value> endOfFile(tree_t call);
 
+    /// A line's 'LENGTH, 'HIGH or 'RIGHT, `attribute`, which the runtime holding the line knows.
+    std::optional<Value> lineLength(tree_t attribute);
+
+    /// An element of a line, or a slice of it over bounds that fold, `expression`, of `type`, read
+    /// from the runtime holding the line.
+    std::optional<Value> linePart(tree_t expression, type_t type);
+
     /// A file the process declares: a register holding its descriptor, opened where it is
     /// declared when the declaration says so.
     bool declareFile(tree_t declaration);

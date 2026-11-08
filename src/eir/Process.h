@@ -100,6 +100,17 @@ enum class SysTaskKind : std::uint8_t {
     /// The result is the character's code in its low byte, and above it a bit saying whether
     /// there was one.
     LineReadCharacter,
+    /// The length of the line the argument designates, its 'LENGTH, 'HIGH and 'RIGHT: a line
+    /// the runtime holds is indexed from 1, as NVC's textio makes every one. A null line ends the
+    /// run with a failure.
+    LineLength,
+    /// The character of the line the first argument designates at the index the second holds, in
+    /// the result's low byte; an index outside the line ends the run with a failure.
+    LineElement,
+    /// The characters of the line the first argument designates from the index the second holds,
+    /// as many as fill the result, the leftmost in its highest bits; a slice reaching outside the
+    /// line ends the run with a failure.
+    LineSlice,
     /// `endfile`: whether the file the argument names has nothing left to read.
     FileEnd,
     /// `write` of a string whose length only the run shows, built in a line of its own: appends
@@ -114,6 +125,13 @@ enum class SysTaskKind : std::uint8_t {
     /// value's leftmost, as many as fit.
     FileReadValue,
 };
+
+/// The severities a Report takes as its first argument: the positions of
+/// `std.standard.severity_level`.
+inline constexpr std::uint8_t SeverityNote = 0;
+inline constexpr std::uint8_t SeverityWarning = 1;
+inline constexpr std::uint8_t SeverityError = 2;
+inline constexpr std::uint8_t SeverityFailure = 3;
 
 std::string_view toString(SysTaskKind kind) noexcept;
 

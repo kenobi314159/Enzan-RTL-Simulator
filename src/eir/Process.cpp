@@ -52,6 +52,9 @@ bool isSystemFunction(SysTaskKind kind) noexcept {
     case SysTaskKind::LineWriteLine:
     case SysTaskKind::LineReadLine:
     case SysTaskKind::LineReadCharacter:
+    case SysTaskKind::LineLength:
+    case SysTaskKind::LineElement:
+    case SysTaskKind::LineSlice:
     case SysTaskKind::FileEnd:
     case SysTaskKind::LineAppend:
     case SysTaskKind::FileReadValue: return true;
@@ -91,6 +94,9 @@ std::string_view toString(SysTaskKind kind) noexcept {
     case SysTaskKind::FileReadValue: return "read";
     case SysTaskKind::LineWriteLine: return "writeline";
     case SysTaskKind::LineReadLine: return "readline";
+    case SysTaskKind::LineLength: return "'length";
+    case SysTaskKind::LineElement: return "an element of a line";
+    case SysTaskKind::LineSlice: return "a slice of a line";
     case SysTaskKind::FileEnd: return "endfile";
     }
     return "$unknown";
