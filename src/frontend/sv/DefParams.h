@@ -29,7 +29,7 @@ namespace enzan::frontend::sv {
 /// another. The assignment slang does type by the value.
 ///
 /// A `defparam` is moved only where nothing changes but its form: every assignment in it names
-/// `instance.parameter`, the instance is declared in the same module, outside any generate
+/// `instance.parameter`, the instance is declared in the same scope, the module or a generate
 /// block, alone in its statement, with no dimensions and no parameter value assignment of its
 /// own. The value's syntax is moved with it, so slang reports on it where it is written. Any
 /// other `defparam` stays, and `mistypedDefParams` finds those slang would read wrongly.

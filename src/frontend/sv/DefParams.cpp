@@ -34,13 +34,22 @@ struct Setting {
 
 class DefParamMover : public syntax::SyntaxRewriter<DefParamMover> {
 public:
-    // Nested modules and generate blocks are not entered: a defparam there stays.
-    void handle(const syntax::ModuleDeclarationSyntax& module) {
+    // A nested module is not entered: a defparam there stays.
+    void handle(const syntax::ModuleDeclarationSyntax& module) { moveIn(module.members); }
+
+private:
+    /// Moves the defparams of the scope `members` declares onto its instances, and those of
+    /// each generate block among them onto the block's own. A generate region is no scope: its
+    /// members are the enclosing scope's.
+    void moveIn(const syntax::SyntaxList<syntax::MemberSyntax>& members) {
+        std::vector<const syntax::MemberSyntax*> scope;
+        collect(members, scope);
+
         // The instances a defparam may be moved onto, by name: each alone in a statement with no
         // parameter value assignment, and without dimensions. A name declared twice is neither.
         std::map<std::string_view, const syntax::HierarchyInstantiationSyntax*> instances;
         std::set<std::string_view> unusable;
-        for (const syntax::MemberSyntax* member : module.members) {
+        for (const syntax::MemberSyntax* member : scope) {
             if (member->kind != syntax::SyntaxKind::HierarchyInstantiation) continue;
             const auto& statement = member->as<syntax::HierarchyInstantiationSyntax>();
             for (const syntax::HierarchicalInstanceSyntax* instance : statement.instances) {
@@ -55,7 +64,7 @@ public:
         for (const std::string_view name : unusable) instances.erase(name);
 
         std::map<const syntax::HierarchyInstantiationSyntax*, std::vector<Setting>> settings;
-        for (const syntax::MemberSyntax* member : module.members) {
+        for (const syntax::MemberSyntax* member : scope) {
             if (member->kind != syntax::SyntaxKind::DefParam) continue;
             std::vector<std::pair<const syntax::HierarchyInstantiationSyntax*, Setting>> moved;
             for (const syntax::DefParamAssignmentSyntax* assignment :
@@ -80,7 +89,48 @@ public:
             replace(*statement, withSettings(*statement, list));
     }
 
-private:
+    /// Adds to `scope` the members of the scope `members` declares, those of its generate
+    /// regions included, and moves in each generate block among them.
+    void collect(const syntax::SyntaxList<syntax::MemberSyntax>& members,
+                 std::vector<const syntax::MemberSyntax*>& scope) {
+        for (const syntax::MemberSyntax* member : members) {
+            if (member->kind == syntax::SyntaxKind::GenerateRegion)
+                collect(member->as<syntax::GenerateRegionSyntax>().members, scope);
+            else if (!moveInGenerated(*member))
+                scope.push_back(member);
+        }
+    }
+
+    /// Moves in the generate blocks `node` holds, when it is a generate construct or a block
+    /// of one: the branches of an `if` and of a `case`, and a loop's body. False for anything
+    /// else. A branch of one member, with no `begin`, declares nothing a defparam could stand
+    /// beside.
+    bool moveInGenerated(const syntax::SyntaxNode& node) {
+        switch (node.kind) {
+        case syntax::SyntaxKind::GenerateBlock:
+            moveIn(node.as<syntax::GenerateBlockSyntax>().members);
+            return true;
+        case syntax::SyntaxKind::IfGenerate: {
+            const auto& branch = node.as<syntax::IfGenerateSyntax>();
+            moveInGenerated(*branch.block);
+            if (branch.elseClause != nullptr) moveInGenerated(*branch.elseClause->clause);
+            return true;
+        }
+        case syntax::SyntaxKind::LoopGenerate:
+            moveInGenerated(*node.as<syntax::LoopGenerateSyntax>().block);
+            return true;
+        case syntax::SyntaxKind::CaseGenerate:
+            for (const syntax::CaseItemSyntax* item : node.as<syntax::CaseGenerateSyntax>().items) {
+                if (item->kind == syntax::SyntaxKind::StandardCaseItem)
+                    moveInGenerated(*item->as<syntax::StandardCaseItemSyntax>().clause);
+                else if (item->kind == syntax::SyntaxKind::DefaultCaseItem)
+                    moveInGenerated(*item->as<syntax::DefaultCaseItemSyntax>().clause);
+            }
+            return true;
+        default: return false;
+        }
+    }
+
     /// The instance and the parameter `name` names, when it is `instance.parameter`.
     static std::optional<std::pair<std::string_view, Token>>
     targetOf(const syntax::NameSyntax& name) {
@@ -146,8 +196,8 @@ public:
         found.push_back(MistypedDefParam{
             .location = defparam.location,
             .description = std::format("a defparam setting the untyped parameter '{}' to {} bits, "
-                                       "where its default has {}, other than on an instance of "
-                                       "its own module",
+                                       "where its default has {}, other than on an instance "
+                                       "declared beside it",
                                        parameter.name, given, declared)});
     }
 };

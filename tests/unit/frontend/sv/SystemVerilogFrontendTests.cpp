@@ -1266,6 +1266,39 @@ TEST_F(FrontendTest, ADefparamOnAnInstanceTypesItsParameterByTheValue) {
     EXPECT_EQ(found->objects[held].type.bitWidth(), 104U);
 }
 
+TEST_F(FrontendTest, ADefparamInAGenerateBlockTypesTheParameterOfAnInstanceBesideIt) {
+    // As Altera's altsyncram sets its body's parameters, in each branch and in each iteration.
+    const std::unique_ptr<Design> design = analyse(R"(
+        module leaf;
+            parameter mode = "short";
+            logic [$bits(mode)-1:0] held = mode;
+        endmodule
+        module m #(parameter wide = 1);
+            generate
+                if (wide) begin : chosen
+                    leaf inner ();
+                    defparam inner.mode = "a_longer_mode";
+                end else begin : other
+                    leaf inner ();
+                    defparam inner.mode = "other";
+                end
+            endgenerate
+            for (genvar i = 0; i < 2; i++) begin : row
+                leaf inner ();
+                defparam inner.mode = "a_longer_mode";
+            end
+        endmodule
+    )");
+    ASSERT_NE(design, nullptr) << consumer.messages.front();
+    const auto found = std::ranges::find_if(design->modules(), [](const ModuleDefinition& module) {
+        return module.name.starts_with("leaf");
+    });
+    ASSERT_NE(found, design->modules().end());
+    const std::uint32_t held = require(found->findObject("held"));
+    EXPECT_EQ(found->objects[held].type.bitWidth(), 104U);
+    EXPECT_FALSE(reported("a defparam setting"));
+}
+
 TEST_F(FrontendTest, RefusesADefparamSlangWouldReadAtItsDefaultsWidth) {
     // Two levels down it is not moved onto an instance, and slang would cut it to five characters.
     EXPECT_EQ(analyse(R"(
