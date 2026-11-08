@@ -2941,6 +2941,7 @@ std::optional<std::string> requestText(const std::vector<eir::UnitRequest>& requ
         for (const eir::UnitRequest::Parameter& parameter : request.parameters) {
             const std::optional<std::string_view> parameterName =
                 nameMatching(module.parameters, parameter.name);
+            if (!parameterName && parameter.defaulted) continue;
             if (!parameterName) {
                 diagnostics.report(DiagCode::RequestedParameterMissing, SourceLocation(), *name,
                                    parameter.name);

@@ -198,6 +198,7 @@ public:
                 encoder.text(parameter.name);
                 encoder.text(parameter.value);
                 encoder.byte(parameter.boolean ? 1 : 0);
+                encoder.byte(parameter.defaulted ? 1 : 0);
             }
             encoder.u32(static_cast<std::uint32_t>(request.ports.size()));
             for (const eir::UnitRequest::PortUse& port : request.ports) {
@@ -423,9 +424,12 @@ std::optional<eir::UnitRequest> decodeRequest(Decoder& decoder) {
         std::optional<std::string> name = decoder.text();
         std::optional<std::string> value = decoder.text();
         const std::optional<std::uint8_t> boolean = decoder.byte();
-        if (!name || !value || !boolean) return std::nullopt;
-        request.parameters.push_back(
-            {.name = std::move(*name), .value = std::move(*value), .boolean = *boolean != 0});
+        const std::optional<std::uint8_t> defaulted = decoder.byte();
+        if (!name || !value || !boolean || !defaulted) return std::nullopt;
+        request.parameters.push_back({.name = std::move(*name),
+                                      .value = std::move(*value),
+                                      .boolean = *boolean != 0,
+                                      .defaulted = *defaulted != 0});
     }
     const std::optional<std::uint32_t> ports = decoder.u32();
     if (!ports) return std::nullopt;

@@ -25,7 +25,9 @@ simulated: choosing another takes a `config`, which Enzan does not read.
 **VHDL instantiating a SystemVerilog module** declares a component of the module's name, with its
 parameters as generics, and instantiates the component. With no entity of that name to bind it
 to, the component is bound to the module. A name VHDL reserves is written as an extended
-identifier: `\next\` names the module's port `next`.
+identifier: `\next\` names the module's port `next`. A generic the module has no parameter for is
+left out where the instance maps none, as a vendor's component may declare one its model lacks,
+and refused where it maps one (ENZ1011).
 
 Each instance is specialised by its values, whichever language set them. A VHDL port whose width
 depends on generics takes the width a translation for the instance's values gives it, which takes
@@ -120,6 +122,7 @@ language's library with `--vpi` or `--vhpi` and names the other in `GPI_EXTRA`.
 
 | Code | Meaning |
 |---|---|
+| ENZ1011 | a module has no parameter for a generic the VHDL instance maps |
 | ENZ2005 | a generic set from SystemVerilog, or a port of an unconstrained type, that the VHDL frontend cannot take |
 | ENZ3016 | a port whose type no conversion covers |
 | ENZ3017 | a module has no port of the name the instance of the other language connects |

@@ -1473,8 +1473,9 @@ end architecture;
 
 TEST_F(VhdlDesignTest, AComponentWithNoEntityIsBoundToTheModuleOfItsNameInAnyCase) {
     // The instance names a placeholder and asks for the module, its generics' values as
-    // SystemVerilog literals, a boolean's marked as one, the ports it connects in the order met.
-    // Two instances asking for the same are one request.
+    // SystemVerilog literals, a boolean's marked as one and one it leaves at the component's
+    // default marked so, the ports it connects in the order met. Two instances asking for the same
+    // are one request, a value in it defaulted only where both leave it.
     modules = {"other", "ClkBuf"};
     std::unique_ptr<enzan::eir::Design> design = translate(R"(
 library ieee;
@@ -1502,7 +1503,7 @@ architecture test of tb is
   signal x : std_logic_vector(5 downto 0);
 begin
   u : clkbuf generic map (w => 6) port map (i => a, o => v, io => open);
-  w : clkbuf generic map (w => 6) port map (o => x, i => a, io => open);
+  w : clkbuf generic map (w => 6, flag => true) port map (o => x, i => a, io => open);
 end architecture;
 )",
                                                            "tb");
@@ -1513,14 +1514,15 @@ end architecture;
     const enzan::eir::UnitRequest& request = exchange.asked.front();
     EXPECT_EQ(request.unit, "ClkBuf");
     using Parameter = enzan::eir::UnitRequest::Parameter;
-    EXPECT_EQ(request.parameters,
-              (std::vector<Parameter>{{.name = "w", .value = "6"},
-                                      {.name = "flag", .value = "1'b1", .boolean = true},
-                                      {.name = "name", .value = "\"a\\\"b\\\\c\""},
-                                      {.name = "init", .value = "4'b01zx"},
-                                      {.name = "neg", .value = "-3"},
-                                      {.name = "level", .value = "1'b1"},
-                                      {.name = "b", .value = "1'b0"}}));
+    EXPECT_EQ(
+        request.parameters,
+        (std::vector<Parameter>{{.name = "w", .value = "6"},
+                                {.name = "flag", .value = "1'b1", .boolean = true},
+                                {.name = "name", .value = "\"a\\\"b\\\\c\"", .defaulted = true},
+                                {.name = "init", .value = "4'b01zx", .defaulted = true},
+                                {.name = "neg", .value = "-3", .defaulted = true},
+                                {.name = "level", .value = "1'b1", .defaulted = true},
+                                {.name = "b", .value = "1'b0", .defaulted = true}}));
     using enzan::eir::PortDirection;
     using PortUse = enzan::eir::UnitRequest::PortUse;
     EXPECT_EQ(request.ports,

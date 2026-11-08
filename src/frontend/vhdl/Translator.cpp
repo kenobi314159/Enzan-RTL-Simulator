@@ -71,6 +71,25 @@ void considerArchitecture(lib_t library, ident_t name, int kind, void* context) 
     if (later) search.chosen = name;
 }
 
+/// The actual `instance` maps to `generic`, the one at `index` of what it instantiates; null when
+/// it leaves the generic alone. NVC's analysis maps one left alone to `open`, or where its default
+/// is a literal to the default's own tree.
+tree_t mappedActual(tree_t instance, tree_t generic, unsigned index) {
+    const unsigned maps = instance == nullptr ? 0 : tree_genmaps(instance);
+    for (unsigned map = 0; map < maps; ++map) {
+        tree_t association = tree_genmap(instance, map);
+        const bool positional = tree_subkind(association) == P_POS;
+        const bool byName = !positional && tree_kind(tree_name(association)) == T_REF
+                            && tree_has_ref(tree_name(association))
+                            && tree_ref(tree_name(association)) == generic;
+        if (positional ? tree_pos(association) != index : !byName) continue;
+        tree_t actual = tree_value(association);
+        if (tree_kind(actual) == T_OPEN) continue;
+        return tree_has_value(generic) && actual == tree_value(generic) ? nullptr : actual;
+    }
+    return nullptr;
+}
+
 /// `text` as a name is written into a definition's: letters, digits and underscores.
 std::string sanitised(std::string text) {
     for (char& character : text) {
@@ -877,21 +896,8 @@ public:
 
             // The actual the instance maps, folded where the instance is; or the default, folded
             // where the generics before it are bound.
-            tree_t actual = nullptr;
-            bool fromParent = false;
-            const unsigned maps = instance == nullptr ? 0 : tree_genmaps(instance);
-            for (unsigned map = 0; map < maps && actual == nullptr; ++map) {
-                tree_t association = tree_genmap(instance, map);
-                const bool positional = tree_subkind(association) == P_POS;
-                const bool byName = !positional && tree_kind(tree_name(association)) == T_REF
-                                    && tree_has_ref(tree_name(association))
-                                    && tree_ref(tree_name(association)) == generic;
-                if (positional ? tree_pos(association) != index : !byName) continue;
-                if (tree_kind(tree_value(association)) != T_OPEN) {
-                    actual = tree_value(association);
-                    fromParent = true;
-                }
-            }
+            tree_t actual = mappedActual(instance, generic, index);
+            const bool fromParent = actual != nullptr;
             if (actual == nullptr && tree_has_value(generic)) actual = tree_value(generic);
             if (!bindGeneric(bound, generic, actual, fromParent ? parent : bound))
                 return std::nullopt;
@@ -1130,13 +1136,23 @@ public:
     }
 
     /// The index of the request for `module` with `parameters`, made the first time it is asked
-    /// for. Its placeholder is the module and the values, as no definition can be named.
+    /// for. Its placeholder is the module and the values, as no definition can be named. A value
+    /// stays defaulted only while every instance asking leaves it so.
     std::uint32_t requestFor(const std::string& module,
                              std::vector<eir::UnitRequest::Parameter> parameters) {
+        const auto sameValue = [](const eir::UnitRequest::Parameter& one,
+                                  const eir::UnitRequest::Parameter& other) {
+            return one.name == other.name && one.value == other.value
+                   && one.boolean == other.boolean;
+        };
         for (std::uint32_t index = 0; index < moduleRequests.size(); ++index) {
-            if (moduleRequests[index].unit == module
-                && moduleRequests[index].parameters == parameters)
-                return index;
+            std::vector<eir::UnitRequest::Parameter>& asked = moduleRequests[index].parameters;
+            if (moduleRequests[index].unit != module
+                || !std::ranges::equal(asked, parameters, sameValue))
+                continue;
+            for (std::size_t at = 0; at < asked.size(); ++at)
+                asked[at].defaulted = asked[at].defaulted && parameters[at].defaulted;
+            return index;
         }
         std::string values;
         for (const eir::UnitRequest::Parameter& parameter : parameters) {
@@ -2404,7 +2420,8 @@ void ArchitectureTranslator::moduleInstance(tree_t statement, tree_t component,
                              && std::string_view(istr(type_ident(type))) == "STD.STANDARD.BOOLEAN";
         parameters.push_back({.name = systemVerilogName(simpleName(tree_ident(generic))),
                               .value = std::move(*value),
-                              .boolean = boolean});
+                              .boolean = boolean,
+                              .defaulted = mappedActual(statement, generic, index) == nullptr});
     }
     Folder formals = *local;
 

@@ -2847,6 +2847,22 @@ TEST_F(FrontendTest, ARequestSettingAParameterTheModuleLacksIsRefusedByName) {
     EXPECT_TRUE(reported("'depth'")) << consumer.messages.front();
 }
 
+TEST_F(FrontendTest, ARequestLeavingAParameterTheModuleLacksAtItsDefaultSetsNothing) {
+    // A vendor's component may declare a generic its model leaves out, which an instance mapping
+    // none leaves at the component's default.
+    requests.push_back({.placeholder = "a",
+                        .unit = "adder",
+                        .parameters = {{.name = "width", .value = "5"},
+                                       {.name = "depth", .value = "5", .defaulted = true}},
+                        .ports = {}});
+    onlyRequested = true;
+    const std::unique_ptr<Design> design = analyse(RequestedModules);
+    ASSERT_NE(design, nullptr) << consumer.messages.front();
+    EXPECT_FALSE(reportedCode(DiagCode::RequestedParameterMissing));
+    ASSERT_EQ(answers.size(), 1U);
+    EXPECT_NE(design->findModule(answers[0]), nullptr);
+}
+
 TEST_F(FrontendTest, TheNamesSourcesDeclareAndInstantiateAreListedWithoutElaborating) {
     // `missing` is no module of the sources, and so may be another language's unit; an interface
     // and a primitive are declared as modules are, and a gate is no instance of anything.

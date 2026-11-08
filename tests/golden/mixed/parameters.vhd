@@ -3,7 +3,8 @@
 -- A VHDL testbench setting a SystemVerilog module's parameters (parameters.sv) from generics, as a
 -- design instantiating a vendor's models through its component package does: a boolean meeting a
 -- parameter that takes a string becomes "TRUE" or "FALSE", and one meeting a bit stays a bit,
--- whether the generic is set or left to the component's default.
+-- whether the generic is set or left to the component's default. The component declares a generic
+-- the module lacks, SHOW_LAYOUT, as a vendor's may, which left to its default sets nothing.
 library ieee;
 use ieee.std_logic_1164.all;
 
@@ -15,7 +16,8 @@ architecture test of tb is
         generic ( ENABLED : boolean := true;
                   INVERTED : boolean := false;
                   MODE : string := "SYNC";
-                  COUNT : integer := 0 );
+                  COUNT : integer := 0;
+                  SHOW_LAYOUT : string := "OFF" );
         port ( is_enabled, is_valid, is_inverted, is_sync : out std_logic;
                value : out std_logic_vector(7 downto 0) );
     end component;

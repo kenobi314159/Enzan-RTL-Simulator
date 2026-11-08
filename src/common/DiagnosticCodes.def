@@ -59,8 +59,8 @@ ENZAN_DIAG(DelayRounded, 1009, Warning,
 ENZAN_DIAG(RequestedModuleMissing, 1010, Error,
            "VHDL instantiates the module '{}', which no SystemVerilog source declares")
 ENZAN_DIAG(RequestedParameterMissing, 1011, Error,
-           "module '{}' has no parameter '{}' for the VHDL instantiating it to set; a component's "
-           "generic sets the module's parameter of its name")
+           "module '{}' has no parameter '{}' for the VHDL instantiating it to set; a generic an "
+           "instance maps sets the module's parameter of its name")
 ENZAN_DIAG(EncryptedSource, 1012, Error,
            "'{}' holds encrypted code (IEEE 1735), which Enzan cannot decrypt")
 ENZAN_DIAG(ParameterInPathCondition, 1013, Warning,

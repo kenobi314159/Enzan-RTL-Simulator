@@ -41,10 +41,15 @@ struct UnitRequest {
     /// A VHDL boolean is the bit `1'b0` or `1'b1`, marked as a boolean: a parameter taking a
     /// string, `parameter CLKCM_CFG = "TRUE"`, is how a SystemVerilog model writes a boolean, and
     /// takes `"FALSE"` or `"TRUE"` instead.
+    ///
+    /// A value is `defaulted` when no instance maps it, so that it is the default their component
+    /// declares. A component may declare a generic its model leaves out, so a module with no
+    /// parameter of its name is then given none; one an instance maps is refused.
     struct Parameter {
         std::string name;
         std::string value;
         bool boolean = false;
+        bool defaulted = false;
 
         friend bool operator==(const Parameter&, const Parameter&) = default;
     };
