@@ -60,6 +60,7 @@ enzan run --gui --top tb design.sv testbench.sv
 | VHDL access types beyond `line`, protected types, configurations | not yet, reported by name |
 | A design mixing SystemVerilog and VHDL, either instantiating the other | yes |
 | AMD Xilinx's simulation models, from your own Vivado | yes |
+| Altera's simulation models, from your own Quartus | `altera_mf`, LPM, `sgate` and Cyclone 10 LP netlists, from Verilog, and from VHDL through the component packages or on Altera's VHDL models |
 | VCD and FST waveforms | yes |
 | GUI: live waveforms, cursors, grouping, radixes, force and deposit, remote attach | yes |
 | GUI: the Processes and Source windows | not yet |
@@ -78,8 +79,8 @@ Using Enzan:
 - [Signal lists](docs/signal-lists.md): the file the wave window's rows are saved to.
 - [Libraries, file lists and make](docs/libraries.md): analysis libraries, `.f` files, and
   building a design with `make`.
-- [Vendors' simulation libraries](docs/vendor-libraries.md): AMD Xilinx's unisims, `glbl` and XPM,
-  read from your own installation.
+- [Vendors' simulation libraries](docs/vendor-libraries.md): AMD Xilinx's and Altera's models, read
+  from your own installation.
 - [Mixed-language designs](docs/mixed-language.md): what crosses between SystemVerilog and VHDL,
   and at what cost.
 - [cocotb](docs/cocotb.md): running cocotb testbenches.
