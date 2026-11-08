@@ -494,6 +494,16 @@ private:
 
     std::optional<Offset> elementOffset(const Layout& layout, tree_t index);
 
+    /// Ends the run with a failure where it reaches this point, reporting `message`, with `%0d`
+    /// where `argument` goes when there is one.
+    void failAtRun(tree_t where, std::string message, const Value* argument = nullptr);
+
+    /// Ends the run with a failure where it reaches an assignment of a value `valueBits` wide to
+    /// `what`, `targetBits` wide and laid out as `target` where known: VHDL checks that their
+    /// lengths match only as the assignment runs, so a branch no run takes may hold one.
+    void failLength(tree_t where, std::uint32_t valueBits, std::uint32_t targetBits,
+                    const Layout* target, std::string_view what);
+
     /// Ends the run with a failure unless `position`, a signed 64-bit register, lies within
     /// `bounds`. `message` is the report, with `%0d` where the position goes.
     void checkWithin(const Value& position, const Folder::Range& bounds, tree_t where,

@@ -3141,6 +3141,76 @@ end architecture;
     EXPECT_EQ(simulation.messages().front(), "index 4 is outside the bounds 3 downto 0");
 }
 
+TEST_F(VhdlDesignTest, AValueOfAnotherLengthIsNoErrorInABranchNoRunTakes) {
+    // VHDL checks that a value's length matches only as it is assigned, as a vendor's model
+    // assigns between ports whose widths differ where a test of them chose another branch: to a
+    // signal, a variable and an aggregate, and a string literal and an aggregate assigned.
+    std::unique_ptr<enzan::eir::Design> design = translate(R"(
+entity tb is
+  generic (WA : positive := 8; WB : positive := 1);
+end entity;
+
+architecture test of tb is
+  signal a : bit_vector(WA - 1 downto 0) := (others => '1');
+  signal b : bit_vector(WB - 1 downto 0);
+begin
+  process
+    variable same : boolean := false;
+    variable v : bit_vector(WB - 1 downto 0);
+    variable x, y : bit;
+  begin
+    if same then
+      b <= a;
+      v := a;
+      (x, y) := a;
+      b <= "0101";
+      v := ('1', '0');
+    end if;
+    report "PASS";
+    wait;
+  end process;
+end architecture;
+)",
+                                                           "tb");
+    ASSERT_NE(design, nullptr) << transcript();
+
+    Simulation simulation(std::move(*design), "tb");
+    ASSERT_TRUE(simulation.ready()) << simulation.messages().front();
+    simulation.run();
+    EXPECT_EQ(simulation.messages(), std::vector<std::string>{"PASS"});
+}
+
+TEST_F(VhdlDesignTest, AValueOfAnotherLengthEndsTheRunWhereItIsAssigned) {
+    std::unique_ptr<enzan::eir::Design> design = translate(R"(
+entity tb is
+  generic (WA : positive := 8; WB : positive := 1);
+end entity;
+
+architecture test of tb is
+  signal a : bit_vector(WA - 1 downto 0) := (others => '1');
+  signal b : bit_vector(WB - 1 downto 0);
+begin
+  process
+  begin
+    report "before";
+    b <= a;
+    report "unreachable";
+    wait;
+  end process;
+end architecture;
+)",
+                                                           "tb");
+    ASSERT_NE(design, nullptr) << transcript();
+
+    Simulation simulation(std::move(*design), "tb");
+    ASSERT_TRUE(simulation.ready()) << simulation.messages().front();
+    EXPECT_EQ(simulation.run(), RunStatus::Error);
+    EXPECT_TRUE(simulation.reportedCode(DiagCode::AssertionFailure));
+    EXPECT_EQ(simulation.messages(),
+              (std::vector<std::string>{
+                  "before", "a value of length 8 is assigned to the signal of length 1"}));
+}
+
 TEST_F(VhdlDesignTest, ASliceThatMovesWithAVariableIsDrivenAndRead) {
     // As OFM's multiplexer testbench drives one input of its bus: bounds a variable moves, a
     // length that stays. Each direction, and reads of a signal's and a variable's.

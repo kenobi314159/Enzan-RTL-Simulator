@@ -887,8 +887,9 @@ bool BodyTranslator::signalAssignment(tree_t statement) {
             } else if (single.whole) {
                 what = "the signal";
             }
-            return fail(waveform,
-                        std::format("a value of another length than {} it is assigned to", what));
+            failLength(waveform, value->type.bitWidth(), width, expected ? &*expected : nullptr,
+                       what);
+            continue;
         }
         const Value stored = resize(*value, width);
 
@@ -1046,8 +1047,12 @@ bool BodyTranslator::variableAssignment(tree_t statement) {
         const std::optional<Value> value =
             expression(tree_value(statement), expected ? &*expected : nullptr);
         if (!value) return false;
-        if (value->type.bitWidth() != target->width)
-            return fail(name, "a value of another length than the aggregate it is assigned to");
+        if (value->type.bitWidth() != target->width) {
+            const std::optional<Layout> layout = layoutFor(tree_type(name));
+            failLength(name, value->type.bitWidth(), target->width, layout ? &*layout : nullptr,
+                       "the aggregate");
+            return true;
+        }
         std::vector<Value> pieces;
         pieces.reserve(target->parts.size());
         for (const AggregatePart& part : target->parts) {
@@ -1078,8 +1083,10 @@ bool BodyTranslator::variableAssignment(tree_t statement) {
     const std::optional<Value> value = expression(tree_value(statement), &target->layout);
     if (!value) return false;
     const std::uint32_t width = target->layout.storage.bitWidth();
-    if (target->layout.isComposite() && value->type.bitWidth() != width)
-        return fail(name, "a value of another length than the variable it is assigned to");
+    if (target->layout.isComposite() && value->type.bitWidth() != width) {
+        failLength(name, value->type.bitWidth(), width, &target->layout, "the variable");
+        return true;
+    }
     assignVariable(*target, resize(*value, width));
 
     // A followed variable holds what it is assigned where that folds, with what it held before.
@@ -3456,6 +3463,12 @@ void BodyTranslator::checkWithin(const Value& position, const Folder::Range& bou
     emit(eir::Instruction::make(eir::Opcode::BranchIf, {}, eir::Operand::reg(inside),
                                 eir::Operand::block(within), eir::Operand::block(outside)));
     selectBlock(outside);
+    failAtRun(where, std::move(message), &position);
+    jump(within);
+    selectBlock(within);
+}
+
+void BodyTranslator::failAtRun(tree_t where, std::string message, const Value* argument) {
     eir::SysTaskCall report;
     report.kind = eir::SysTaskKind::Report;
     report.location = owner.locate(where);
@@ -3463,13 +3476,25 @@ void BodyTranslator::checkWithin(const Value& position, const Folder::Range& bou
         .value = eir::Operand::reg(
             constant(SeverityFailure, eir::Type::bits(8, false, false), nullptr).reg),
         .type = eir::Type::bits(8, false, false)});
-    report.arguments.push_back(
-        eir::SysTaskArgument{.value = eir::Operand::reg(position.reg), .type = position.type});
+    if (argument != nullptr) {
+        report.arguments.push_back(eir::SysTaskArgument{.value = eir::Operand::reg(argument->reg),
+                                                        .type = argument->type});
+    }
     report.formatIndex = addString(std::move(message));
     emit(eir::Instruction::make(eir::Opcode::SysTask, {},
                                 eir::Operand::sysCall(addSysCall(std::move(report)))));
-    jump(within);
-    selectBlock(within);
+}
+
+void BodyTranslator::failLength(tree_t where, std::uint32_t valueBits, std::uint32_t targetBits,
+                                const Layout* target, std::string_view what) {
+    const std::uint32_t element = target != nullptr && target->isArray() ? target->elementBits : 0;
+    if (element != 0 && valueBits % element == 0 && targetBits % element == 0) {
+        failAtRun(where, std::format("a value of length {} is assigned to {} of length {}",
+                                     valueBits / element, what, targetBits / element));
+    } else {
+        failAtRun(where, std::format("a value {} bits wide is assigned to {} {} bits wide",
+                                     valueBits, what, targetBits));
+    }
 }
 
 std::optional<Folder::Range> BodyTranslator::discreteRange(type_t type) const {
@@ -3840,9 +3865,14 @@ std::optional<BodyTranslator::Value> BodyTranslator::positionalAggregate(tree_t 
     std::optional<Layout> result = layout != nullptr ? std::optional(*layout) : layoutFor(type);
     if (!result) result = unboundedLayout(type, length, expression);
     if (!result) return std::nullopt;
+    // One of another length fails only where the run reaches it; what it stands for is never
+    // used.
     if (result->storage.bitWidth() != bits) {
-        fail(expression, "an aggregate of another length than where it is used");
-        return std::nullopt;
+        failAtRun(expression,
+                  std::format("an aggregate of length {} is used where one of length {} is", length,
+                              result->index.length()));
+        return constantArray(eir::BitVector::filled(result->storage.bitWidth(), eir::Logic::Zero),
+                             *result, type);
     }
 
     // The leftmost piece takes the highest bits, whichever way the bounds run.
