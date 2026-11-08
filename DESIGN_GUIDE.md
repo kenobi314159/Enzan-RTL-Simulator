@@ -27,6 +27,12 @@ depends on one states the options and asks rather than picking one silently.
 follow from them. How a finished feature works in detail is for the code and its comments to say;
 this document is not a second copy of them.
 
+**What a change adds** to this document is a decision it makes, and nothing else: a choice of
+scope, a deviation from a standard or from the reference simulators, a rule a later change could
+break unknowingly, or the reason that keeps a decision from being reopened. What the change does,
+and how, is for its commit message to record, and what a standard already says is not restated
+here. The document grows by its decisions, not by its features.
+
 **Citing this document.** A comment states its own reason. It also cites this document, as
 `DESIGN_GUIDE.md section N.M`, only where the code enforces a rule made here and a change made
 locally could break it unknowingly. Documentation, and anything a user reads, never cites it; the
