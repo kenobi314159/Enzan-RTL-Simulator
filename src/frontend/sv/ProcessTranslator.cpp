@@ -3476,8 +3476,16 @@ ProcessTranslator::translateFileOpen(const ast::CallExpression& call,
             eir::SysTaskArgument{.value = eir::Operand::reg(value->reg), .type = value->type});
     }
 
-    const std::optional<eir::Type> resultType = module->convertType(*expression.type);
-    if (!resultType.has_value()) return std::nullopt;
+    // A call whose name or mode is a vector, which slang refuses and Enzan excuses (see
+    // FileNameArguments), has slang's error type: `$fopen` gives an `int` all the same.
+    const std::optional<eir::Type> resultType =
+        expression.type->isError() ? std::optional<eir::Type>(eir::Type::bits(32, true, false))
+                                   : module->convertType(*expression.type);
+    if (!resultType.has_value()) {
+        module->reportUnsupported(expression.sourceRange.start(), "this use of $fopen's result");
+        failed = true;
+        return std::nullopt;
+    }
     const std::uint32_t index = addSysCall(std::move(descriptor));
     const eir::Type word = eir::Type::bits(32, false, false);
     const std::uint32_t result = newRegister(word);

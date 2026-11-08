@@ -1123,6 +1123,15 @@ TEST_F(FrontendTest, OpensAFileNamedByAVector) {
     )");
     ASSERT_NE(design, nullptr) << consumer.messages.front();
     EXPECT_FALSE(reportedCode(DiagCode::SystemVerilogError));
+
+    // slang types the call it refused as an error, and the call is translated all the same.
+    const ModuleDefinition* module = design->findModule("m");
+    ASSERT_NE(module, nullptr);
+    ASSERT_EQ(module->processes.size(), 1U);
+    const std::vector<enzan::eir::SysTaskCall>& calls = module->processes[0].sysCalls;
+    ASSERT_EQ(calls.size(), 1U);
+    EXPECT_EQ(calls[0].kind, enzan::eir::SysTaskKind::FileOpen);
+    EXPECT_EQ(calls[0].arguments.size(), 2U);
 }
 
 TEST_F(FrontendTest, StillRefusesAVectorWhereAStringIsDeclared) {
