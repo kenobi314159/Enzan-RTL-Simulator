@@ -291,14 +291,16 @@ enzan_add_golden_test(large_design_00 DIR_WITH_MAKE NO_DIFFERENTIAL)
 
 # File output, memories loaded from files the design writes first, and a file read a byte at a
 # time: compared file by file with what Icarus Verilog does, each in an empty directory, so they
-# need it.
+# need it. The script's status is the verdict: a pattern for its success line would also match
+# the reference's, which a failing diff prints.
 if(ENZAN_REFERENCE_SIMULATOR)
   foreach(name files readmem file_reading)
     add_test(NAME golden.${name}
              COMMAND sh "${CMAKE_CURRENT_SOURCE_DIR}/run-isolated.sh" $<TARGET_FILE:enzan>
                      "${ENZAN_REFERENCE_SIMULATOR}" "${CMAKE_CURRENT_SOURCE_DIR}/sv/${name}.sv"
                      "${CMAKE_CURRENT_BINARY_DIR}/isolated/${name}")
-    set_tests_properties(golden.${name} PROPERTIES PASS_REGULAR_EXPRESSION "PASS ${name}")
+    set_tests_properties(golden.${name} PROPERTIES
+                         FAIL_REGULAR_EXPRESSION "${ENZAN_GOLDEN_FAILURE_PATTERN}")
   endforeach()
 endif()
 
