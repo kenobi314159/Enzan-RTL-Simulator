@@ -195,11 +195,11 @@ Simulation:
 
 Graphical front end:
       --gui               Hand the elaborated design to a window rather than
-                          running here. Closing the window ends this kernel.
-      --gui --attach <s>  Attach to a kernel already listening on socket s.
-                          Closing that window leaves the kernel running.
-      --listen <socket>   Elaborate and wait for a front end without starting
-                          one, so the kernel outlives whatever attaches.
+                          running here. Closing the window ends the simulation.
+      --gui --attach <s>  Attach to a simulation already listening on socket s.
+                          Closing that window leaves the simulation running.
+      --listen <socket>   Elaborate and wait for a window without starting
+                          one, so the simulation outlives whatever attaches.
       --wave-list <file>  Open the wave window with this signal list in it.
                           The window's File menu saves one.
 
@@ -375,9 +375,8 @@ ParseOutcome parseCommandLine(std::span<char*> arguments, Invocation& invocation
             const std::string name(text.substr(0, equals));
             const auto [at, inserted] = overrides.emplace(name, text.substr(equals + 1));
             if (!inserted && at->second != text.substr(equals + 1)) {
-                std::cerr << "enzan: '-G' sets the parameter '" << name << "' twice, to '"
-                          << at->second << "' and to '" << text.substr(equals + 1)
-                          << "'; it takes one value\n";
+                std::cerr << "enzan: '-G' sets '" << name << "' twice, to '" << at->second
+                          << "' and to '" << text.substr(equals + 1) << "'; it takes one value\n";
                 return false;
             }
         }
@@ -624,7 +623,8 @@ ParseOutcome parseCommandLine(std::span<char*> arguments, Invocation& invocation
             invocation.vhpiApplications.emplace_back(value);
             continue;
 #else
-            std::cerr << "enzan: '--vhpi' needs the VHDL frontend, which this build leaves out\n";
+            std::cerr << "enzan: '--vhpi' needs VHDL, and this build of Enzan was configured with "
+                         "-DENZAN_ENABLE_VHDL=OFF\n";
             return ParseOutcome::BadUsage;
 #endif
         }
@@ -1458,8 +1458,8 @@ int main(int argc, char** argv) {
     // attach *to*, and silently ignoring it would leave a user watching a second simulation
     // start while they waited to be shown the one they meant.
     if (!invocation.attachPath.empty() && !invocation.useGui) {
-        std::cerr << "enzan: '--attach' needs '--gui'; it is a window that attaches to a "
-                     "running kernel, and a kernel has nothing to attach to\n";
+        std::cerr << "enzan: '--attach' needs '--gui'; it attaches a window to a running "
+                     "simulation\n";
         return static_cast<int>(ExitStatus::Usage);
     }
 
@@ -1524,9 +1524,8 @@ int main(int argc, char** argv) {
     }
 
     if (invocation.useGui && !invocation.listenPath.empty()) {
-        std::cerr << "enzan: '--listen' cannot be combined with '--gui'; --gui starts a window "
-                     "on a socket of its own, and --listen is for a kernel that outlives "
-                     "whatever attaches to it\n";
+        std::cerr << "enzan: '--listen' cannot be combined with '--gui'; --gui opens a window of "
+                     "its own, and --listen waits for one to attach with --gui --attach\n";
         return static_cast<int>(ExitStatus::Usage);
     }
 
@@ -1535,8 +1534,8 @@ int main(int argc, char** argv) {
     // that this combination is not the one to reach for.
     if (!invocation.listenPath.empty()) {
         if (invocation.runUntil.has_value()) {
-            std::cerr << "enzan: '--run' and '--listen' cannot be combined; a served session "
-                         "is run from the attached client\n";
+            std::cerr << "enzan: '--run' and '--listen' cannot be combined; a simulation that "
+                         "listens is run from the window that attaches to it\n";
             return static_cast<int>(ExitStatus::Usage);
         }
     }

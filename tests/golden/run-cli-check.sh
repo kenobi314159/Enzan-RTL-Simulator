@@ -110,7 +110,7 @@ expect 1 "'--listen' applies" "$enzan" analyse --listen k.sock tb.sv
 # value again is the same answer. `--dry-run` stops before anything is analysed.
 expect 1 "'--vcd' was given twice" "$enzan" --vcd a.vcd --vcd b.vcd tb.sv
 expect 1 "'--wave-scope' was given twice" "$enzan" --vcd-scope /tb --wave-scope /tb/u tb.sv
-expect 1 "sets the parameter 'W' twice" "$enzan" -G W=1 -GW=2 tb.sv
+expect 1 "sets 'W' twice" "$enzan" -G W=1 -GW=2 tb.sv
 expect 0 "tb.sv" "$enzan" --dry-run -t tb --top tb -G W=1 -GW=1 tb.sv
 
 # --- several top levels --------------------------------------------------------------------------
