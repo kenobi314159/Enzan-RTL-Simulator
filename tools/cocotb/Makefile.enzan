@@ -82,13 +82,14 @@ ifdef VERILOG_INCLUDE_DIRS
     COMPILE_ARGS += $(addprefix -I ,$(VERILOG_INCLUDE_DIRS))
 endif
 
+# Its own variable rather than SIM_ARGS, which a make command line giving SIM_ARGS replaces.
 ifeq ($(WAVES),1)
-    SIM_ARGS += --fst $(SIM_BUILD)/$(TOPLEVELS).fst
+    ENZAN_WAVES := --fst $(SIM_BUILD)/$(TOPLEVELS).fst
 endif
 
 ENZAN_ARGS = $(TOPMODULE_ARG) --timescale $(ENZAN_TIMESCALE) $(ENZAN_PLI) $(ENZAN_WORK) \
-             $(ENZAN_IN_LIBS) $(COMPILE_ARGS) $(SIM_ARGS) $(EXTRA_ARGS) $(VERILOG_SOURCES) \
-             $(VHDL_SOURCES) $(call deprecate,PLUSARGS,COCOTB_PLUSARGS)
+             $(ENZAN_IN_LIBS) $(ENZAN_WAVES) $(COMPILE_ARGS) $(SIM_ARGS) $(EXTRA_ARGS) \
+             $(VERILOG_SOURCES) $(VHDL_SOURCES) $(call deprecate,PLUSARGS,COCOTB_PLUSARGS)
 
 # The libraries VHDL_LIB_ORDER names, analysed afresh, each against those analysed before it.
 # cocotb's own checks come first: each library it names has sources, and each VHDL_SOURCES_<lib>
