@@ -91,6 +91,8 @@ ENZAN_ARGS = $(TOPMODULE_ARG) --timescale $(ENZAN_TIMESCALE) $(ENZAN_PLI) $(ENZA
              $(VHDL_SOURCES) $(call deprecate,PLUSARGS,COCOTB_PLUSARGS)
 
 # The libraries VHDL_LIB_ORDER names, analysed afresh, each against those analysed before it.
+# cocotb's own checks come first: each library it names has sources, and each VHDL_SOURCES_<lib>
+# is a library it names, so that none is left out unnoticed.
 ifneq ($(strip $(VHDL_LIB_ORDER)),)
 define enzan_analyse_libraries
 	$(RM) -r $(ENZAN_LIBRARIES)
@@ -102,6 +104,8 @@ endif
 # the results file is the only target.
 $(COCOTB_RESULTS_FILE): $(VERILOG_SOURCES) $(VHDL_SOURCES) $(CUSTOM_COMPILE_DEPS) $(CUSTOM_SIM_DEPS) | $(SIM_BUILD)
 	$(RM) $(COCOTB_RESULTS_FILE)
+	$(foreach LIB, $(VHDL_LIB_ORDER), $(check_vhdl_sources))
+	$(foreach SOURCES_VAR, $(filter VHDL_SOURCES_%, $(.VARIABLES)), $(check_lib_order))
 	$(enzan_analyse_libraries)
 
 	GPI_EXTRA=$(GPI_EXTRA) $(COCOTB_ENV) $(SIM_CMD_PREFIX) $(CMD) $(ENZAN_ARGS) $(SIM_CMD_SUFFIX)
@@ -110,6 +114,8 @@ $(COCOTB_RESULTS_FILE): $(VERILOG_SOURCES) $(VHDL_SOURCES) $(CUSTOM_COMPILE_DEPS
 
 debug: $(VERILOG_SOURCES) $(VHDL_SOURCES) $(CUSTOM_COMPILE_DEPS) $(CUSTOM_SIM_DEPS) | $(SIM_BUILD)
 	$(RM) $(COCOTB_RESULTS_FILE)
+	$(foreach LIB, $(VHDL_LIB_ORDER), $(check_vhdl_sources))
+	$(foreach SOURCES_VAR, $(filter VHDL_SOURCES_%, $(.VARIABLES)), $(check_lib_order))
 	$(enzan_analyse_libraries)
 
 	GPI_EXTRA=$(GPI_EXTRA) $(COCOTB_ENV) $(SIM_CMD_PREFIX) gdb --args $(CMD) $(ENZAN_ARGS) $(SIM_CMD_SUFFIX)
