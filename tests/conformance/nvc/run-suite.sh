@@ -12,8 +12,9 @@
 # test, when each line of its gold file is found in what Enzan printed, in order. NVC writes a
 # message's time and delta in front of it, `1ns+2: message`, which Enzan does not, so the message
 # is matched without them. A test of something only NVC has, VHPI, its shell, PSL, coverage,
-# waveform dumps, Verilog or its relaxed rules, is in neither count; nor is one setting generics or
-# environment variables, which Enzan's command line does not give a VHDL top yet.
+# waveform dumps, Verilog or its relaxed rules, is in neither count; nor is one setting environment
+# variables, which Enzan's command line does not give a design. A generic a test sets, `gN=1`, is
+# set with -G.
 #
 # With `mixed`, only the tests of VHDL and Verilog together are run instead, each with the Verilog
 # file beside its VHDL, by an Enzan built with both frontends. Their pass list is
@@ -61,6 +62,7 @@ while read -r name options || [[ -n "$name" ]]; do
         mixed) mixed=yes ;;
         2000 | 2002 | 2008 | 2019) arguments="${arguments/1993/$flag}" ;;
         stop=*) arguments+=" --stop ${flag#stop=}" ;;
+        g*=*) arguments+=" -G${flag#g}" ;;
         *) applicable=no ;;
         esac
     done

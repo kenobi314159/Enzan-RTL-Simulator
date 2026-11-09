@@ -103,6 +103,11 @@ struct DesignOptions {
     /// their architectures instantiates; with several, none is translated and they are reported.
     std::string top;
 
+    /// The top's generics `-G` sets, each `NAME=VALUE`: the name in any case, and the value as
+    /// NVC's and GHDL's `-g` read one of the generic's type. They apply where the design is
+    /// translated rather than where it is analysed, so they are no part of a library's key.
+    std::vector<std::string> generics;
+
     /// The unit EIR's delays count, as a power of ten of a second.
     std::int8_t timeUnitExponent = -15;
 

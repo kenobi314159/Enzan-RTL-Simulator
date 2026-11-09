@@ -137,8 +137,10 @@ Sources:
   -D, --define <NAME[=V]> Define a preprocessor macro. +define+ is also accepted.
   -I, --incdir <dir>      Add a directory to the `include search path. +incdir+
                           is also accepted.
-  -G <NAME=VALUE>         Set a parameter of the top level, overriding its
-                          default. -GNAME=VALUE is also accepted.
+  -G <NAME=VALUE>         Set a parameter or generic of the top level,
+                          overriding its default. -GNAME=VALUE is also accepted.
+                          A VHDL generic's value is a literal of its type:
+                          -GW=8, -GMODE=fast, -GBIT='1', -GT=10ns.
 
 Libraries:
       --out-lib <dir>     The library analysis is written into, created when it
@@ -1084,8 +1086,8 @@ bool analyseOnly(const Invocation& invocation, enzan::session::Session& session,
     return analysed;
 }
 
-bool prepare(const Invocation& invocation, enzan::session::Session& session,
-             enzan::SourceManager& sources, enzan::DiagnosticEngine& diagnostics) {
+ExitStatus prepare(const Invocation& invocation, enzan::session::Session& session,
+                   enzan::SourceManager& sources, enzan::DiagnosticEngine& diagnostics) {
     // What only the kernel reads, set whether or not this run analyses anything: a run from
     // libraries alone skips analysis, and a seed or a delta limit given to it would otherwise be
     // dropped without a word.
@@ -1096,23 +1098,35 @@ bool prepare(const Invocation& invocation, enzan::session::Session& session,
     // A run given nothing but libraries has no sources of its own to analyse, and elaboration
     // then works from what the libraries hold.
     const bool hasSources = !invocation.files.empty() || !invocation.fileLists.empty();
-    if (hasSources && !analyseOnly(invocation, session, sources, diagnostics)) return false;
-    if (!hasSources && !openLibraries(invocation, session)) return false;
+    if (hasSources && !analyseOnly(invocation, session, sources, diagnostics))
+        return ExitStatus::AnalysisFailed;
+    if (!hasSources && !openLibraries(invocation, session)) return ExitStatus::AnalysisFailed;
+
+    // A parameter override applies while SystemVerilog is analysed, and a run from libraries
+    // alone analyses none of it.
+    if (!hasSources && !session.hasVhdlLibraries() && !invocation.parameters.empty()) {
+        std::cerr << "enzan: '-G' applies while sources are analysed, and this analyses none; "
+                     "give it to the analysis that stores the top level\n";
+        return ExitStatus::Usage;
+    }
 
     // A VHDL design is translated for the run that needs it, so a run given only libraries
-    // holding VHDL translates its top from them.
+    // holding VHDL translates its top from them, with the generics `-G` sets.
     if (!hasSources && session.hasVhdlLibraries()) {
         enzan::session::Session::AnalysisRequest request;
-        if (!collectSources(invocation, sources, diagnostics, request)) return false;
-        if (!session.analyse(request)) return false;
+        if (!collectSources(invocation, sources, diagnostics, request))
+            return ExitStatus::AnalysisFailed;
+        if (!session.analyse(request)) return ExitStatus::AnalysisFailed;
     }
 
     if (!invocation.waveformScope.empty() && !session.addWaveformScope(invocation.waveformScope))
-        return false;
+        return ExitStatus::AnalysisFailed;
     if (invocation.waveformWidthLimit.has_value())
         session.setWaveformWidthLimit(*invocation.waveformWidthLimit);
 
-    return session.elaborate(std::span<const std::string>(invocation.topModules));
+    return session.elaborate(std::span<const std::string>(invocation.topModules))
+               ? ExitStatus::Success
+               : ExitStatus::AnalysisFailed;
 }
 
 /// Serves an elaborated session to a graphical front end instead of running it here.
@@ -1241,7 +1255,9 @@ ExitStatus simulate(const Invocation& invocation, enzan::SourceManager& sources,
             return ExitStatus::AnalysisFailed;
     }
 
-    if (!prepare(invocation, session, sources, diagnostics)) return ExitStatus::AnalysisFailed;
+    if (const ExitStatus prepared = prepare(invocation, session, sources, diagnostics);
+        prepared != ExitStatus::Success)
+        return prepared;
 
     // Opened before serving as well as before running: a served session records into the live
     // database *and* into any writer that was asked for, so that someone debugging in a window
@@ -1470,14 +1486,14 @@ int main(int argc, char** argv) {
         return static_cast<int>(ExitStatus::Usage);
     }
 
-    // A macro, an include directory and a parameter override apply while sources are analysed. A
-    // run from libraries alone analyses nothing, so it would run what the libraries hold as if
-    // the option had been taken.
+    // A macro and an include directory apply while sources are analysed. A run from libraries
+    // alone analyses nothing, so it would run what the libraries hold as if the option had been
+    // taken. So would a parameter override, unless the libraries hold VHDL, which a run
+    // translates for its generics; `prepare` says so once the libraries are open.
     if (invocation.files.empty() && invocation.fileLists.empty()) {
         std::vector<std::string_view> analysisOptions;
         if (!invocation.defines.empty()) analysisOptions.emplace_back("'-D'");
         if (!invocation.includeDirectories.empty()) analysisOptions.emplace_back("'-I'");
-        if (!invocation.parameters.empty()) analysisOptions.emplace_back("'-G'");
         if (!invocation.depfilePath.empty()) analysisOptions.emplace_back("'--depfile'");
         if (!analysisOptions.empty()) {
             std::cerr << "enzan: ";
@@ -1549,9 +1565,7 @@ int main(int argc, char** argv) {
 
     if (invocation.command == Command::Elaborate) {
         enzan::session::Session session(sources, diagnostics);
-        if (!prepare(invocation, session, sources, diagnostics))
-            return static_cast<int>(ExitStatus::AnalysisFailed);
-        return static_cast<int>(ExitStatus::Success);
+        return static_cast<int>(prepare(invocation, session, sources, diagnostics));
     }
 
     return static_cast<int>(simulate(invocation, sources, diagnostics));

@@ -428,6 +428,7 @@ unsigned runNvcDesign(const DesignOptions& options, const SourceManager& sources
                           .work = run.workLibrary(),
                           .analysed = run.analysed(),
                           .ieeeWarnings = options.ieeeWarnings,
+                          .generics = options.generics,
                           .modules = options.modules,
                           .requests = options.requests,
                           .described = options.described,

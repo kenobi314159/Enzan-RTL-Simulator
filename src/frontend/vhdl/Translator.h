@@ -42,6 +42,9 @@ struct DesignRequest {
     /// Whether the IEEE packages' own warnings are reported (`DesignOptions::ieeeWarnings`).
     bool ieeeWarnings = true;
 
+    /// The top level's generics the command line sets (`DesignOptions::generics`).
+    std::vector<std::string> generics;
+
     /// The SystemVerilog modules a component may be bound to (`DesignOptions::modules`).
     std::vector<std::string> modules;
 

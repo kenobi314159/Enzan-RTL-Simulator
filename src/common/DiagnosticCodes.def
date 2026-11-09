@@ -53,7 +53,7 @@ ENZAN_DIAG(ErrorInDeadCode, 1008, Warning,
            "{}; it is in code a constant condition rules out, so it is never elaborated into "
            "the simulation.")
 ENZAN_DIAG(UnusedParameterOverride, 1007, Warning,
-           "-G {} names no parameter of a top level, and changes nothing")
+           "-G {} names no parameter or generic of a top level, and changes nothing")
 ENZAN_DIAG(DelayRounded, 1009, Warning,
            "a delay of {} is no whole number of the run's time unit, and is rounded to {}")
 ENZAN_DIAG(RequestedModuleMissing, 1010, Error,
@@ -239,6 +239,12 @@ ENZAN_DIAG(VhdlUnitUnrecorded, 6031, Error,
 ENZAN_DIAG(TimingChecksNotRun, 6032, Note,
            "timing checks are not run, so a violation of this one or of any other in the design "
            "is never reported")
+ENZAN_DIAG(GenericsWithoutTop, 6033, Error,
+           "-G sets generics of the VHDL top level, and an analysis without --top translates no "
+           "top level; give -G to the run, or name the top with --top")
+ENZAN_DIAG(MixedOverridesWithoutTop, 6034, Error,
+           "-G sets the parameters or generics of the top level, and in a design of both "
+           "SystemVerilog and VHDL it needs --top to say which unit that is")
 ENZAN_DIAG(TimeScaleConflictsWithLibrary, 6028, Error,
            "`--timescale {}` was given, but library '{}' was analysed in units of {}, and its "
            "delays are counts of that unit; leave `--timescale` out to use it, or analyse the "

@@ -101,7 +101,8 @@ Each is refused by name rather than simulated wrongly:
   from SystemVerilog, where nothing gives it bounds (ENZ2005);
 - `entity work.m` naming a SystemVerilog module: declare a component instead;
 - choosing an architecture other than the default from SystemVerilog;
-- storing a design of both languages in a library (`--out-lib`), and `-G` for one.
+- storing a design of both languages in a library (`--out-lib`);
+- `-G` without `--top`, which it needs to tell which language's top level it sets (ENZ6034).
 
 ## VPI and VHPI
 

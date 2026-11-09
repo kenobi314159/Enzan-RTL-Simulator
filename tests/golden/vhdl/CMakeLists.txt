@@ -7,18 +7,24 @@
 # an assertion of severity error is reported and the run goes on, so the line alone would not.
 
 # ---------------------------------------------------------------------------
-# enzan_add_vhdl_golden_test(<name>)
+# enzan_add_vhdl_golden_test(<name> [GENERICS <NAME=VALUE>...])
 # ---------------------------------------------------------------------------
 #
 # Registers `golden.vhdl.<name>`, which runs <name>.vhd and requires the PASS line, and
-# `golden.vhdl.<name>.differential`, which compares the run against GHDL's.
+# `golden.vhdl.<name>.differential`, which compares the run against GHDL's. GENERICS sets the
+# top's generics, with -G for Enzan and -g for GHDL.
 function(enzan_add_vhdl_golden_test name)
+  cmake_parse_arguments(PARSE_ARGV 1 arg "" "" "GENERICS")
   set(source "${CMAKE_CURRENT_SOURCE_DIR}/${name}.vhd")
   if(NOT EXISTS "${source}")
     message(FATAL_ERROR "golden test '${name}' has no source at ${source}")
   endif()
+  set(generics)
+  foreach(generic IN LISTS arg_GENERICS)
+    list(APPEND generics "-G${generic}")
+  endforeach()
 
-  add_test(NAME golden.vhdl.${name} COMMAND enzan --top tb "${source}")
+  add_test(NAME golden.vhdl.${name} COMMAND enzan --top tb ${generics} "${source}")
   set_tests_properties(
     golden.vhdl.${name}
     PROPERTIES PASS_REGULAR_EXPRESSION "PASS ${name}"
@@ -32,7 +38,7 @@ function(enzan_add_vhdl_golden_test name)
     NAME golden.vhdl.${name}.differential
     COMMAND "${CMAKE_CURRENT_SOURCE_DIR}/run-ghdl-differential.sh" $<TARGET_FILE:enzan>
             "${ENZAN_VHDL_REFERENCE_SIMULATOR}" "${CMAKE_CURRENT_SOURCE_DIR}/compare-ghdl.py"
-            "${source}" tb)
+            "${source}" tb ${arg_GENERICS})
   set_tests_properties(golden.vhdl.${name}.differential PROPERTIES TIMEOUT 120)
 endfunction()
 
@@ -195,6 +201,10 @@ enzan_add_vhdl_golden_test(deferred)
 
 # Generics of record types, and their fields folded.
 enzan_add_vhdl_golden_test(record_generics)
+
+# A testbench's generics set from the command line, one of them having no default.
+enzan_add_vhdl_golden_test(top_generics GENERICS width=8 enabled=true name=uart pattern=1010
+                           level='1' depth=-3)
 
 # VHDL analysed into libraries and run from them, as a Makefile drives it.
 add_test(NAME golden.vhdl.library COMMAND "${CMAKE_CURRENT_SOURCE_DIR}/run-library-check.sh"

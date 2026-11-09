@@ -114,3 +114,18 @@ if(ENZAN_HAVE_COCOTB)
                  TIMEOUT 300)
   endforeach()
 endif()
+
+# `-G` goes to the top's language, and a design of both languages needs --top to say which.
+set(overrides "${CMAKE_CURRENT_SOURCE_DIR}/top_overrides.vhd"
+              "${CMAKE_CURRENT_SOURCE_DIR}/top_overrides.sv")
+add_test(NAME golden.mixed.top_overrides.vhdl_top COMMAND enzan --top tb -GDEPTH=5 ${overrides})
+add_test(NAME golden.mixed.top_overrides.sv_top COMMAND enzan --top sv_tb -GWIDTH=3 ${overrides})
+set_tests_properties(golden.mixed.top_overrides.vhdl_top PROPERTIES PASS_REGULAR_EXPRESSION
+                     "PASS top_overrides")
+set_tests_properties(golden.mixed.top_overrides.sv_top PROPERTIES PASS_REGULAR_EXPRESSION
+                     "PASS sv_tb")
+set_tests_properties(golden.mixed.top_overrides.vhdl_top golden.mixed.top_overrides.sv_top
+                     PROPERTIES FAIL_REGULAR_EXPRESSION ": (error|fatal|warning): " TIMEOUT 60)
+add_test(NAME golden.mixed.top_overrides.without_top COMMAND enzan -GDEPTH=5 ${overrides})
+set_tests_properties(golden.mixed.top_overrides.without_top
+                     PROPERTIES PASS_REGULAR_EXPRESSION "needs --top to say which unit")

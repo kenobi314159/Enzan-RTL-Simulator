@@ -901,9 +901,13 @@ when it is one of the names above, so a source file called `run.sv` is still a s
   package's instance sits beside the top (5.1), the first the design's own. With none named,
   several candidates are refused rather than all taken, since a module nothing instantiates is as
   often one left over as one meant.
-- **A top level's parameters are set with `-G NAME=VALUE`**, or `-GNAME=VALUE`. slang applies an
-  override while analysing, so it is in a library entry's key. One that names no parameter is
-  reported, since a misspelt override is otherwise invisible.
+- **A top level's parameters and generics are set with `-G NAME=VALUE`**, or `-GNAME=VALUE`, the
+  value read in the top's language: a SystemVerilog expression, or a VHDL value as NVC's and
+  GHDL's `-g` read one, so that a makefile written for either passes the same text. slang applies
+  an override while analysing, so it is in a library entry's key; a VHDL generic is set where the
+  design is translated, so it is in no key, and a run from a library takes it. In a design of both
+  languages `-G` goes to the top's language, which `--top` has to name. One that names no
+  parameter or generic is reported, since a misspelt override is otherwise invisible.
 - **Random numbers are drawn from `--seed N`**, 0 by default (3.8). `$random` is IEEE 1364's
   reference generator, bit for bit, so a seed draws in Enzan what it draws elsewhere. `$urandom` and
   `$urandom_range` draw from a generator per process, derived from the seed and the process's name,
@@ -1909,8 +1913,7 @@ solver); save and restore; multiple-clock-domain tooling; UVM.
 a general heap, with `deallocate`; protected types and shared variables of them; generic packages
 and their instantiation; configurations; external names; and VUnit's simulator interface for Enzan,
 which VUnit chooses by name as cocotb chooses a makefile. They also need values whose length only
-the run knows, beyond the scratch of 4.1, and a VHDL top level's generics set from the command line,
-as `-G` sets a SystemVerilog one's parameters. They are done when VUnit's own suite and OSVVM's
+the run knows, beyond the scratch of 4.1. They are done when VUnit's own suite and OSVVM's
 regression each run with a recorded pass rate.
 
 ### Known gaps
@@ -1929,8 +1932,7 @@ mistranslated:
   run, and one held across a `wait`.
 - A port of a real, an enumeration other than `std_ulogic`, `bit` and `boolean`, or a physical type
   across the language boundary; a VHDL port of an unconstrained type instantiated from
-  SystemVerilog; storing a design of both languages in a library, and `-G` for one; a second top
-  level of VHDL.
+  SystemVerilog; storing a design of both languages in a library; a second top level of VHDL.
 - Altera's models of Cyclone V and later families, `altera_lnsim.sv`, which M7.2 holds to no
   reference; among them `altera_pll`'s arrays of reals are refused.
 - In VPI, declared ranges (a vector reports `[width-1:0]`), integer atom types, part-select handles,

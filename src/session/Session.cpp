@@ -416,11 +416,13 @@ bool Session::analyseVhdl(const AnalysisRequest& request) {
         options.units.sources.push_back(result.buffer);
         read.push_back({.path = file, .buffer = result.buffer});
     }
-    if (!parameters.empty()) {
-        diagnostics.report(DiagCode::NotYetImplemented, SourceLocation(),
-                           "-G for a VHDL top level");
+    // A top level's generics are set where the design is translated, so an analysis translating
+    // none would take `-G` and do nothing with it.
+    if (!parameters.empty() && !request.translateVhdl) {
+        diagnostics.report(DiagCode::GenericsWithoutTop, SourceLocation());
         return false;
     }
+    options.generics = parameters;
 
     std::string keyOptions;
     if (!setVhdlOptions(request, !read.empty(), options, keyOptions)) return false;
@@ -706,9 +708,10 @@ bool Session::analyseMixed(const AnalysisRequest& request) {
                            "storing a design of both VHDL and SystemVerilog in a library");
         return false;
     }
-    if (!parameters.empty()) {
-        diagnostics.report(DiagCode::NotYetImplemented, SourceLocation(),
-                           "-G for a design of both VHDL and SystemVerilog");
+    // `-G` sets the top level's parameters or generics, so it goes to the top's language, which
+    // is known before analysis only when the top is named.
+    if (!parameters.empty() && request.top.empty()) {
+        diagnostics.report(DiagCode::MixedOverridesWithoutTop, SourceLocation());
         return false;
     }
 
@@ -751,8 +754,10 @@ bool Session::analyseMixed(const AnalysisRequest& request) {
         options.top.clear();
         options.onlyRequested = true;
         svOptions.topModules = {request.top};
+        svOptions.parameterOverrides = parameters;
     } else {
         svOptions.onlyRequested = !request.top.empty();
+        options.generics = parameters;
     }
     for (std::string& top : svTops) svOptions.topModules.push_back(std::move(top));
     // Without a top, an analysis that translates no VHDL still translates what SystemVerilog
