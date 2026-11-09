@@ -87,9 +87,17 @@ ifeq ($(WAVES),1)
     ENZAN_WAVES := --fst $(SIM_BUILD)/$(TOPLEVELS).fst
 endif
 
+# GUI=1 hands the design to Enzan's window, which runs it when asked, or at once with `--run all`
+# in SIM_ARGS. Closing the window ends the simulation with the simulation's exit status, so
+# the results are checked as after a batch run.
+ifeq ($(GUI),1)
+    ENZAN_GUI := --gui
+endif
+
 ENZAN_ARGS = $(TOPMODULE_ARG) --timescale $(ENZAN_TIMESCALE) $(ENZAN_PLI) $(ENZAN_WORK) \
-             $(ENZAN_IN_LIBS) $(ENZAN_WAVES) $(COMPILE_ARGS) $(SIM_ARGS) $(EXTRA_ARGS) \
-             $(VERILOG_SOURCES) $(VHDL_SOURCES) $(call deprecate,PLUSARGS,COCOTB_PLUSARGS)
+             $(ENZAN_IN_LIBS) $(ENZAN_WAVES) $(ENZAN_GUI) $(COMPILE_ARGS) $(SIM_ARGS) \
+             $(EXTRA_ARGS) $(VERILOG_SOURCES) $(VHDL_SOURCES) \
+             $(call deprecate,PLUSARGS,COCOTB_PLUSARGS)
 
 # The libraries VHDL_LIB_ORDER names, analysed afresh, each against those analysed before it.
 # cocotb's own checks come first: each library it names has sources, and each VHDL_SOURCES_<lib>
