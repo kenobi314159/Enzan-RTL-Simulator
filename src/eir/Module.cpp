@@ -50,20 +50,32 @@ bool storeShown(Encoding encoding, ConstBitRef shown, BitRef stored) noexcept {
     return true;
 }
 
-void encode(Encoding encoding, ConstBitRef shown, BitRef stored) noexcept {
+void encode(Encoding encoding, ConstBitRef shown, BitRef stored, std::uint8_t weak) noexcept {
     if (encoding == Encoding::Bits || encoding == Encoding::Real) {
         bitops::copy(stored, shown);
         return;
     }
-    const bool logic = encoding == Encoding::VhdlLogic;
+    // The codes of a bit's 0 and 1, every other value its 0; or the positions of std_ulogic's
+    // '0', '1', 'Z' and 'X', weak values its 'L', 'H' and 'W'.
+    std::uint32_t zero = 0;
+    std::uint32_t one = 1;
+    std::uint32_t highZ = 0;
+    std::uint32_t unknown = 0;
+    if (encoding == Encoding::VhdlLogic) {
+        const bool weakZero = (weak & WeakZero) != 0;
+        const bool weakOne = (weak & WeakOne) != 0;
+        zero = weakZero ? 6 : 2;
+        one = weakOne ? 7 : 3;
+        highZ = 4;
+        unknown = weakZero && weakOne ? 5 : 1;
+    }
     for (std::uint32_t element = 0; element < shown.width(); ++element) {
-        // The positions of std_ulogic's '0', '1', 'Z' and 'X', or a bit's.
         std::uint32_t code = 0;
         switch (shown.get(element)) {
-        case Logic::Zero: code = logic ? 2 : 0; break;
-        case Logic::One: code = logic ? 3 : 1; break;
-        case Logic::HighZ: code = logic ? 4 : 0; break;
-        case Logic::Unknown: code = logic ? 1 : 0; break;
+        case Logic::Zero: code = zero; break;
+        case Logic::One: code = one; break;
+        case Logic::HighZ: code = highZ; break;
+        case Logic::Unknown: code = unknown; break;
         }
         for (std::uint32_t bit = 0; bit < 8; ++bit)
             stored.set((element * 8) + bit, ((code >> bit) & 1U) != 0 ? Logic::One : Logic::Zero);

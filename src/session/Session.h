@@ -11,8 +11,10 @@
 #include <cstdint>
 #include <filesystem>
 #include <iosfwd>
+#include <map>
 #include <memory>
 #include <optional>
+#include <set>
 #include <span>
 #include <string>
 #include <string_view>
@@ -157,6 +159,17 @@ public:
         /// design, and nothing else would hold it. One the other library already has is
         /// excluded rather than duplicated.
         std::vector<std::filesystem::path> libraryFiles;
+
+        /// `-v`: files holding modules that are analysed when something instantiates one and
+        /// nothing else defines it.
+        std::vector<std::filesystem::path> searchFiles;
+
+        /// `-y`: directories searched for `<module><extension>` the same way.
+        std::vector<std::filesystem::path> searchDirectories;
+
+        /// `+libext+`: the extensions tried in a `-y` directory, in order; `.v` when empty.
+        std::vector<std::string> searchExtensions;
+
         std::vector<std::string> defines;
         std::vector<std::filesystem::path> includeDirectories;
 
@@ -170,6 +183,9 @@ public:
         /// adapter lacks; without one it translates the one entity that nothing instantiates, and
         /// refuses several. SystemVerilog's analysis does not use it.
         std::string top;
+
+        /// The design's other top levels, beside `top`.
+        std::vector<std::string> otherTops;
 
         /// Whether VHDL is translated as well as analysed. A library holds VHDL as NVC's
         /// analysed units rather than as EIR, so an analysis that runs nothing and names no top,
@@ -214,6 +230,33 @@ private:
     /// its top, each SystemVerilog module it instantiates specialised as it asks, and the two
     /// linked into one design.
     bool analyseMixed(const AnalysisRequest& request);
+
+    /// The buffer holding `file`, read once in an analysis however often it is asked for, so that
+    /// what the library search reads is the buffer the analysis then uses. Nothing, having
+    /// reported, when it cannot be read.
+    std::optional<BufferId> readOnce(const std::filesystem::path& file);
+
+#ifdef ENZAN_WITH_SYSTEMVERILOG
+    /// Adds to the sources what `-v` and `-y` hold of the modules the SystemVerilog sources
+    /// instantiate and nothing analysed defines, and of what those instantiate in turn. False
+    /// having reported.
+    bool searchLibraries();
+
+    /// What the SystemVerilog `paths` declare and instantiate without declaring, from their syntax.
+    /// False having reported.
+    bool namesIn(std::span<const std::filesystem::path> paths, std::vector<std::string>& declared,
+                 std::vector<std::string>& undeclared);
+
+    /// Adds to the sources, and to `added`, the files `-v` and `-y` hold `wanted` in, and the files
+    /// of what those instantiate in turn, leaving out what `declared` holds and adding to it what
+    /// the files declare. A name found nowhere is left for the analysis to report. False having
+    /// reported.
+    bool addSearched(std::vector<std::string> wanted, std::vector<std::string>& declared,
+                     std::vector<std::filesystem::path>& added);
+
+    /// Every module `-v` and `-y` could supply, for a VHDL component no entity binds to.
+    std::vector<std::string> searchableModules();
+#endif
 
 #ifdef ENZAN_WITH_VHDL
     /// Sets what of `options` is not the sources: the work library, the libraries analysed
@@ -339,6 +382,10 @@ public:
     /// exactly one candidate. Calling this again replaces the whole simulation, which is what
     /// re-elaborating a running design means everywhere else.
     bool elaborate(std::string_view topModule);
+
+    /// Elaborates several top levels as `elaborate` does one, each a root of the design, the first
+    /// the design's own; none lets elaboration choose.
+    bool elaborate(std::span<const std::string> topModules);
 
     [[nodiscard]] bool isElaborated() const noexcept { return kernel != nullptr; }
 
@@ -517,6 +564,18 @@ private:
 
     /// Sources of the libraries this session resolves against.
     std::vector<std::filesystem::path> libraryFiles;
+
+    /// `-v`, `-y` and `+libext+`: where a module nothing analysed defines is looked for.
+    std::vector<std::filesystem::path> searchFiles;
+    std::vector<std::filesystem::path> searchDirectories;
+    std::vector<std::string> searchExtensions;
+
+    /// The files `-v` and `-y` supplied, among `files`, which the frontend reads as library
+    /// units.
+    std::set<std::filesystem::path> suppliedFiles;
+
+    /// What the current analysis has read, by path, for `readOnce`.
+    std::map<std::filesystem::path, BufferId> buffersRead;
 
     /// Every file the last analysis read, for `--depfile`.
     std::vector<std::filesystem::path> lastFilesRead;

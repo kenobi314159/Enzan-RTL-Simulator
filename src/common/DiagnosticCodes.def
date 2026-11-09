@@ -59,8 +59,15 @@ ENZAN_DIAG(DelayRounded, 1009, Warning,
 ENZAN_DIAG(RequestedModuleMissing, 1010, Error,
            "VHDL instantiates the module '{}', which no SystemVerilog source declares")
 ENZAN_DIAG(RequestedParameterMissing, 1011, Error,
-           "module '{}' has no parameter '{}' for the VHDL instantiating it to set; a component's "
-           "generic sets the module's parameter of its name")
+           "module '{}' has no parameter '{}' for the VHDL instantiating it to set; a generic an "
+           "instance maps sets the module's parameter of its name")
+ENZAN_DIAG(EncryptedSource, 1012, Error,
+           "'{}' holds encrypted code (IEEE 1735), which Enzan cannot decrypt")
+ENZAN_DIAG(ParameterInPathCondition, 1013, Warning,
+           "{}; a parameter is a constant there, as a specparam is, so the path is accepted")
+ENZAN_DIAG(ParallelPathFromOneBit, 1014, Warning,
+           "{}; a path from one bit joins it to every bit of the output, so it is accepted as a "
+           "full path")
 
 // --- 2000-2999: VHDL frontend -----------------------------------------------
 
@@ -75,6 +82,9 @@ ENZAN_DIAG(VhdlProcessNeverWaits, 2006, Error,
 ENZAN_DIAG(VhdlUnboundComponent, 2007, Warning,
            "component '{}' has no entity of its name to be bound to, so this instance is left "
            "unbound and does nothing (IEEE 1076 section 7.3.3)")
+ENZAN_DIAG(VhdlVital, 2008, Error,
+           "'ieee.{}' is part of VITAL, the library of gate-level timing models (IEEE 1076.4), "
+           "which Enzan does not simulate")
 
 // --- 3000-3999: elaboration -------------------------------------------------
 
@@ -130,6 +140,10 @@ ENZAN_DIAG(UnconnectedPort, 3008, Warning,
 ENZAN_DIAG(UnconnectedVhdlPort, 3019, Warning,
            "port '{}' of instance '{}' is not connected and keeps its default value, as a VHDL "
            "port left open does")
+ENZAN_DIAG(StrengthsIndistinguishable, 3020, Error,
+           "{} of '{}' is driven by {} at {} strength and by {} at {}; the standard orders the "
+           "two, and Enzan, which tells strong from weak and no finer, would resolve them as "
+           "equals, to X where the standard has a winner")
 
 // --- 5000-5999: runtime and scheduler ---------------------------------------
 
@@ -191,10 +205,6 @@ ENZAN_DIAG(LibraryEntryUnreadable, 6025, Error,
 ENZAN_DIAG(LibraryWriteFailed, 6020, Warning,
            "the analysis library entry '{}' could not be written; this run is unaffected and "
            "the next one will analyse from source again")
-ENZAN_DIAG(FileListLibrarySearchIgnored, 6021, Warning,
-           "'{}' is understood but not acted on yet: Enzan analyses every file it is given and "
-           "does not go looking for a module nothing defines, so a module reachable only this "
-           "way will be reported as undefined. Naming the file in the list analyses it")
 ENZAN_DIAG(RestartWithVpiApplication, 6026, Error,
            "a design cannot be restarted while a VPI application is loaded: the application "
            "would still hold the state of the simulation being discarded, and nothing in the "
@@ -223,6 +233,9 @@ ENZAN_DIAG(VhdlUnitUnrecorded, 6031, Error,
            "'{}' is among the VHDL NVC analysed into library '{}', but the analysis that put it "
            "there did not finish, so the library does not record it; analyse its sources into "
            "the library again")
+ENZAN_DIAG(TimingChecksNotRun, 6032, Note,
+           "timing checks are not run, so a violation of this one or of any other in the design "
+           "is never reported")
 ENZAN_DIAG(TimeScaleConflictsWithLibrary, 6028, Error,
            "`--timescale {}` was given, but library '{}' was analysed in units of {}, and its "
            "delays are counts of that unit; leave `--timescale` out to use it, or analyse the "

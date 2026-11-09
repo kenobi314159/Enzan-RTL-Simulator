@@ -17,6 +17,8 @@ Run the `make` in the directory of an ordinary cocotb testbench. In a source tre
 
 - `TOPLEVEL_LANG=vhdl` runs a VHDL toplevel, which needs an Enzan built with the VHDL frontend.
 - `ENZAN_BIN_DIR` names the directory holding `enzan` when it is not on your `PATH`.
+- `EXTRA_ARGS += --top <module>` adds a top level beside the toplevel, which stays what cocotb
+  drives.
 - The run counts time in the unit `COCOTB_HDL_TIMEPRECISION` names, a single unit such as `1ns`,
   and that is also the unit of a module that states no `` `timescale ``.
 - A design of both languages works as it does elsewhere: the toplevel's language is reached

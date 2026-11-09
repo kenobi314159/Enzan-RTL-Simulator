@@ -27,6 +27,12 @@ depends on one states the options and asks rather than picking one silently.
 follow from them. How a finished feature works in detail is for the code and its comments to say;
 this document is not a second copy of them.
 
+**What a change adds** to this document is a decision it makes, and nothing else: a choice of
+scope, a deviation from a standard or from the reference simulators, a rule a later change could
+break unknowingly, or the reason that keeps a decision from being reopened. What the change does,
+and how, is for its commit message to record, and what a standard already says is not restated
+here. The document grows by its decisions, not by its features.
+
 **Citing this document.** A comment states its own reason. It also cites this document, as
 `DESIGN_GUIDE.md section N.M`, only where the code enforces a rule made here and a change made
 locally could break it unknowingly. Documentation, and anything a user reads, never cites it; the
@@ -66,9 +72,14 @@ When two goals conflict, resolve the conflict in this order:
 The following are **out of scope** and MUST NOT be implemented without an explicit decision to
 change this list:
 
-- Gate-level simulation, SDF back-annotation and timing checks.
+- Gate-level timing simulation: SDF back-annotation, timing checks and VITAL. The Verilog that
+  vendors' cell libraries are written in is in scope, read for what a functional simulation needs
+  of it: gate and user-defined primitives, drive strengths and specify blocks, whose module paths
+  delay outputs as the standard says, since the vendors' own simulators show those delays.
 - Power-aware (UPF/CPF) and mixed-signal (Verilog-AMS, VHDL-AMS) simulation.
-- IP encryption (IEEE 1735).
+- IP encryption (IEEE 1735). Decrypting needs a vendor to wrap its keys for Enzan's, which takes
+  an agreement with each vendor, and a private key in a GPL binary is no secret. A source holding
+  an encrypted envelope is refused by one error saying so, never read around.
 - Windows and macOS support. Enzan targets Linux only.
 - Synthesis, formal verification, equivalence checking.
 - UVM, constrained-random stimulus and functional coverage, until M9+ (section 18).
@@ -114,10 +125,11 @@ output is independent of any particular top level, and so is reusable across run
 **A parameterised unit is analysed once per set of values the design uses.** slang is an elaborating
 frontend: it type-checks a body in the context of the values it is given, because a type can depend
 on a parameter, and offers no body generic over them. The VHDL adapter folds generics the same way
-(5.2). So a unit becomes one unit per set of values, named for them (8.2): the same values make the
-same unit wherever it is produced, but a library is re-runnable rather than reusable at values it
-has never seen. Rebuilding a generic unit out of slang's elaborations was rejected: it would be
-checked against slang only at the values slang saw, and trusted at the others.
+(5.2). So a unit becomes one unit per set of values, and per set of places its hierarchical
+references lead (5.1), named for them (8.2): the same values and places make the same unit wherever
+it is produced, but a library is re-runnable rather than reusable at values it has never seen.
+Rebuilding a generic unit out of slang's elaborations was rejected: it would be checked against
+slang only at the values slang saw, and trusted at the others.
 
 **Elaboration** takes a top level and the analysed units, binds each instance to the unit for its
 values, builds the instance tree, binds ports, computes the flat state layout and produces an
@@ -294,6 +306,10 @@ disagree with commercial tools on real designs, this section is what gets update
   two-state bits, vectors of these left element to most significant bit, integers to `int` or
   `longint` by their range, arrays to unpacked arrays and records to packed structs field by field
   where the shapes agree. A port no rule covers is refused by name.
+- **A value SystemVerilog drives weakly drives a VHDL signal weakly**, a 0 as `L` and a 1 as `H`,
+  so that a pull-up yields to a pad's other drivers as it does on a net. A value is weak when every
+  driver of the port in its module drives it weakly; one an instance inside drives, or a procedural
+  write, crosses as strong.
 - **An `inout` port across the boundary is two conversions**, split as 3.7 splits a port's driving
   value from its effective value: the inner port's driving value goes out as one driver of the outer
   signal, which resolves it by its own language's rule, and the outer signal comes back as the inner
@@ -368,6 +384,26 @@ whose ranges are disjoint are not in conflict and MUST NOT be treated as though 
   its driver first runs.
 - A driver's range is fixed at elaboration. A part-select at a position that is not constant writes
   through the driver of every bit it could reach.
+
+**Strength is two classes, not the standard's eight.** A driver's strength for each value is
+*strong* (`supply`, `strong`) or *weak* (`pull`, `weak`, and a `tri0` or `tri1` net's own pull).
+Strength is declared, so it is fixed at elaboration and held by the driver in the image, never by
+its value in the arena. A bit resolves among the drivers of the strongest class that contributes to
+it, by its net kind's table. **What the classes cannot tell apart is refused, not guessed**:
+drivers whose strengths the standard orders and one class holds, pull against weak or supply
+against strong, would resolve to `x` where the standard has a winner, and are an elaboration error.
+A `highz` strength, the resistive and bidirectional switches and `trireg` are refused, and so is
+`vpiStrengthVal`, rather than reporting a strength Enzan does not hold. The eight-level model was
+rejected because nothing in the vendors' libraries Enzan reads needs it.
+
+**An override outranks what drives a signal, and is not a driver of it.** A procedural `assign`
+or a `force` holds its target until `deassign` or `release`, every other write of it discarded
+meanwhile, a deposit's included, and a force stands over an assign (IEEE 1800 section 10.6). A
+process the frontend adds beside the statement writes the value again whenever what it reads
+changes. The objects a process overrides are declared beside its write set rather than in it, since
+a forced net's drivers are still its drivers. They keep values of their own only where a `force` in
+the design names the signal, so after a force from outside a lone driver takes its net back when it
+next writes.
 
 **VHDL resolution functions are user code**, compiled to EIR like any subprogram, and the runtime
 MUST NOT assume resolution is a table. A function's parameter is an array as long as the bit has
@@ -458,15 +494,19 @@ names it by that definition and its name. Nothing in it is particular to VHDL.
 
 - **A subprogram is specialised by the lengths of its unconstrained parameters**, and by the scalar
   values its own widths are computed from, so that every width in EIR stays fixed: `numeric_std."+"`
-  on 8-bit and on 32-bit operands is two bodies.
+  on 8-bit and on 32-bit operands is two bodies. A string whose length only the run knows is passed
+  in scratch, to one body for every such length.
 - **A call's frame lives on one stack the kernel owns.** A subprogram never suspends — one that
   waits, or takes a signal parameter, is inlined into its caller instead — so every frame is popped
   before its process suspends, and one stack serves the single-threaded kernel. It is sized at
   elaboration for the deepest chain of calls the design can make; a recursive design is given a
   configurable depth limit, past which the run stops with a diagnostic, as the delta limit does.
 - **A caller's read and write sets include its callees'**, bound to the instances they touch.
-- **A value whose length is known only when it is computed** — `integer'image`, `to_string` — lives
-  in scratch the kernel resets whenever a process suspends.
+- **A string whose length is known only when it is computed** — a subprogram's `string(1 to n)`, a
+  slice `s(1 to i)` — lives in scratch the kernel owns: a register holds its handle, and the kernel
+  its bounds and characters. A subprogram releases what it made as it returns, a statement what it
+  made for a call once the call is done, and the kernel all of it whenever a process suspends, so a
+  subprogram holding one cannot wait. Only strings are held so yet.
 
 ### 4.2 The core invariant
 
@@ -504,7 +544,9 @@ dereferences a handle has it in its read or write set (4.2).
 **std.textio runs natively.** Its body grows lines through strings of run-time lengths, which
 fixed-width registers cannot hold, so textio's subprograms and VHDL's predefined file operations are
 system functions the runtime runs over its heap and its files. A file of a type other than text
-holds its values' bits in Enzan's own format, as each simulator has its own.
+holds its values' bits in Enzan's own format, as each simulator has its own. A line is indexed from
+1 after a `read` takes characters off it, as NVC indexes one; GHDL keeps the indexes of what
+remains, so a design reading a line's bounds after a `read` is no case to hold to GHDL.
 
 ### 4.4 Libraries
 
@@ -571,8 +613,10 @@ floor.
   named changes the EIR produced, so it bumps the format version (4.4).
 - **A hierarchical reference is an object with a path and no storage**, bound by elaboration to the
   object it names, so reads, writes, sensitivity and drivers all see the real signal. The path is
-  relative — `core/state`, `../u_peer/ready` — because one definition serves every instance of a
-  parameterisation.
+  relative — `core/state`, `../u_peer/ready` — so that one definition serves every instance of a
+  parameterisation whose references lead to the same places; one whose references lead elsewhere
+  is a definition of its own (2.1). **A reference into another top level is absolute**, as a
+  package variable's is, so that it is the same from every instance.
 - **A package's variables are a definition of their own, `<package>::`**, with one instance at the
   root, `/<package>`, created when something refers to one, and are referred to by the absolute path
   `/<package>/<variable>`. A package's constants, types and subroutines need no instance.
@@ -585,6 +629,40 @@ floor.
   caller and the caller's read and write sets are exactly what the call touches. A recursive call is
   refused, unless slang folds it to a constant. Calling a SystemVerilog function as an EIR
   subprogram instead would be a change to this frontend alone.
+- **A gate is a continuous assignment of its outputs**, at the strength its instance declares
+  (3.7) and with its delay as a continuous assignment's, so EIR holds no primitive. Where the
+  standard gives `L` or `H`, as a tristate buffer with an unknown control does, it drives `x`,
+  which four states cannot avoid. **A MOS switch is one too**, at the strength of its input where
+  the input's module fixes it, every driver of it of one class; any other input is refused, since
+  what the switch passed would be whichever driver decides the input at the time. **A user-defined
+  primitive is one too**, by its table, which the frontend encodes as a constant and the runtime
+  matches by the layout `eir/Udp.h` gives both. Inputs changing together are a race the standard
+  leaves open, and Enzan takes them in port order.
+- **A real is a double**, `shortreal` without its reduced precision.
+- **A named event is a bit its trigger toggles**, so that what waits on it sees it change.
+- **An event control on an expression waits on an object a continuous assignment keeps at the
+  expression's value**, so it resumes when the value changes or makes its edge (IEEE 1800 section
+  9.4.2), as `@(w)` with `assign w = expr` would: a value held only between two writes of one run
+  of a process is no event. Icarus Verilog resumes on any change of an operand instead, so it is no
+  reference for these. An expression of a subroutine's own variable is refused.
+- **A specify block is read for what a functional simulation needs of it.** A timing check is not
+  run (1.3), and a run instantiating one says so once.
+- **A module path delays its output as Icarus Verilog's `-gspecify` does**, by the standard's rule
+  (IEEE 1800 sections 30.4 to 30.7), an unknown condition holding no path, but a path to some bits
+  of an output is theirs alone, where Icarus applies it to the whole output. The frontend gives each
+  run of an output's bits with the same paths a process of its own, which writes the port from a
+  copy the body writes, so a body whose paths have no delay pays nothing. Delays by transition on a
+  run of more than one bit are refused, since its bits may make different transitions at once, as
+  are `ifnone` with a delay, pulse limits other than zero and pulse styles.
+- **Two module paths the standard refuses are warnings**, since models written for other
+  simulators rely on them and what they mean is plain: a parameter in a path's condition (IEEE
+  1800 section 30.4.4), as Icarus Verilog takes it, and a parallel path from one bit to a vector
+  (section 30.4.5), which can only join the bit to every bit of the output.
+- **A `defparam` on an instance declared beside it**, in the same module or generate block,
+  **becomes that instance's parameter value assignment** before slang elaborates. An untyped
+  parameter takes the type of its final value (IEEE 1800 section 6.20.2), which slang gives an
+  override on the instance but not a `defparam`, so a longer string would be cut to the default's
+  width. Any other `defparam` whose value would be cut so is refused.
 
 ### 5.2 VHDL via NVC
 
@@ -665,7 +743,10 @@ the session links the two by port name.
   entity's default one, since choosing another takes a `config`, which Enzan does not read.
 - VHDL instantiates a SystemVerilog module through a component of the module's name, bound to the
   module when no entity of that name exists — the default binding of IEEE 1076 extended to the other
-  language, as commercial tools extend it. The component's generics are the module's parameters.
+  language, as commercial tools extend it. The component's generics are the module's parameters,
+  but for one the module lacks and no instance maps, which a vendor's component may declare, and a
+  boolean meeting a parameter that takes a string is `"TRUE"` or `"FALSE"`, which is how vendors'
+  models write a boolean.
 - Each side specialises for the values the other gives, so the session alternates between the
   frontends until neither asks for a unit the other has not given, with a bound on the rounds so
   that a hierarchy recursing through both languages is reported rather than followed for ever. A
@@ -816,6 +897,10 @@ when it is one of the names above, so a source file called `run.sv` is still a s
   `elaborate`, `--wave-list` without `--gui`, and a command line that gives nothing to work on are
   usage errors, each with a message saying which, rather than taken and dropped: a waveform asked
   for and never written looks exactly like one written somewhere else.
+- **`--top` is repeatable, and several top levels are several roots**, side by side as a
+  package's instance sits beside the top (5.1), the first the design's own. With none named,
+  several candidates are refused rather than all taken, since a module nothing instantiates is as
+  often one left over as one meant.
 - **A top level's parameters are set with `-G NAME=VALUE`**, or `-GNAME=VALUE`. slang applies an
   override while analysing, so it is in a library entry's key. One that names no parameter is
   reported, since a misspelt override is otherwise invisible.
@@ -903,6 +988,10 @@ and `$VAR` and `${VAR}` from the environment.
   different design. `-sv` is accepted and dropped.
 - **An unset variable is an error**, not an empty expansion that turns `$RTL_ROOT/cpu.sv` into
   `/cpu.sv`.
+- **`-v` and `-y` supply only what nothing else defines**, read once the sources are analysed and
+  only where a file holds a module wanted, whose other modules are no top levels: a vendor's five
+  hundred models cost a design the three it uses. What they supply is analysed, stored and named
+  in `--depfile` as a source is.
 - **`--dry-run`** prints the expanded list, in order, and exits.
 - **`--depfile <file>` writes a `make` dependency file naming every file the analysis read** — the
   sources a list expanded to, the headers they included, and the context files — so that a Makefile
@@ -1156,8 +1245,9 @@ Run controls, and `examine`, `force` and `deposit` on signals, are required alon
 implementation of writing a signal from outside would be a second set of semantics.
 
 **A force outranks the design; a deposit does not.** Every write to a forced signal is discarded
-until it is released, while a deposit is overwritten by whatever drives the signal next. Forcing
-costs an ordinary run nothing: the table of forced signals is allocated by the first force (13.4).
+until it is released, while a deposit is overwritten by whatever drives the signal next. A force
+from outside is the design's own `force` of a constant, and its release the same release (3.7).
+Forcing costs an ordinary run nothing: the table of overrides is allocated by the first one (13.4).
 
 ### 10.5 Theme
 
@@ -1589,10 +1679,10 @@ the reason given in 14.3; NVC's tests of VHDL with Verilog; and cocotb's suite (
 
 ### 14.5 Design regression
 
-Real designs, fetched at pinned revisions and never committed: secworks `aes`, fpganinja `taxi` and
-PULP `common_cells` for SystemVerilog; NEORV32 for VHDL and, through its testbench rewritten in
-Verilog, for both languages; and later the processors picorv32, VexRiscv, Ibex and CVA6, SLAC
-`surf`, and the VUnit and OSVVM suites, which need M9+.
+Real designs, fetched at pinned revisions and never committed: secworks `aes`, fpganinja `taxi`,
+PULP `common_cells` and Yosys's models of AMD's cells for SystemVerilog; NEORV32 for VHDL and,
+through its testbench rewritten in Verilog, for both languages; and later the processors picorv32,
+VexRiscv, Ibex and CVA6, SLAC `surf`, and the VUnit and OSVVM suites, which need M9+.
 
 - A testbench passes when it reports success and, where the reference simulator can run it, when its
   transcript is the reference's line for line: a design checking its own answers and two simulators
@@ -1600,6 +1690,12 @@ Verilog, for both languages; and later the processors picorv32, VexRiscv, Ibex a
   testbench writes.
 - A testbench that cannot pass for a reason outside Enzan is named, with the reason, beside the
   design; any other failure fails the run.
+- **AMD's own simulation models are read from a local installation, never committed**, by
+  `tests/designs/vendor-xilinx`, which holds testbenches of the commonest primitives to Icarus
+  Verilog with `-gspecify`, and of XPM's macros to Verilator, since Icarus reads none of XPM. A
+  missing installation or reference is not a pass, so the harness says what it did not run and
+  exits 77. CI has no installation, so whoever merges a change touching the models runs it; Yosys's
+  models of AMD's cells stand in for them in CI.
 - **A testbench written here can be wrong as easily as the simulator.** Before it is committed it is
   run under a second simulator, and it must pass there too.
 
@@ -1772,6 +1868,30 @@ exit criteria are unmet.
 | M6 | VHDL via NVC, the VHDL simulation cycle and VHPI |
 | M7 | Designs of both languages (3.5) |
 
+### M7.1 — AMD Xilinx simulation libraries
+
+Designs instantiating AMD Xilinx's simulation models, read from the user's own installation: the
+unisims, unimacro, `glbl` and XPM from SystemVerilog; the same through `unisim` and `xpm` libraries
+of components from VHDL; and 7-series functional-simulation netlists.
+
+**Exit:** self-checking testbenches for the primitives designs use most — flip-flops with `glbl`'s
+reset, LUTs, carry chains, shift registers, block RAM, DSP slices, clock buffers, MMCMs, DDR
+registers, I/O buffers with pulls — match Icarus Verilog, their clock-to-output delays included;
+XPM memories, FIFOs and synchronisers match Verilator; the same checks run from VHDL through the
+component libraries agree with both; and NEORV32's 7-series functional netlists, in Verilog and in
+VHDL, run its program as its RTL does.
+
+### M7.2 — Altera simulation libraries
+
+Designs instantiating Altera's models: `altera_primitives`, LPM, `altera_mf`, `sgate` and the
+Cyclone 10 LP atoms from SystemVerilog, and from VHDL through Altera's component packages or as
+VHDL libraries of their own; and Cyclone 10 LP `.vo` netlists.
+
+**Exit:** testbenches for `altsyncram` with an initialisation file and for the LPM functions match
+Icarus Verilog, and `scfifo` and `dcfifo` match Verilator; the Cyclone 10 LP atoms match Icarus
+Verilog, and `cyclone10lp_pll` Verilator; Altera's VHDL models give GHDL's results; and NEORV32's
+Cyclone 10 LP netlist runs its program as its RTL does.
+
 ### M8 — Performance
 
 LLVM JIT backend behind a flag; profiling and hot-path work; activity-based scheduling refinements;
@@ -1798,12 +1918,21 @@ regression each run with a recorded pass rate.
 Left out of the milestones above, and refused by name where a design uses them rather than
 mistranslated:
 
-- SystemVerilog `real` and `string` variables and ports, dynamic and associative arrays, queues,
-  classes, unpacked unions, and strengths other than strong.
+- SystemVerilog `string` variables, real and string ports, arrays and structs of reals, a real
+  exponent, events as values, dynamic and associative arrays, queues, classes, unpacked unions,
+  `fork`, `highz` strengths, resistive and bidirectional switches, the module paths 5.1 refuses, net
+  aliases, and a procedural `assign` or `force` of part of an object.
 - VHDL access types beyond what `std.textio` needs, protected types and configuration declarations.
+- VHDL values whose length only the run knows, beyond a subprogram's strings (4.1): arrays of
+  anything but `character`, a function's result, a concatenation outside a message or a `write`,
+  a whole such string assigned, a function's own string sized by a parameter its call leaves to the
+  run, and one held across a `wait`.
 - A port of a real, an enumeration other than `std_ulogic`, `bit` and `boolean`, or a physical type
   across the language boundary; a VHDL port of an unconstrained type instantiated from
-  SystemVerilog; storing a design of both languages in a library, and `-G` for one.
+  SystemVerilog; storing a design of both languages in a library, and `-G` for one; a second top
+  level of VHDL.
+- Altera's models of Cyclone V and later families, `altera_lnsim.sv`, which M7.2 holds to no
+  reference; among them `altera_pll`'s arrays of reals are refused.
 - In VPI, declared ranges (a vector reports `[width-1:0]`), integer atom types, part-select handles,
   struct members, user system tasks, and the difference between the delay modes (9.4).
 - The Processes and Source windows (10.2), and a per-bit change index (10.3).
@@ -1822,6 +1951,8 @@ mistranslated:
 | Waveform rendering does not scale when zoomed out | Medium | Pixel-bounded rendering (10.3) |
 | Scope creep into verification features | Medium | Explicit non-goals (1.3) and milestone gating |
 | Parallelism delivers less speedup than hoped | Low | Expectations calibrated in 6.4; the single-threaded kernel is the plan, not a fallback |
+| One unit per parameterisation (2.1) makes a functional netlist too many units | Medium | Measured: a 7-series NEORV32 netlist is 2,306 cell parameterisations for 41,355 instances; value-only parameters would reopen 2.1 |
+| Vendors' models change between releases, and CI cannot run them | Medium | A release pinned and recorded; golden tests of each construct, and Yosys's models of AMD's cells, in CI; the vendor harnesses run before merging |
 
 ---
 

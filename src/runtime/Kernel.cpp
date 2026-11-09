@@ -56,6 +56,25 @@ bool isNegedge(eir::Logic before, eir::Logic after) noexcept {
     return before == eir::Logic::One || after == eir::Logic::Zero;
 }
 
+/// The most characters a string of run-time length may hold: more than any VHDL integer range
+/// spans but the whole of one, so that a mistaken bound is a failure and not an allocation
+/// that fails.
+constexpr std::uint64_t MaxStringLength = std::uint64_t{1} << 31;
+
+/// The character whose code is the byte of `bits` from `lowBit` up; an unknown bit reads as 0.
+char characterAt(eir::ConstBitRef bits, std::uint64_t lowBit) {
+    eir::BitVector code(8);
+    bitops::partSelectAt(code.mutableRef(), bits, lowBit);
+    const eir::ConstBitRef known = code.ref();
+    return static_cast<char>(known.aval()[0] & ~known.bval()[0] & 0xFFU);
+}
+
+/// Writes `character`'s code into the byte of `bits` from `lowBit` up.
+void putCharacter(eir::BitRef bits, std::uint64_t lowBit, char character) {
+    bitops::assignPartAt(
+        bits, eir::BitVector::fromUInt64(static_cast<unsigned char>(character), 8).ref(), lowBit);
+}
+
 /// The words a windowed signal's old value needs, for the widest such signal.
 std::size_t windowScratchWords(const Image& image) {
     std::uint32_t widest = 0;
@@ -156,6 +175,8 @@ Kernel::Kernel(const Image& designImageToRun, DiagnosticEngine& engine, KernelOp
       resolvedScratch(eir::storageWordsFor(designImageToRun.elaboratedDesign().widestDriver()), 0),
       segmentScratch(resolvedScratch.size(), 0),
       driverScratch(resolvedScratch.size(), 0),
+      weakScratch(resolvedScratch.size(), 0),
+      classScratch(resolvedScratch.size(), 0),
       windowScratch(windowScratchWords(designImageToRun), 0),
       edgeWaiters(designImageToRun.signals().size()) {
     callsInProgress.reserve(callDepthCapacity);
@@ -232,6 +253,7 @@ void Kernel::initialize() {
     // The lines it allocated go too, so that the run that follows allocates the same handles.
     heap.clear();
     freedHandles.clear();
+    scratch.clear();
     for (EdgeWaiterList& list : edgeWaiters) {
         list.waiters.clear();
         list.sweepAt = MinimumWaiterSweep;
@@ -241,9 +263,9 @@ void Kernel::initialize() {
         startFrame(state.frameOffset, designImage->compiledDesign().body(state.bodyIndex));
     unwindCalls();
 
-    // A force does not survive a restart either: a signal still pinned from the last run would
-    // be state the user did not ask to keep.
-    forcedSignals.clear();
+    // An override does not survive a restart either: a signal still pinned from the last run
+    // would be state the user did not ask to keep.
+    overrides.clear();
 
     finishRequested = false;
     errorRequested = false;
@@ -632,8 +654,11 @@ Region Kernel::resumeRegion(std::uint32_t processIndex) const {
 }
 
 void Kernel::writeSignal(std::uint32_t signalIndex, eir::ConstBitRef value) {
-    if (isForced(signalIndex)) return;
+    if (isOverridden(signalIndex)) return;
+    changeSignal(signalIndex, value);
+}
 
+void Kernel::changeSignal(std::uint32_t signalIndex, eir::ConstBitRef value) {
     const Signal& signal = designImage->signals()[signalIndex];
     const eir::BitRef target = stateArena.at(signal.wordOffset, signal.bitWidth);
 
@@ -676,7 +701,7 @@ eir::ConstBitRef Kernel::lastValue(std::uint32_t signalIndex) const {
 
 void Kernel::writeSignalPart(std::uint32_t signalIndex, eir::ConstBitRef value,
                              std::uint64_t lowBit) {
-    if (isForced(signalIndex)) return;
+    if (isOverridden(signalIndex)) return;
 
     const Signal& signal = designImage->signals()[signalIndex];
     const eir::BitRef target = stateArena.at(signal.wordOffset, signal.bitWidth);
@@ -729,61 +754,89 @@ void Kernel::resolveDriver(std::uint32_t driverIndex) {
          segmentIndex < written.firstSegment + written.segmentCount; ++segmentIndex) {
         const elab::Segment& segment = elaborated.segments()[segmentIndex];
         const eir::BitRef acc(segmentScratch.data(), segment.width);
-        const eir::BitRef next(driverScratch.data(), segment.width);
-
-        const auto sliceOf = [&](std::uint32_t segmentDriver, eir::BitRef into) {
-            const elab::Driver& driver =
-                elaborated.drivers()[elaborated.segmentDrivers()[segmentDriver]];
-            bitops::partSelectAt(into, stateArena.at(driver.wordOffset, driver.width),
-                                 segment.lowBit - driver.lowBit);
-        };
-
-        // A VHDL resolved signal's function, called for each subelement; a net's table.
-        if (segment.resolution != elab::Segment::NoResolution) {
-            if (!resolveByFunction(written.process, segment, acc)) return;
-            bitops::assignPartAt(resolved, acc, segment.lowBit - written.lowBit);
-            continue;
-        }
-
-        sliceOf(segment.firstDriver, acc);
-        for (std::uint32_t other = segment.firstDriver + 1;
-             other < segment.firstDriver + segment.driverCount; ++other) {
-            sliceOf(other, next);
-            switch (segment.netKind) {
-            case eir::NetKind::WiredAnd:
-            case eir::NetKind::TriAnd: bitops::resolveWiredAnd(acc, next); break;
-            case eir::NetKind::WiredOr:
-            case eir::NetKind::TriOr: bitops::resolveWiredOr(acc, next); break;
-            case eir::NetKind::Wire:
-            case eir::NetKind::Tri:
-            case eir::NetKind::Tri0:
-            case eir::NetKind::Tri1:
-            case eir::NetKind::Supply0:
-            case eir::NetKind::Supply1:
-            case eir::NetKind::UWire: bitops::resolveWire(acc, next); break;
-            }
-        }
-
-        // What the net itself contributes: a pull where every driver is `z`, or a supply that
-        // no strong driver can move.
-        switch (segment.netKind) {
-        case eir::NetKind::Tri0: bitops::pullHighImpedance(acc, eir::Logic::Zero); break;
-        case eir::NetKind::Tri1: bitops::pullHighImpedance(acc, eir::Logic::One); break;
-        case eir::NetKind::Supply0: acc.fill(eir::Logic::Zero); break;
-        case eir::NetKind::Supply1: acc.fill(eir::Logic::One); break;
-        case eir::NetKind::Wire:
-        case eir::NetKind::Tri:
-        case eir::NetKind::WiredAnd:
-        case eir::NetKind::WiredOr:
-        case eir::NetKind::TriAnd:
-        case eir::NetKind::TriOr:
-        case eir::NetKind::UWire: break;
-        }
-
+        if (!resolveSegment(written.process, segment, acc)) return;
         bitops::assignPartAt(resolved, acc, segment.lowBit - written.lowBit);
     }
 
     writeSignalPart(written.slot, resolved, written.lowBit);
+}
+
+bool Kernel::resolveSegment(std::uint32_t processIndex, const elab::Segment& segment,
+                            eir::BitRef acc) {
+    const elab::ElaboratedDesign& elaborated = designImage->elaboratedDesign();
+    const eir::BitRef next(driverScratch.data(), segment.width);
+
+    const auto sliceOf = [&](std::uint32_t segmentDriver, eir::BitRef into) {
+        const elab::Driver& driver =
+            elaborated.drivers()[elaborated.segmentDrivers()[segmentDriver]];
+        bitops::partSelectAt(into, stateArena.at(driver.wordOffset, driver.width),
+                             segment.lowBit - driver.lowBit);
+    };
+
+    // A VHDL resolved signal's function, called for each subelement; a net's table.
+    if (segment.resolution != elab::Segment::NoResolution)
+        return resolveByFunction(processIndex, segment, acc);
+
+    // Each driver folded in by the net's table.
+    const auto fold = [&segment](eir::BitRef into, eir::ConstBitRef driver) {
+        switch (segment.netKind) {
+        case eir::NetKind::WiredAnd:
+        case eir::NetKind::TriAnd: bitops::resolveWiredAnd(into, driver); break;
+        case eir::NetKind::WiredOr:
+        case eir::NetKind::TriOr: bitops::resolveWiredOr(into, driver); break;
+        case eir::NetKind::Wire:
+        case eir::NetKind::Tri:
+        case eir::NetKind::Tri0:
+        case eir::NetKind::Tri1:
+        case eir::NetKind::Supply0:
+        case eir::NetKind::Supply1:
+        case eir::NetKind::UWire: bitops::resolveWire(into, driver); break;
+        }
+    };
+
+    if (!segment.weak) {
+        sliceOf(segment.firstDriver, acc);
+        for (std::uint32_t other = segment.firstDriver + 1;
+             other < segment.firstDriver + segment.driverCount; ++other) {
+            sliceOf(other, next);
+            fold(acc, next);
+        }
+    } else {
+        // The strong class decides each bit, and the weak only where the strong leave it
+        // `z` (DESIGN_GUIDE.md section 3.7).
+        const eir::BitRef weak(weakScratch.data(), segment.width);
+        const eir::BitRef part(classScratch.data(), segment.width);
+        acc.fill(eir::Logic::HighZ);
+        weak.fill(eir::Logic::HighZ);
+        for (std::uint32_t index = segment.firstDriver;
+             index < segment.firstDriver + segment.driverCount; ++index) {
+            const eir::DriveStrength strength =
+                elaborated.drivers()[elaborated.segmentDrivers()[index]].strength;
+            sliceOf(index, next);
+            bitops::keepClass(part, next, !eir::isWeak(strength.zero), !eir::isWeak(strength.one));
+            fold(acc, part);
+            bitops::keepClass(part, next, eir::isWeak(strength.zero), eir::isWeak(strength.one));
+            fold(weak, part);
+        }
+        bitops::fillHighImpedance(acc, weak);
+    }
+
+    // What the net itself contributes: a pull where every driver is `z`, or a supply that
+    // no strong driver can move.
+    switch (segment.netKind) {
+    case eir::NetKind::Tri0: bitops::pullHighImpedance(acc, eir::Logic::Zero); break;
+    case eir::NetKind::Tri1: bitops::pullHighImpedance(acc, eir::Logic::One); break;
+    case eir::NetKind::Supply0: acc.fill(eir::Logic::Zero); break;
+    case eir::NetKind::Supply1: acc.fill(eir::Logic::One); break;
+    case eir::NetKind::Wire:
+    case eir::NetKind::Tri:
+    case eir::NetKind::WiredAnd:
+    case eir::NetKind::WiredOr:
+    case eir::NetKind::TriAnd:
+    case eir::NetKind::TriOr:
+    case eir::NetKind::UWire: break;
+    }
+    return true;
 }
 
 void Kernel::resolveInitialValues() {
@@ -870,7 +923,11 @@ void Kernel::scheduleNonBlockingPart(std::uint32_t signalIndex, eir::ConstBitRef
 }
 
 bool Kernel::isForced(std::uint32_t signalIndex) const noexcept {
-    return !forcedSignals.empty() && forcedSignals[signalIndex];
+    return !overrides.empty() && overrides[signalIndex].force != NoHolder;
+}
+
+bool Kernel::isOverridden(std::uint32_t signalIndex) const noexcept {
+    return !overrides.empty() && overrides[signalIndex].held();
 }
 
 void Kernel::deposit(std::uint32_t signalIndex, eir::ConstBitRef value) {
@@ -878,20 +935,89 @@ void Kernel::deposit(std::uint32_t signalIndex, eir::ConstBitRef value) {
 }
 
 void Kernel::force(std::uint32_t signalIndex, eir::ConstBitRef value) {
-    // Cleared first so that re-forcing an already-forced signal to a different value writes
-    // rather than being discarded by the force it is replacing.
-    if (!forcedSignals.empty()) forcedSignals[signalIndex] = false;
-
-    writeSignal(signalIndex, value);
-
-    if (forcedSignals.empty()) forcedSignals.assign(designImage->signals().size(), false);
-    forcedSignals[signalIndex] = true;
+    if (overrides.empty()) overrides.resize(designImage->signals().size());
+    overrides[signalIndex].force = FromOutside;
+    changeSignal(signalIndex, value);
 }
 
 bool Kernel::release(std::uint32_t signalIndex) {
     if (!isForced(signalIndex)) return false;
-    forcedSignals[signalIndex] = false;
+    Overrides& held = overrides[signalIndex];
+    held.force = NoHolder;
+
+    // An assign the force stood over is re-established and evaluated again; anything else
+    // goes back to what drives it (IEEE 1800 section 10.6.2).
+    if (held.assign != NoHolder) {
+        wake(held.assign);
+        return true;
+    }
+    restoreDriven(signalIndex);
     return true;
+}
+
+void Kernel::startOverride(std::uint32_t processIndex, std::uint32_t holder,
+                           std::uint32_t signalIndex, eir::ConstBitRef value, bool force) {
+    // The holder is a process of the same instance, which numbers its processes from the
+    // definition's first.
+    const std::uint32_t first =
+        processIndex - designImage->elaboratedDesign().processes()[processIndex].processIndex;
+    if (overrides.empty()) overrides.resize(designImage->signals().size());
+    Overrides& held = overrides[signalIndex];
+    if (force) {
+        held.force = first + holder;
+    } else {
+        held.assign = first + holder;
+        if (held.force != NoHolder) return;
+    }
+    changeSignal(signalIndex, value);
+}
+
+void Kernel::deassign(std::uint32_t signalIndex) {
+    if (!overrides.empty()) overrides[signalIndex].assign = NoHolder;
+}
+
+void Kernel::reassert(std::uint32_t processIndex, std::uint32_t signalIndex,
+                      eir::ConstBitRef value) {
+    if (overrides.empty()) return;
+    const Overrides& held = overrides[signalIndex];
+    if (held.force == processIndex || (held.force == NoHolder && held.assign == processIndex))
+        changeSignal(signalIndex, value);
+}
+
+void Kernel::restoreDriven(std::uint32_t signalIndex) {
+    const elab::ElaboratedDesign& elaborated = designImage->elaboratedDesign();
+    const elab::Slot& slot = elaborated.slots()[signalIndex];
+    const Signal& signal = designImage->signals()[signalIndex];
+
+    // Segments are made slot by slot, so a slot's are one run of them.
+    const auto segments =
+        std::ranges::equal_range(elaborated.segments(), signalIndex, {}, &elab::Segment::slot);
+    if (slot.kind != eir::ObjectKind::Net && segments.empty()) return;
+
+    eir::BitVector value = eir::BitVector::from(stateArena.at(signal.wordOffset, signal.bitWidth));
+    if (slot.kind == eir::ObjectKind::Net) {
+        const eir::Logic undriven = eir::undrivenValue(slot.netKind);
+        std::uint32_t bit = 0;
+        const auto fillTo = [&](std::uint32_t end) {
+            if (end > bit)
+                bitops::assignPartAt(value.mutableRef(),
+                                     eir::BitVector::filled(end - bit, undriven).ref(), bit);
+        };
+        for (const eir::WriteExtent& driven : slot.drivenBits) {
+            fillTo(driven.lowBit);
+            bit = std::max(bit, driven.endBit());
+        }
+        fillTo(signal.bitWidth);
+    }
+
+    for (const elab::Segment& segment : segments) {
+        const elab::Driver& first =
+            elaborated.drivers()[elaborated.segmentDrivers()[segment.firstDriver]];
+        const eir::BitRef acc(segmentScratch.data(), segment.width);
+        if (!resolveSegment(first.process, segment, acc)) return;
+        bitops::assignPartAt(value.mutableRef(), acc, segment.lowBit);
+    }
+    writeSignal(signalIndex, value.ref());
 }
 
 void Kernel::addListener(ValueChangeListener& newListener) {
@@ -979,7 +1105,8 @@ void Kernel::suspendForTime(std::uint32_t processIndex, SimTime delay, std::uint
 
 void Kernel::scheduleDelayedWrite(std::uint32_t processIndex, std::uint32_t position,
                                   std::uint32_t signalIndex, eir::ConstBitRef value, SimTime delay,
-                                  bool nonBlocking) {
+                                  DelayKind kind, std::optional<std::uint32_t> lowBit) {
+    const bool nonBlocking = kind == DelayKind::NonBlocking;
     if (delay > NoTime - currentTime) {
         diagnostics.report(DiagCode::TimeOverflow, SourceLocation(), currentTime,
                            options.timeScale.unitName());
@@ -988,7 +1115,7 @@ void Kernel::scheduleDelayedWrite(std::uint32_t processIndex, std::uint32_t posi
     }
 
     if (nonBlocking && delay == 0) {
-        scheduler.appendNonBlocking(signalIndex, value, 0, false);
+        scheduler.appendNonBlocking(signalIndex, value, lowBit.value_or(0), lowBit.has_value());
         return;
     }
 
@@ -997,12 +1124,17 @@ void Kernel::scheduleDelayedWrite(std::uint32_t processIndex, std::uint32_t posi
                        .signalIndex = signalIndex,
                        .nonBlocking = nonBlocking,
                        .serial = ++nextWriteSerial,
-                       .value = eir::BitVector::from(value)};
+                       .value = eir::BitVector::from(value),
+                       .lowBit = lowBit};
 
-    if (!nonBlocking) {
+    if (kind == DelayKind::Transport && delay == 0) {
+        writeRouted(processIndex, position, signalIndex, value, lowBit);
+        return;
+    }
+    if (kind == DelayKind::Inertial) {
         // The write this one replaces is taken out rather than skipped when it comes due, so
         // that it leaves no time step behind in which nothing happens.
-        const auto key = std::pair{processIndex, position};
+        const auto key = std::tuple{processIndex, position, lowBit.value_or(WholeSignal)};
         if (const auto pending = pendingInertial.find(key); pending != pendingInertial.end()) {
             const auto slot = delayedWrites.find(pending->second.time);
             std::erase_if(slot->second, [&pending](const DelayedWrite& queued) {
@@ -1012,7 +1144,7 @@ void Kernel::scheduleDelayedWrite(std::uint32_t processIndex, std::uint32_t posi
             pendingInertial.erase(pending);
         }
         if (delay == 0) {
-            writeRouted(processIndex, position, signalIndex, value);
+            writeRouted(processIndex, position, signalIndex, value, lowBit);
             return;
         }
         pendingInertial.emplace(
@@ -1037,11 +1169,14 @@ void Kernel::applyDelayedWrites() {
             continue;
         }
         if (write.nonBlocking) {
-            scheduler.appendNonBlocking(write.signalIndex, write.value.ref(), 0, false);
+            scheduler.appendNonBlocking(write.signalIndex, write.value.ref(),
+                                        write.lowBit.value_or(0), write.lowBit.has_value());
             continue;
         }
-        pendingInertial.erase(std::pair{write.processIndex, write.position});
-        writeRouted(write.processIndex, write.position, write.signalIndex, write.value.ref());
+        pendingInertial.erase(
+            std::tuple{write.processIndex, write.position, write.lowBit.value_or(WholeSignal)});
+        writeRouted(write.processIndex, write.position, write.signalIndex, write.value.ref(),
+                    write.lowBit);
     }
 }
 
@@ -1201,12 +1336,15 @@ void Kernel::applyDeltaTransactions(std::size_t first) {
 }
 
 void Kernel::writeRouted(std::uint32_t processIndex, std::uint32_t position,
-                         std::uint32_t signalIndex, eir::ConstBitRef value) {
+                         std::uint32_t signalIndex, eir::ConstBitRef value,
+                         std::optional<std::uint32_t> lowBit) {
     const WriteRoute& route = processes[processIndex].writeRoutes[position];
-    if (route.direct()) {
-        writeSignal(signalIndex, value);
+    if (!route.direct()) {
+        writeThroughDrivers(route, value, lowBit.value_or(0));
+    } else if (lowBit.has_value()) {
+        writeSignalPart(signalIndex, value, *lowBit);
     } else {
-        writeThroughDrivers(route, value, 0);
+        writeSignal(signalIndex, value);
     }
 }
 
@@ -1372,7 +1510,11 @@ void Kernel::runSystemTask(std::uint32_t processIndex, const Activation& activat
             argument.isConstant
                 ? body.constant(argument.location)
                 : frameAt(activation.frameOffset + argument.location, argument.bitWidth);
-        arguments.push_back(FormatArgument{.value = value, .isSigned = argument.isSigned});
+        arguments.push_back(
+            FormatArgument{.value = value,
+                           .isSigned = argument.isSigned,
+                           .isReal = argument.isReal,
+                           .text = argument.isString ? &scratchAt(value.aval()[0]).text : nullptr});
     }
 
     // The file tasks take a descriptor first, which is not part of what they print. An
@@ -1397,10 +1539,11 @@ void Kernel::runSystemTask(std::uint32_t processIndex, const Activation& activat
 
     const elab::Instance& instance =
         designImage->elaboratedDesign().instances()[state.instanceIndex];
+    const std::string scope = elab::dottedPath(instance.path);
     const FormatContext context{.time = currentTime,
                                 .timeScale = options.timeScale,
                                 .argumentUnit = argumentUnit(descriptor),
-                                .scopeName = instance.path};
+                                .scopeName = scope};
 
     const std::string text =
         descriptor.hasFormat()
@@ -1433,20 +1576,7 @@ void Kernel::runSystemTask(std::uint32_t processIndex, const Activation& activat
         diagnostics.report(DiagCode::UserInfo, descriptor.location, text);
         return;
 
-    // The positions of std.standard.severity_level: note, warning, error, failure.
-    case eir::SysTaskKind::Report:
-        switch (severity) {
-        case 0: diagnostics.report(DiagCode::UserInfo, descriptor.location, text); break;
-        case 1: diagnostics.report(DiagCode::UserWarning, descriptor.location, text); break;
-        case 2: diagnostics.report(DiagCode::UserError, descriptor.location, text); break;
-        default: diagnostics.report(DiagCode::AssertionFailure, descriptor.location, text); break;
-        }
-        if (severity >= options.stopSeverity) {
-            finishRequested = true;
-            errorRequested = true;
-            finishStatus = 1;
-        }
-        return;
+    case eir::SysTaskKind::Report: report(severity, descriptor.location, text); return;
 
     case eir::SysTaskKind::DumpFile:
         for (ValueChangeListener* listener : listeners) listener->onDumpFile(text);
@@ -1497,6 +1627,20 @@ void Kernel::runSystemTask(std::uint32_t processIndex, const Activation& activat
         if (!arguments.empty()) freeLine(arguments.front().value.toUInt64());
         return;
 
+    case eir::SysTaskKind::StringSplice: {
+        ScratchString& string = scratchAt(arguments[0].value.toUInt64());
+        const auto index = static_cast<std::int64_t>(arguments[1].value.toUInt64());
+        const eir::ConstBitRef characters = arguments[2].value;
+        const std::uint32_t count = characters.width() / 8;
+        if (!withinOrFailure(string, index, count, descriptor.location)) return;
+        const auto from = static_cast<std::size_t>(string.position(index));
+        for (std::uint32_t at = 0; at < count; ++at)
+            string.text[from + at] = characterAt(characters, std::uint64_t{count - 1 - at} * 8);
+        return;
+    }
+
+    case eir::SysTaskKind::StringRelease: releaseScratch(arguments[0].value.toUInt64()); return;
+
     case eir::SysTaskKind::FileWriteValue: {
         if (arguments.size() < 2) return;
         const auto file = static_cast<std::uint32_t>(arguments[0].value.toUInt64());
@@ -1529,13 +1673,26 @@ void Kernel::runSystemTask(std::uint32_t processIndex, const Activation& activat
     case eir::SysTaskKind::URandom:
     case eir::SysTaskKind::URandomRange:
     case eir::SysTaskKind::FileOpen:
+    case eir::SysTaskKind::FileGetCharacter:
     case eir::SysTaskKind::LineWrite:
     case eir::SysTaskKind::LineWriteLine:
     case eir::SysTaskKind::LineReadLine:
     case eir::SysTaskKind::LineReadCharacter:
+    case eir::SysTaskKind::LineReadString:
+    case eir::SysTaskKind::LineLength:
+    case eir::SysTaskKind::LineElement:
+    case eir::SysTaskKind::LineSlice:
     case eir::SysTaskKind::FileEnd:
     case eir::SysTaskKind::LineAppend:
     case eir::SysTaskKind::FileReadValue:
+    case eir::SysTaskKind::StringNew:
+    case eir::SysTaskKind::StringBounds:
+    case eir::SysTaskKind::StringSlice:
+    case eir::SysTaskKind::StringFromArray:
+    case eir::SysTaskKind::StringIntoArray:
+    case eir::SysTaskKind::StringCompare:
+    case eir::SysTaskKind::StringRead:
+    case eir::SysTaskKind::StringMark:
         ENZAN_ASSERT(false, "a system function run as a system task; run the EIR verifier");
         return;
     }
@@ -1585,18 +1742,23 @@ void Kernel::runSystemFunction(std::uint32_t processIndex, const Activation& act
         std::vector<FormatArgument> rest;
         for (std::size_t index = 3; index < descriptor.arguments.size(); ++index) {
             const codegen::SysTaskDescriptor::Argument& compiled = descriptor.arguments[index];
+            const eir::ConstBitRef shown =
+                compiled.isConstant
+                    ? body.constant(compiled.location)
+                    : frameAt(activation.frameOffset + compiled.location, compiled.bitWidth);
             rest.push_back(FormatArgument{
-                .value = compiled.isConstant ? body.constant(compiled.location)
-                                             : frameAt(activation.frameOffset + compiled.location,
-                                                       compiled.bitWidth),
-                .isSigned = compiled.isSigned});
+                .value = shown,
+                .isSigned = compiled.isSigned,
+                .isReal = compiled.isReal,
+                .text = compiled.isString ? &scratchAt(shown.aval()[0]).text : nullptr});
         }
         const elab::Instance& instance =
             designImage->elaboratedDesign().instances()[state.instanceIndex];
+        const std::string scope = elab::dottedPath(instance.path);
         const FormatContext context{.time = currentTime,
                                     .timeScale = options.timeScale,
                                     .argumentUnit = argumentUnit(descriptor),
-                                    .scopeName = instance.path};
+                                    .scopeName = scope};
         std::string text;
         if (descriptor.kind == eir::SysTaskKind::LineAppend) {
             if (const std::string* source = lineAt(argument(3))) text = *source;
@@ -1649,8 +1811,84 @@ void Kernel::runSystemFunction(std::uint32_t processIndex, const Activation& act
         if (std::string* line = lineAt(argument(0)); line != nullptr && !line->empty()) {
             value = 0x100U | static_cast<unsigned char>(line->front());
             line->erase(0, 1);
+        } else if (descriptor.arguments.size() > 1 && argument(1) != 0) {
+            report(eir::SeverityFailure, descriptor.location,
+                   "a read of a character from an empty line");
         }
         break;
+
+    case eir::SysTaskKind::LineReadString: {
+        const codegen::SysTaskDescriptor::Argument& into = descriptor.arguments[1];
+        std::ranges::fill(result.avalWords(), 0);
+        std::ranges::fill(result.bvalWords(), 0);
+        bitops::assignPartAt(result,
+                             into.isConstant
+                                 ? body.constant(into.location)
+                                 : frameAt(activation.frameOffset + into.location, into.bitWidth),
+                             0);
+        const std::uint32_t count = (result.width() - 1) / 8;
+        std::string* line = lineAt(argument(0));
+        const std::size_t held = line != nullptr ? line->size() : 0;
+        if (held < count) {
+            if (descriptor.arguments.size() > 2 && argument(2) != 0) {
+                report(eir::SeverityFailure, descriptor.location,
+                       std::format("a read of {} characters from a line holding {}", count, held));
+            }
+            return;
+        }
+        if (line != nullptr) {
+            for (std::uint32_t at = 0; at < count; ++at) {
+                const auto character = static_cast<unsigned char>((*line)[at]);
+                bitops::assignPartAt(result, eir::BitVector::fromUInt64(character, 8).ref(),
+                                     std::uint64_t{count - 1 - at} * 8);
+            }
+            line->erase(0, count);
+        }
+        result.set(result.width() - 1, eir::Logic::One);
+        return;
+    }
+
+    case eir::SysTaskKind::LineLength:
+        if (const std::string* line = lineAt(argument(0))) {
+            value = line->size();
+        } else {
+            report(eir::SeverityFailure, descriptor.location, "'length of a null line");
+        }
+        break;
+
+    case eir::SysTaskKind::LineElement: {
+        const auto index = static_cast<std::int64_t>(argument(1));
+        if (const std::string* line = lineOrFailure(argument(0), index, 1, descriptor.location))
+            value = static_cast<unsigned char>((*line)[static_cast<std::size_t>(index - 1)]);
+        break;
+    }
+
+    case eir::SysTaskKind::LineSlice: {
+        std::ranges::fill(result.avalWords(), 0);
+        std::ranges::fill(result.bvalWords(), 0);
+        const auto left = static_cast<std::int64_t>(argument(1));
+        const std::uint32_t count = result.width() / 8;
+        const std::string* line = lineOrFailure(argument(0), left, count, descriptor.location);
+        if (line == nullptr) return;
+        for (std::uint32_t at = 0; at < count; ++at) {
+            const auto character =
+                static_cast<unsigned char>((*line)[static_cast<std::size_t>(left - 1) + at]);
+            bitops::assignPartAt(result, eir::BitVector::fromUInt64(character, 8).ref(),
+                                 std::uint64_t{count - 1 - at} * 8);
+        }
+        return;
+    }
+
+    // A byte, or EOF, -1 in the 32 bits of an `int`.
+    case eir::SysTaskKind::FileGetCharacter: {
+        OpenFile* file = fileFor(static_cast<std::uint32_t>(argument(0)));
+        const std::char_traits<char>::int_type next =
+            file != nullptr && file->input ? file->input->get() : std::char_traits<char>::eof();
+        value = next == std::char_traits<char>::eof()
+                    ? 0xFFFF'FFFFU
+                    : static_cast<unsigned char>(std::char_traits<char>::to_char_type(next));
+        break;
+    }
 
     case eir::SysTaskKind::FileEnd: {
         OpenFile* file = fileFor(static_cast<std::uint32_t>(argument(0)));
@@ -1709,6 +1947,138 @@ void Kernel::runSystemFunction(std::uint32_t processIndex, const Activation& act
         }
         return;
     }
+
+    // Strings whose lengths only the run knows, in the scratch the running process makes them in.
+    case eir::SysTaskKind::StringNew: {
+        const auto left = static_cast<std::int64_t>(argument(0));
+        const auto right = static_cast<std::int64_t>(argument(1));
+        const bool ascending = argument(2) != 0;
+        const std::int64_t span = ascending ? right - left : left - right;
+        std::uint64_t length = span < 0 ? 0 : static_cast<std::uint64_t>(span) + 1;
+        if (length > MaxStringLength) {
+            report(eir::SeverityFailure, descriptor.location,
+                   std::format("a string of {} characters, more than {}", length, MaxStringLength));
+            length = 0;
+        }
+        scratch.push_back(
+            ScratchString{.left = left,
+                          .right = right,
+                          .ascending = ascending,
+                          .text = std::string(length, static_cast<char>(argument(3) & 0xFFU))});
+        value = scratch.size();
+        break;
+    }
+
+    case eir::SysTaskKind::StringBounds: {
+        const ScratchString& string = scratchAt(argument(0));
+        std::ranges::fill(result.avalWords(), 0);
+        std::ranges::fill(result.bvalWords(), 0);
+        const auto put = [&](std::uint64_t number, std::uint64_t lowBit) {
+            bitops::assignPartAt(result, eir::BitVector::fromUInt64(number, 64).ref(), lowBit);
+        };
+        put(static_cast<std::uint64_t>(string.left), 128);
+        put(static_cast<std::uint64_t>(string.right), 64);
+        put(string.text.size(), 0);
+        return;
+    }
+
+    case eir::SysTaskKind::StringSlice: {
+        std::ranges::fill(result.avalWords(), 0);
+        std::ranges::fill(result.bvalWords(), 0);
+        const ScratchString& string = scratchAt(argument(0));
+        const auto index = static_cast<std::int64_t>(argument(1));
+        const std::uint32_t count = result.width() / 8;
+        if (!withinOrFailure(string, index, count, descriptor.location)) return;
+        const auto from = static_cast<std::size_t>(string.position(index));
+        for (std::uint32_t at = 0; at < count; ++at)
+            putCharacter(result, std::uint64_t{count - 1 - at} * 8, string.text[from + at]);
+        return;
+    }
+
+    // A slice of an array, whose bounds the run gives, as a string of its own; its elements are
+    // where they are in the array, the right bound's lowest.
+    case eir::SysTaskKind::StringFromArray:
+    case eir::SysTaskKind::StringIntoArray: {
+        const codegen::SysTaskDescriptor::Argument& compiled = descriptor.arguments[0];
+        const eir::ConstBitRef array =
+            compiled.isConstant
+                ? body.constant(compiled.location)
+                : frameAt(activation.frameOffset + compiled.location, compiled.bitWidth);
+        const auto arrayLeft = static_cast<std::int64_t>(argument(1));
+        const auto arrayRight = static_cast<std::int64_t>(argument(2));
+        const auto offsetOf = [&](std::int64_t index, bool ascending) {
+            return static_cast<std::uint64_t>(ascending ? arrayRight - index : index - arrayRight)
+                   * 8;
+        };
+        if (descriptor.kind == eir::SysTaskKind::StringIntoArray) {
+            const ScratchString& string = scratchAt(argument(3));
+            bitops::assignPartAt(result, array, 0);
+            for (std::size_t at = 0; at < string.text.size(); ++at) {
+                const auto step = static_cast<std::int64_t>(at);
+                const std::int64_t index =
+                    string.ascending ? string.left + step : string.left - step;
+                putCharacter(result, offsetOf(index, string.ascending), string.text[at]);
+            }
+            return;
+        }
+        const auto left = static_cast<std::int64_t>(argument(3));
+        const auto right = static_cast<std::int64_t>(argument(4));
+        const bool ascending = argument(5) != 0;
+        const std::int64_t span = ascending ? right - left : left - right;
+        const std::uint64_t length = span < 0 ? 0 : static_cast<std::uint64_t>(span) + 1;
+        ScratchString string{.left = left,
+                             .right = right,
+                             .ascending = ascending,
+                             .text = std::string(length, '\0')};
+        const std::int64_t arrayLow = std::min(arrayLeft, arrayRight);
+        const std::int64_t arrayHigh = std::max(arrayLeft, arrayRight);
+        if (length > 0 && (std::min(left, right) < arrayLow || std::max(left, right) > arrayHigh)) {
+            const std::string_view direction = ascending ? "to" : "downto";
+            report(eir::SeverityFailure, descriptor.location,
+                   std::format("{} {} {} is outside the bounds {} {} {}", left, direction, right,
+                               arrayLeft, direction, arrayRight));
+        } else {
+            for (std::uint64_t at = 0; at < length; ++at) {
+                const auto step = static_cast<std::int64_t>(at);
+                string.text[at] =
+                    characterAt(array, offsetOf(ascending ? left + step : left - step, ascending));
+            }
+        }
+        scratch.push_back(std::move(string));
+        value = scratch.size();
+        break;
+    }
+
+    // Character by character, as a VHDL array of characters orders by their positions, and a
+    // prefix first (IEEE 1076 section 9.2.3); std::string compares its characters unsigned.
+    case eir::SysTaskKind::StringCompare: {
+        const int order = scratchAt(argument(0)).text.compare(scratchAt(argument(1)).text);
+        if (order < 0) value = 0xFFU;
+        if (order > 0) value = 1U;
+        break;
+    }
+
+    case eir::SysTaskKind::StringRead: {
+        ScratchString& string = scratchAt(argument(0));
+        std::string* line = lineAt(argument(1));
+        const std::size_t count = string.text.size();
+        const std::size_t held = line != nullptr ? line->size() : 0;
+        if (held < count) {
+            if (descriptor.arguments.size() > 2 && argument(2) != 0) {
+                report(eir::SeverityFailure, descriptor.location,
+                       std::format("a read of {} characters from a line holding {}", count, held));
+            }
+            break;
+        }
+        if (line != nullptr) {
+            string.text.assign(*line, 0, count);
+            line->erase(0, count);
+        }
+        value = 1;
+        break;
+    }
+
+    case eir::SysTaskKind::StringMark: value = scratch.size(); break;
 
     case eir::SysTaskKind::Random:
         if (descriptor.arguments.empty()) {
@@ -1784,8 +2154,7 @@ void Kernel::readMemory(std::span<const std::uint32_t> objectSignals,
 
 std::uint32_t Kernel::openFile(const std::string& name, const std::string& mode,
                                SourceLocation location) {
-    // Writing, or reading for VHDL's textio, which is what reads a file; SystemVerilog's
-    // reading tasks are not there yet, and a file they opened would read as nothing.
+    // Writing, or reading, for `$fgetc` and for VHDL's textio.
     const bool channel = mode.empty();
     if (mode.starts_with('r')) {
         auto input = std::make_unique<std::ifstream>(name);
@@ -1823,6 +2192,65 @@ std::uint32_t Kernel::openFile(const std::string& name, const std::string& mode,
     openFiles.push_back(
         OpenFile{.descriptor = descriptor, .stream = std::move(stream), .input = {}});
     return descriptor;
+}
+
+void Kernel::report(std::uint64_t severity, const SourceLocation& location,
+                    const std::string& text) {
+    switch (severity) {
+    case eir::SeverityNote: diagnostics.report(DiagCode::UserInfo, location, text); break;
+    case eir::SeverityWarning: diagnostics.report(DiagCode::UserWarning, location, text); break;
+    case eir::SeverityError: diagnostics.report(DiagCode::UserError, location, text); break;
+    default: diagnostics.report(DiagCode::AssertionFailure, location, text); break;
+    }
+    if (severity >= options.stopSeverity) {
+        finishRequested = true;
+        errorRequested = true;
+        finishStatus = 1;
+    }
+}
+
+const std::string* Kernel::lineOrFailure(std::uint64_t handle, std::int64_t index,
+                                         std::uint32_t count, const SourceLocation& location) {
+    const std::string* line = lineAt(handle);
+    if (line == nullptr) {
+        report(eir::SeverityFailure, location, "a null line is indexed");
+        return nullptr;
+    }
+    const auto length = static_cast<std::int64_t>(line->size());
+    if (index < 1 || index + count - 1 > length) {
+        const std::string reached = count == 1 ? std::format("index {}", index)
+                                               : std::format("{} to {}", index, index + count - 1);
+        report(eir::SeverityFailure, location,
+               std::format("{} is outside the bounds 1 to {} of the line", reached, length));
+        return nullptr;
+    }
+    return line;
+}
+
+Kernel::ScratchString& Kernel::scratchAt(std::uint64_t handle) {
+    ENZAN_ALWAYS_ASSERT(handle != 0 && handle <= scratch.size(),
+                        "a string of run-time length used once released");
+    return scratch[handle - 1];
+}
+
+void Kernel::releaseScratch(std::uint64_t mark) {
+    if (mark < scratch.size()) scratch.resize(mark);
+}
+
+bool Kernel::withinOrFailure(const ScratchString& string, std::int64_t index, std::uint32_t count,
+                             const SourceLocation& location) {
+    const std::int64_t from = string.position(index);
+    if (count == 0
+        || (from >= 0 && std::cmp_less_equal(from + std::int64_t{count}, string.text.size())))
+        return true;
+    const std::string_view direction = string.ascending ? "to" : "downto";
+    const std::int64_t last = string.ascending ? index + count - 1 : index - count + 1;
+    const std::string reached = count == 1 ? std::format("index {}", index)
+                                           : std::format("{} {} {}", index, direction, last);
+    report(eir::SeverityFailure, location,
+           std::format("{} is outside the bounds {} {} {}", reached, string.left, direction,
+                       string.right));
+    return false;
 }
 
 std::uint64_t Kernel::allocateLine(std::string text) {

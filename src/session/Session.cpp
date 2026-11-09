@@ -231,10 +231,21 @@ bool Session::analyse(const AnalysisRequest& request) {
     for (const std::filesystem::path& file : request.contextFiles) contextFiles.push_back(file);
     for (const std::filesystem::path& file : request.libraryFiles) libraryFiles.push_back(file);
     for (const std::filesystem::path& file : request.files) files.push_back(file);
+    for (const std::filesystem::path& file : request.searchFiles) searchFiles.push_back(file);
+    for (const std::filesystem::path& directory : request.searchDirectories)
+        searchDirectories.push_back(directory);
+    for (const std::string& extension : request.searchExtensions)
+        searchExtensions.push_back(extension);
     for (const std::string& define : request.defines) defines.push_back(define);
     for (const std::filesystem::path& directory : request.includeDirectories)
         includeDirectories.push_back(directory);
     for (const std::string& parameter : request.parameters) parameters.push_back(parameter);
+
+    // A file is read again by each analysis, in case it changed, and once within one.
+    buffersRead.clear();
+#ifdef ENZAN_WITH_SYSTEMVERILOG
+    if (!searchLibraries()) return false;
+#endif
 
     // A run given only libraries whose VHDL declares its top translates it from them.
     if (files.empty() && hasVhdlLibraries() && !request.top.empty()) return analyseVhdl(request);
@@ -245,8 +256,10 @@ bool Session::analyse(const AnalysisRequest& request) {
     }
 
     if (std::ranges::any_of(files, isVhdlSource)) {
+        // A design of VHDL alone with a library search may bind components to modules it finds.
         const bool onlyVhdl = std::ranges::all_of(files, isVhdlSource) && contextFiles.empty()
-                              && libraryFiles.empty();
+                              && libraryFiles.empty() && searchFiles.empty()
+                              && searchDirectories.empty();
         return onlyVhdl ? analyseVhdl(request) : analyseMixed(request);
     }
 
@@ -274,13 +287,10 @@ bool Session::analyse(const AnalysisRequest& request) {
         if (failure) key = file;
         if (!seen.insert(std::move(key)).second) return true;
 
-        const FileReadResult result = sources.readFile(file);
-        if (!result.ok()) {
-            reportFileReadFailure(diagnostics, file, result);
-            return false;
-        }
+        const std::optional<BufferId> buffer = readOnce(file);
+        if (!buffer) return false;
         ordered.push_back(file);
-        buffers.push_back(result.buffer);
+        buffers.push_back(*buffer);
         return true;
     };
     for (const std::filesystem::path& file : contextFiles)
@@ -338,6 +348,8 @@ bool Session::analyse(const AnalysisRequest& request) {
     options.filesRead = &lastFilesRead;
     options.files = ordered;
     options.buffers = buffers;
+    for (std::size_t index = 0; index < ordered.size(); ++index)
+        if (suppliedFiles.contains(ordered[index])) options.libraryUnits.push_back(buffers[index]);
     options.defines = defines;
     options.includeDirectories = includeDirectories;
     options.timeUnitExponent = defaultScale.precisionExponent();
@@ -381,6 +393,12 @@ bool Session::analyse(const AnalysisRequest& request) {
 
 bool Session::analyseVhdl(const AnalysisRequest& request) {
 #ifdef ENZAN_WITH_VHDL
+    // The adapter translates the hierarchy under one top.
+    if (!request.otherTops.empty()) {
+        diagnostics.report(DiagCode::NotYetImplemented, SourceLocation(),
+                           "a second top level of VHDL");
+        return false;
+    }
     frontend::vhdl::DesignOptions options;
     std::vector<eir::LibrarySource> read;
     std::set<std::filesystem::path> seen;
@@ -511,6 +529,146 @@ bool Session::setVhdlOptions(const AnalysisRequest& request, bool sourcesGiven,
 }
 #endif
 
+std::optional<BufferId> Session::readOnce(const std::filesystem::path& file) {
+    if (const auto found = buffersRead.find(file); found != buffersRead.end()) return found->second;
+    const FileReadResult result = sources.readFile(file);
+    if (!result.ok()) {
+        reportFileReadFailure(diagnostics, file, result);
+        return std::nullopt;
+    }
+    buffersRead.emplace(file, result.buffer);
+    return result.buffer;
+}
+
+#ifdef ENZAN_WITH_SYSTEMVERILOG
+bool Session::namesIn(std::span<const std::filesystem::path> paths,
+                      std::vector<std::string>& declared, std::vector<std::string>& undeclared) {
+    frontend::sv::Options options;
+    for (const std::filesystem::path& file : paths) {
+        const std::optional<BufferId> buffer = readOnce(file);
+        if (!buffer) return false;
+        options.files.push_back(file);
+        options.buffers.push_back(*buffer);
+    }
+    options.defines = defines;
+    options.includeDirectories = includeDirectories;
+    const unsigned errorsBefore = diagnostics.errorCount();
+    frontend::sv::ModuleNames names = frontend::sv::moduleNames(options, sources, diagnostics);
+    if (diagnostics.errorCount() != errorsBefore) return false;
+    declared = std::move(names.declared);
+    undeclared = std::move(names.undeclared);
+    return true;
+}
+
+bool Session::addSearched(std::vector<std::string> wanted, std::vector<std::string>& declared,
+                          std::vector<std::filesystem::path>& added) {
+    // What each `-v` file declares, read once.
+    std::vector<std::vector<std::string>> inFiles;
+    for (const std::filesystem::path& file : searchFiles) {
+        std::vector<std::string> fileDeclares;
+        std::vector<std::string> unused;
+        if (!namesIn(std::span(&file, 1), fileDeclares, unused)) return false;
+        inFiles.push_back(std::move(fileDeclares));
+    }
+    const std::vector<std::string> extensions =
+        searchExtensions.empty() ? std::vector<std::string>{".v"} : searchExtensions;
+
+    // A module of any case serves a VHDL component, so a name is taken as declared in any case.
+    const auto isDeclared = [&declared](std::string_view name) {
+        return std::ranges::any_of(declared,
+                                   [name](const std::string& one) { return sameName(one, name); });
+    };
+    const auto find = [&](std::string_view name) -> std::optional<std::filesystem::path> {
+        for (std::size_t index = 0; index < searchFiles.size(); ++index) {
+            if (std::ranges::find(inFiles[index], name) != inFiles[index].end())
+                return searchFiles[index];
+        }
+        for (const std::filesystem::path& directory : searchDirectories) {
+            for (const std::string& extension : extensions) {
+                std::filesystem::path candidate = directory / (std::string(name) + extension);
+                std::error_code failure;
+                if (std::filesystem::is_regular_file(candidate, failure)) return candidate;
+            }
+        }
+        return std::nullopt;
+    };
+
+    std::set<std::string, std::less<>> searched;
+    for (std::size_t next = 0; next < wanted.size(); ++next) {
+        const std::string name = wanted[next];
+        if (isDeclared(name) || !searched.insert(name).second) continue;
+        const std::optional<std::filesystem::path> file = find(name);
+        if (!file) continue;
+
+        std::vector<std::string> fileDeclares;
+        std::vector<std::string> fileNeeds;
+        if (!namesIn(std::span(&*file, 1), fileDeclares, fileNeeds)) return false;
+        files.push_back(*file);
+        added.push_back(*file);
+        suppliedFiles.insert(*file);
+        for (std::string& one : fileDeclares) declared.push_back(std::move(one));
+        for (std::string& one : fileNeeds) wanted.push_back(std::move(one));
+    }
+    return true;
+}
+
+std::vector<std::string> Session::searchableModules() {
+    std::vector<std::string> names;
+    for (const std::filesystem::path& file : searchFiles) {
+        // Read already, by the search before the analysis.
+        std::vector<std::string> fileDeclares;
+        std::vector<std::string> unused;
+        if (namesIn(std::span(&file, 1), fileDeclares, unused))
+            for (std::string& one : fileDeclares) names.push_back(std::move(one));
+    }
+    const std::vector<std::string> extensions =
+        searchExtensions.empty() ? std::vector<std::string>{".v"} : searchExtensions;
+    for (const std::filesystem::path& directory : searchDirectories) {
+        std::error_code failure;
+        std::vector<std::string> here;
+        for (const auto& entry : std::filesystem::directory_iterator(directory, failure)) {
+            const std::filesystem::path& path = entry.path();
+            if (std::ranges::find(extensions, path.extension().string()) != extensions.end())
+                here.push_back(path.stem().string());
+        }
+        // A directory lists its entries in no particular order; nothing may depend on that.
+        std::ranges::sort(here);
+        for (std::string& one : here) names.push_back(std::move(one));
+    }
+    return names;
+}
+
+bool Session::searchLibraries() {
+    if (searchFiles.empty() && searchDirectories.empty()) return true;
+
+    std::vector<std::filesystem::path> systemVerilog;
+    for (const std::vector<std::filesystem::path>* list : {&contextFiles, &libraryFiles, &files}) {
+        for (const std::filesystem::path& file : *list)
+            if (!isVhdlSource(file)) systemVerilog.push_back(file);
+    }
+    std::vector<std::string> declared;
+    std::vector<std::string> undeclared;
+    if (!namesIn(systemVerilog, declared, undeclared)) return false;
+
+    // What VHDL and the libraries resolved against define is defined too.
+    for (const eir::Library& input : inputLibraries) {
+        for (std::string& unit : input.unitNames()) declared.push_back(std::move(unit));
+    }
+#ifdef ENZAN_WITH_VHDL
+    for (const std::filesystem::path& file : files) {
+        if (!isVhdlSource(file)) continue;
+        const std::optional<BufferId> buffer = readOnce(file);
+        if (!buffer) return false;
+        for (std::string& unit : frontend::vhdl::declaredUnits(*buffer, sources))
+            declared.push_back(std::move(unit));
+    }
+#endif
+
+    std::vector<std::filesystem::path> added;
+    return addSearched(std::move(undeclared), declared, added);
+}
+#endif
+
 bool Session::analyseMixed(const AnalysisRequest& request) {
     // Every source is read first, so that one that cannot be is reported as that, whatever its
     // name says it holds, rather than as a design of two languages. A context or library source is
@@ -524,12 +682,9 @@ bool Session::analyseMixed(const AnalysisRequest& request) {
             if (failure) key = file;
             if (!seen.insert(std::move(key)).second) continue;
 
-            const FileReadResult result = sources.readFile(file);
-            if (!result.ok()) {
-                reportFileReadFailure(diagnostics, file, result);
-                return false;
-            }
-            read.emplace_back(file, result.buffer);
+            const std::optional<BufferId> buffer = readOnce(file);
+            if (!buffer) return false;
+            read.emplace_back(file, *buffer);
         }
     }
 
@@ -542,6 +697,7 @@ bool Session::analyseMixed(const AnalysisRequest& request) {
         } else {
             svOptions.files.push_back(file);
             svOptions.buffers.push_back(buffer);
+            if (suppliedFiles.contains(file)) svOptions.libraryUnits.push_back(buffer);
         }
     }
 
@@ -561,17 +717,35 @@ bool Session::analyseMixed(const AnalysisRequest& request) {
     svOptions.defines = defines;
     svOptions.includeDirectories = includeDirectories;
     const unsigned errorsBefore = diagnostics.errorCount();
-    const frontend::sv::ModuleNames names =
-        frontend::sv::moduleNames(svOptions, sources, diagnostics);
+    frontend::sv::ModuleNames names = frontend::sv::moduleNames(svOptions, sources, diagnostics);
     if (diagnostics.errorCount() != errorsBefore) return false;
     const bool svTop =
         !request.top.empty() && std::ranges::any_of(names.declared, [&](const std::string& name) {
             return sameName(name, request.top);
         });
 
+    // A further top level is a module: the adapter translates under one top.
+    std::vector<std::string> svTops;
+    for (const std::string& other : request.otherTops) {
+        if (std::ranges::none_of(names.declared,
+                                 [&other](const std::string& name) { return name == other; })) {
+            diagnostics.report(DiagCode::NotYetImplemented, SourceLocation(),
+                               std::format("a second top level of VHDL, '{}',", other));
+            return false;
+        }
+        svTops.push_back(other);
+    }
+
     std::string keyOptions;
     if (!setVhdlOptions(request, true, options, keyOptions)) return false;
     options.modules = names.declared;
+    // A component no entity binds to may bind to a module `-v` or `-y` holds, which is then
+    // analysed with the sources.
+    for (std::string& one : searchableModules()) {
+        if (std::ranges::none_of(options.modules,
+                                 [&one](const std::string& name) { return sameName(name, one); }))
+            options.modules.push_back(std::move(one));
+    }
     options.described = names.undeclared;
     if (svTop) {
         options.top.clear();
@@ -580,6 +754,7 @@ bool Session::analyseMixed(const AnalysisRequest& request) {
     } else {
         svOptions.onlyRequested = !request.top.empty();
     }
+    for (std::string& top : svTops) svOptions.topModules.push_back(std::move(top));
     // Without a top, an analysis that translates no VHDL still translates what SystemVerilog
     // instantiates of it, since SystemVerilog's analysis cannot check an instance without it.
     if (!request.translateVhdl) options.onlyRequested = true;
@@ -617,6 +792,18 @@ bool Session::analyseMixed(const AnalysisRequest& request) {
                 }))
                 forSystemVerilog.push_back(asked);
         }
+        std::vector<std::string> modulesAsked;
+        modulesAsked.reserve(forSystemVerilog.size());
+        for (const eir::UnitRequest& asked : forSystemVerilog) modulesAsked.push_back(asked.unit);
+        std::vector<std::filesystem::path> added;
+        if (!addSearched(std::move(modulesAsked), names.declared, added)) return false;
+        for (const std::filesystem::path& file : added) {
+            const std::optional<BufferId> buffer = readOnce(file);
+            if (!buffer) return false;
+            svOptions.files.push_back(file);
+            svOptions.buffers.push_back(*buffer);
+            svOptions.libraryUnits.push_back(*buffer);
+        }
 
         // Under a VHDL top that instantiates no module, there is no SystemVerilog to analyse.
         BufferedDiagnostics svReports(sources);
@@ -625,7 +812,8 @@ bool Session::analyseMixed(const AnalysisRequest& request) {
         std::vector<eir::UnitRequest> asked;
         bool settled = true;
         std::string newlyAsked;
-        if (svTop || request.top.empty() || !forSystemVerilog.empty()) {
+        if (svTop || request.top.empty() || !forSystemVerilog.empty()
+            || !svOptions.topModules.empty()) {
             svOptions.requests = forSystemVerilog;
             svOptions.requestAnswers = &svAnswers;
             svOptions.interfaces = interfaces;
@@ -987,6 +1175,13 @@ std::vector<std::string> Session::inputLibraryDefines() const {
 }
 
 bool Session::elaborate(std::string_view topModule) {
+    const std::vector<std::string> tops = topModule.empty()
+                                              ? std::vector<std::string>{}
+                                              : std::vector<std::string>{std::string(topModule)};
+    return elaborate(std::span<const std::string>(tops));
+}
+
+bool Session::elaborate(std::span<const std::string> topModules) {
     // A run may be given nothing but libraries to resolve against, so the design to elaborate
     // is whatever was analysed here plus every unit the input libraries hold. Merged in the
     // order the libraries were given, which is the order 8.2 says they are searched and the
@@ -1001,9 +1196,11 @@ bool Session::elaborate(std::string_view topModule) {
         diagnostics.report(DiagCode::NothingAnalysed, SourceLocation());
         return false;
     }
-    if (!topModule.empty() && design->findModule(topModule) == nullptr
-        && design->findSpecialisations(topModule).empty() && reportUnrecordedTop(topModule))
-        return false;
+    for (const std::string& topModule : topModules) {
+        if (design->findModule(topModule) == nullptr
+            && design->findSpecialisations(topModule).empty() && reportUnrecordedTop(topModule))
+            return false;
+    }
 
     // Two libraries built on one IP each hold the parameterisations they needed, and a design
     // analysed here against a library reproduces the units it reads from that library's
@@ -1024,7 +1221,7 @@ bool Session::elaborate(std::string_view topModule) {
 
     elab::Elaborator elaborator(*design, diagnostics);
     std::unique_ptr<elab::ElaboratedDesign> tree =
-        elaborator.elaborate(topModule, resolutionAnswers);
+        elaborator.elaborate(topModules, resolutionAnswers);
     if (tree == nullptr) return false;
 
     // A resolved signal's function for a driver count no translation has given yet is asked for,
@@ -1033,8 +1230,19 @@ bool Session::elaborate(std::string_view topModule) {
         tree->resolutionCalls(), [](const elab::ResolutionCall& call) { return !call.answered(); });
     if (unanswered) {
         if (!answerResolutions(*tree)) return false;
-        tree = elab::Elaborator(*design, diagnostics).elaborate(topModule, resolutionAnswers);
+        tree = elab::Elaborator(*design, diagnostics).elaborate(topModules, resolutionAnswers);
         if (tree == nullptr) return false;
+    }
+
+    // A timing check is not run, and a vendor's model that a user simulates elsewhere reports
+    // its violations, so a run says so once, at the first in the hierarchy (DESIGN_GUIDE.md
+    // section 5.1). Here rather than in the elaborator, which may elaborate twice.
+    for (const elab::Instance& instance : tree->instances()) {
+        const SourceLocation check = design->module(instance.definitionIndex).firstTimingCheck;
+        if (check.valid()) {
+            diagnostics.report(DiagCode::TimingChecksNotRun, check);
+            break;
+        }
     }
 
     codegen::Compiler compiler(diagnostics);

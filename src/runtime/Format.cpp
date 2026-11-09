@@ -5,8 +5,11 @@
 #include "eir/BitOps.h"
 
 #include <cctype>
+#include <cmath>
 #include <cstddef>
 #include <format>
+#include <optional>
+#include <string>
 #include <utility>
 
 namespace enzan::runtime {
@@ -43,6 +46,37 @@ std::string widened(std::string text, std::optional<std::size_t> width, bool lef
     return text.substr(0, sign) + std::string(padding, '0') + text.substr(sign);
 }
 
+/// The double an argument is: a real's own, or an integer's value as one.
+double realOf(const FormatArgument& argument) {
+    if (argument.isReal) return eir::bitops::realOf(argument.value);
+    eir::BitVector converted(64);
+    eir::bitops::integerToReal(converted.mutableRef(), argument.value, argument.isSigned);
+    return eir::bitops::realOf(converted.ref());
+}
+
+/// The integer a real argument rounds to, halfway away from zero, as a 64-bit signed value.
+eir::BitVector integerOf(const FormatArgument& argument) {
+    eir::BitVector converted(64);
+    eir::bitops::realToInteger(converted.mutableRef(), argument.value);
+    return converted;
+}
+
+/// A real as C renders it with `conversion`, `f`, `e` or `g`, and these flags (IEEE 1800 section
+/// 21.2.1.3 defers to C for them).
+std::string formatReal(double value, char conversion, bool leftJustify, bool zeroPad,
+                       bool alternate, std::optional<std::size_t> width,
+                       std::optional<std::size_t> precision) {
+    std::string specification = "{:";
+    if (leftJustify) specification += '<';
+    if (alternate) specification += '#';
+    if (zeroPad && !leftJustify) specification += '0';
+    if (width.has_value() && *width > 0) specification += std::to_string(*width);
+    if (precision.has_value()) specification += '.' + std::to_string(*precision);
+    specification += conversion;
+    specification += '}';
+    return std::vformat(specification, std::make_format_args(value));
+}
+
 } // namespace
 
 std::string toAsciiString(eir::ConstBitRef value) {
@@ -70,8 +104,14 @@ std::string toAsciiString(eir::ConstBitRef value) {
 
 std::string formatDefault(std::span<const FormatArgument> arguments) {
     std::string result;
-    for (const FormatArgument& argument : arguments)
+    for (const FormatArgument& argument : arguments) {
+        if (argument.isReal) {
+            result +=
+                formatReal(realOf(argument), 'g', false, false, true, std::nullopt, std::nullopt);
+            continue;
+        }
         result += eir::toString(argument.value, eir::Radix::Decimal, argument.isSigned);
+    }
     return result;
 }
 
@@ -116,6 +156,17 @@ std::string formatSystemTask(std::string_view format, std::span<const FormatArgu
             }
             fieldWidth = width;
         }
+        std::optional<std::size_t> precision;
+        if (index < format.size() && format[index] == '.') {
+            std::size_t digits = 0;
+            ++index;
+            while (index < format.size()
+                   && std::isdigit(static_cast<unsigned char>(format[index])) != 0) {
+                digits = (digits * 10) + static_cast<std::size_t>(format[index] - '0');
+                ++index;
+            }
+            precision = digits;
+        }
         if (index >= format.size()) {
             result.append(format.substr(start));
             break;
@@ -144,12 +195,34 @@ std::string formatSystemTask(std::string_view format, std::span<const FormatArgu
             }
             const FormatArgument& argument = arguments[nextArgument++];
             SimTime value = context.time;
-            if (!argument.value.hasUnknown()) {
+            if (argument.isReal) {
+                // A real time counts its unit in fractions, rounded to the run's.
+                double ticks = eir::bitops::realOf(argument.value);
+                if (context.argumentUnit)
+                    ticks *= std::pow(10.0, *context.argumentUnit
+                                                - context.timeScale.precisionExponent());
+                value = ticks > 0 ? static_cast<SimTime>(std::llround(ticks)) : 0;
+            } else if (!argument.value.hasUnknown()) {
                 value = argument.value.toUInt64();
                 if (context.argumentUnit)
                     value = context.timeScale.ticksOf(value, *context.argumentUnit);
             }
             result += context.timeScale.format(value);
+            continue;
+        }
+
+        if (conversion == 'f' || conversion == 'F' || conversion == 'e' || conversion == 'E'
+            || conversion == 'g' || conversion == 'G') {
+            if (nextArgument >= arguments.size()) {
+                result.append(format.substr(start, index - start + 1));
+                continue;
+            }
+            const FormatArgument& argument = arguments[nextArgument++];
+            result +=
+                formatReal(realOf(argument),
+                           static_cast<char>(std::tolower(static_cast<unsigned char>(conversion))),
+                           leftJustify, zeroPad && !minimal, false,
+                           minimal ? std::nullopt : fieldWidth, precision);
             continue;
         }
 
@@ -183,6 +256,24 @@ std::string formatSystemTask(std::string_view format, std::span<const FormatArgu
         }
 
         const FormatArgument& argument = arguments[nextArgument++];
+        if (argument.text != nullptr) {
+            result += widened(*argument.text, fieldWidth, leftJustify, false);
+            continue;
+        }
+
+        // A real by an integer's conversion is the integer it rounds to: in decimal as short as
+        // it is, as Icarus Verilog shows one, and in a radix as 64 bits.
+        if (argument.isReal) {
+            const eir::BitVector integer = integerOf(argument);
+            std::string rendered =
+                eir::toString(integer.ref(), radix, radix == eir::Radix::Decimal);
+            if (radix != eir::Radix::Decimal && !minimal && !fieldWidth.has_value())
+                rendered =
+                    widened(std::move(rendered), paddedWidth(64, radix, false), leftJustify, false);
+            result += widened(std::move(rendered), minimal ? std::nullopt : fieldWidth, leftJustify,
+                              zeroPad);
+            continue;
+        }
 
         if (isString) {
             result += widened(toAsciiString(argument.value), fieldWidth, leftJustify, false);

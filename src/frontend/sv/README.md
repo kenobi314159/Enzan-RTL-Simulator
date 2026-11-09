@@ -80,7 +80,9 @@ suspend the caller as its own statements would and the caller's read and write s
 what the call touches. A static variable of a subroutine, as each of one declared
 without `automatic`, is one variable every call shares: storage of the module, or of the
 package, that declares the subroutine, named behind it as `f.count`, and initialised once at
-time zero. It is marked `subroutineStatic` in the EIR, so that a call inlined into a continuous
+time zero. The module declares it whether or not its own code calls the subroutine, since a call
+from another instance, `dev.f(x)`, reaches it by reference as it reaches the module's other
+variables; one of a type Enzan cannot hold is reported only where it is used. It is marked `subroutineStatic` in the EIR, so that a call inlined into a continuous
 assignment is not its continuous driver and no inferred sensitivity list watches it; callers
 watching what one another write there would wake each other for ever.
 
@@ -113,15 +115,20 @@ Reported as `ENZ1004` with the construct named, rather than mistranslated:
   work). A computation with reals whose operands are all constants, such as `Period >= 2ps`
   with `Period` a parameter, is folded to its integral result;
 - a recursive call, which slang does not fold to a constant, and a `ref` argument;
+- `fork`, whichever way it joins, since its statements run at once as processes of their own;
+- a `disable` of anything but a named block the statement is in, within the same process or
+  subroutine body: another process's block, the block a subroutine is called from, a task.
+  A `disable` of a block it is in goes on after the block, with the next iteration when the
+  block is a loop's body;
 - `foreach` over a dimension of no fixed size, which needs the dynamic arrays and queues that
   are not here; over fixed dimensions it works, and `break` leaves the whole statement;
 - deferred assertions (`assert #0`, `assert final`) and concurrent ones (`assert property`),
   which are SVA; immediate assertions work;
 - every system function but `$time`, `$signed`, `$unsigned`, `$bits`, `$clog2`, `$isunknown`,
-  `$countones`, `$onehot`, `$onehot0`, `$random`, `$urandom`, `$urandom_range` and `$fopen`,
-  and those slang folds to a constant. Files are written, with `$fdisplay`, `$fwrite`,
-  `$fflush` and `$fclose`, and read only by `$readmemh` and `$readmemb`, into a whole memory of
-  one unpacked dimension: `$fopen` for reading gives 0 with a warning;
+  `$countones`, `$onehot`, `$onehot0`, `$random`, `$urandom`, `$urandom_range`, `$fopen` and
+  `$fgetc`, and those slang folds to a constant. Files are written, with `$fdisplay`, `$fwrite`,
+  `$fflush` and `$fclose`, and read a byte at a time by `$fgetc` and whole by `$readmemh` and
+  `$readmemb`, into a memory of one unpacked dimension;
 - a tolerance range in an `inside` set, such as `[value +/- tolerance]`;
 - an event control on an expression other than a signal or a constant select of one, such
   as `@(a & b)` or `@(posedge clk[i])` with `i` a variable;

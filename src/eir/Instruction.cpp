@@ -57,6 +57,27 @@ bool isTerminator(Opcode opcode) noexcept {
            || suspends(opcode);
 }
 
+bool isStore(Opcode opcode) noexcept {
+    switch (opcode) {
+    case Opcode::Store:
+    case Opcode::StorePart:
+    case Opcode::StoreNonBlocking:
+    case Opcode::StorePartNonBlocking:
+    case Opcode::StoreDelayed:
+    case Opcode::StoreTransport:
+    case Opcode::StoreNonBlockingDelayed:
+    case Opcode::StorePartDelayed:
+    case Opcode::StorePartNonBlockingDelayed:
+    case Opcode::StorePartTransport:
+    case Opcode::Drive:
+    case Opcode::DriveTransport:
+    case Opcode::DrivePart:
+    case Opcode::DrivePartAfter:
+    case Opcode::DriveTransportPart: return true;
+    default: return false;
+    }
+}
+
 bool allowsAliasedDestination(Opcode opcode) noexcept {
     switch (opcode) {
     case Opcode::Move:

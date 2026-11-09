@@ -8,9 +8,11 @@
 #include <cstdint>
 #include <map>
 #include <memory>
+#include <span>
 #include <string>
 #include <string_view>
 #include <utility>
+#include <vector>
 
 namespace enzan {
 class DiagnosticEngine;
@@ -50,6 +52,11 @@ public:
     /// and its number of drivers; a segment resolving with one it does not have is left with an
     /// unanswered call for the caller to have translated and to elaborate again with.
     std::unique_ptr<ElaboratedDesign> elaborate(std::string_view topModuleName,
+                                                const ResolutionAnswers& resolutions = {});
+
+    /// Elaborates several top levels, each a root instance, in the order given; with none, as
+    /// an empty name above chooses.
+    std::unique_ptr<ElaboratedDesign> elaborate(std::span<const std::string> topModuleNames,
                                                 const ResolutionAnswers& resolutions = {});
 
 private:

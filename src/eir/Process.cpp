@@ -47,13 +47,26 @@ bool isSystemFunction(SysTaskKind kind) noexcept {
     case SysTaskKind::URandom:
     case SysTaskKind::URandomRange:
     case SysTaskKind::FileOpen:
+    case SysTaskKind::FileGetCharacter:
     case SysTaskKind::LineWrite:
     case SysTaskKind::LineWriteLine:
     case SysTaskKind::LineReadLine:
     case SysTaskKind::LineReadCharacter:
+    case SysTaskKind::LineReadString:
+    case SysTaskKind::LineLength:
+    case SysTaskKind::LineElement:
+    case SysTaskKind::LineSlice:
     case SysTaskKind::FileEnd:
     case SysTaskKind::LineAppend:
-    case SysTaskKind::FileReadValue: return true;
+    case SysTaskKind::FileReadValue:
+    case SysTaskKind::StringNew:
+    case SysTaskKind::StringBounds:
+    case SysTaskKind::StringSlice:
+    case SysTaskKind::StringFromArray:
+    case SysTaskKind::StringIntoArray:
+    case SysTaskKind::StringCompare:
+    case SysTaskKind::StringRead:
+    case SysTaskKind::StringMark: return true;
     default: return false;
     }
 }
@@ -80,16 +93,31 @@ std::string_view toString(SysTaskKind kind) noexcept {
     case SysTaskKind::ReadMemBinary: return "$readmemb";
     case SysTaskKind::Report: return "report";
     case SysTaskKind::FileOpen: return "$fopen";
+    case SysTaskKind::FileGetCharacter: return "$fgetc";
     case SysTaskKind::LineDeallocate: return "deallocate";
     // VHDL names each by the subprogram the design calls, which several share.
     case SysTaskKind::LineWrite:
     case SysTaskKind::LineAppend:
     case SysTaskKind::FileWriteValue: return "write";
     case SysTaskKind::LineReadCharacter:
+    case SysTaskKind::LineReadString:
+    case SysTaskKind::StringRead:
     case SysTaskKind::FileReadValue: return "read";
     case SysTaskKind::LineWriteLine: return "writeline";
     case SysTaskKind::LineReadLine: return "readline";
+    case SysTaskKind::LineLength: return "'length";
+    case SysTaskKind::LineElement: return "an element of a line";
+    case SysTaskKind::LineSlice: return "a slice of a line";
     case SysTaskKind::FileEnd: return "endfile";
+    case SysTaskKind::StringNew: return "a string of run-time length";
+    case SysTaskKind::StringBounds: return "the bounds of a string";
+    case SysTaskKind::StringSlice: return "a part of a string";
+    case SysTaskKind::StringSplice: return "an assignment to part of a string";
+    case SysTaskKind::StringFromArray: return "a slice of run-time length";
+    case SysTaskKind::StringIntoArray: return "an assignment to a slice of run-time length";
+    case SysTaskKind::StringCompare: return "a comparison of strings";
+    case SysTaskKind::StringMark:
+    case SysTaskKind::StringRelease: return "the scratch of strings";
     }
     return "$unknown";
 }
@@ -112,6 +140,7 @@ std::string_view toString(ProcessKind kind) noexcept {
     case ProcessKind::AlwaysLatch: return "always_latch";
     case ProcessKind::AlwaysFf: return "always_ff";
     case ProcessKind::ContinuousAssign: return "assign";
+    case ProcessKind::Override: return "override";
     }
     return "always";
 }
@@ -133,7 +162,8 @@ bool startsAtTimeZero(const Process& process) noexcept {
         return process.sensitivity.empty();
 
     case ProcessKind::AlwaysFf:
-    case ProcessKind::Final: return false;
+    case ProcessKind::Final:
+    case ProcessKind::Override: return false;
     }
     return false;
 }

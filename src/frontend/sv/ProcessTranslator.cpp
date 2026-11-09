@@ -4,6 +4,7 @@
 
 #include "eir/BitVector.h"
 #include "eir/Instruction.h"
+#include "eir/Udp.h"
 #include "frontend/sv/DeadCode.h"
 #include "frontend/sv/SvIntConversion.h"
 
@@ -27,6 +28,7 @@
 #include "slang/ast/statements/MiscStatements.h"
 #include "slang/ast/symbols/BlockSymbols.h"
 #include "slang/ast/symbols/InstanceSymbols.h"
+#include "slang/ast/symbols/MemberSymbols.h"
 #include "slang/ast/symbols/ParameterSymbols.h"
 #include "slang/ast/symbols/SubroutineSymbols.h"
 #include "slang/ast/symbols/ValueSymbol.h"
@@ -37,6 +39,7 @@
 #include "slang/numeric/Time.h"
 
 #include <algorithm>
+#include <bit>
 #include <cmath>
 #include <cstdint>
 #include <format>
@@ -51,6 +54,18 @@ namespace enzan::frontend::sv {
 namespace ast = slang::ast;
 
 namespace {
+
+/// The value of `symbol` when it names a constant rather than state: a parameter, a specparam or
+/// an enumeration's member. A specparam (IEEE 1800 section 6.20.5) is a constant only SDF
+/// annotation could change, which Enzan does not do, so it is read as a parameter is.
+const slang::ConstantValue* constantOf(const ast::ValueSymbol& symbol) {
+    switch (symbol.kind) {
+    case slang::ast::SymbolKind::Parameter: return &symbol.as<ast::ParameterSymbol>().getValue();
+    case slang::ast::SymbolKind::Specparam: return &symbol.as<ast::SpecparamSymbol>().getValue();
+    case slang::ast::SymbolKind::EnumValue: return &symbol.as<ast::EnumValueSymbol>().getValue();
+    default: return nullptr;
+    }
+}
 
 /// Ten to the `exponent`, which no difference between two time units Enzan counts takes past 64
 /// bits.
@@ -134,7 +149,9 @@ bool hasSideEffects(const ast::Expression& expression) {
                                  std::string_view("$countones"), std::string_view("$onehot"),
                                  std::string_view("$onehot0"),   std::string_view("$isunknown"),
                                  std::string_view("$time"),      std::string_view("$stime"),
-                                 std::string_view("$realtime")};
+                                 std::string_view("$realtime"),  std::string_view("$rtoi"),
+                                 std::string_view("$itor"),      std::string_view("$realtobits"),
+                                 std::string_view("$bitstoreal")};
                              if (!call.isSystemCall()
                                  || std::ranges::find(PureFunctions, call.getSubroutineName())
                                         == PureFunctions.end()) {
@@ -279,7 +296,18 @@ ProcessTranslator::reachOfSelect(const ast::Expression& index, std::int32_t rang
 }
 
 ProcessTranslator::Value ProcessTranslator::coerce(const Value& value, eir::Type type) {
-    if (value.type.bitWidth() == type.bitWidth()) return {.reg = value.reg, .type = type};
+    // Between a real and an integer, a conversion, which rounds a real halfway away from zero
+    // (IEEE 1800 section 6.12.2).
+    if (value.type.isReal() != type.isReal()) {
+        const std::uint32_t result = newRegister(type);
+        eir::Instruction instruction = eir::Instruction::make(
+            eir::Opcode::Convert, eir::Operand::reg(result), eir::Operand::reg(value.reg));
+        instruction.isSigned = value.type.isSigned();
+        emit(instruction);
+        return {.reg = result, .type = type};
+    }
+    if (value.type.isReal() || value.type.bitWidth() == type.bitWidth())
+        return {.reg = value.reg, .type = type};
 
     const std::uint32_t result = newRegister(type);
     eir::Instruction instruction = eir::Instruction::make(
@@ -291,7 +319,7 @@ ProcessTranslator::Value ProcessTranslator::coerce(const Value& value, eir::Type
 }
 
 ProcessTranslator::Value ProcessTranslator::coerceState(const Value& value, eir::Type type) {
-    if (type.isFourState()) return value;
+    if (type.isFourState() || type.isReal()) return value;
 
     // Assigning an unknown value into a two-state object turns X and Z into zero, which
     // IEEE 1800 requires. Emitted unconditionally for a two-state target rather than only
@@ -301,6 +329,30 @@ ProcessTranslator::Value ProcessTranslator::coerceState(const Value& value, eir:
     emit(eir::Instruction::make(eir::Opcode::CoerceTwoState, eir::Operand::reg(result),
                                 eir::Operand::reg(value.reg)));
     return {.reg = result, .type = type};
+}
+
+ProcessTranslator::Value ProcessTranslator::realConstant(double value) {
+    const std::uint32_t result = newRegister(eir::Type::real());
+    emit(eir::Instruction::make(eir::Opcode::LoadConstant, eir::Operand::reg(result),
+                                eir::Operand::constant(addConstant(eir::BitVector::fromUInt64(
+                                    std::bit_cast<std::uint64_t>(value), 64)))));
+    return {.reg = result, .type = eir::Type::real()};
+}
+
+ProcessTranslator::Value ProcessTranslator::truthOf(const Value& value) {
+    if (!value.type.isReal()) return value;
+    const Value zero = realConstant(0.0);
+    const std::uint32_t result = newRegister(eir::Type::logic());
+    emit(eir::Instruction::make(eir::Opcode::NotEqual, eir::Operand::reg(result),
+                                eir::Operand::reg(value.reg), eir::Operand::reg(zero.reg)));
+    return {.reg = result, .type = eir::Type::logic()};
+}
+
+std::optional<ProcessTranslator::Value>
+ProcessTranslator::translateCondition(const ast::Expression& condition) {
+    const std::optional<Value> value = translateExpression(condition);
+    if (!value.has_value()) return std::nullopt;
+    return truthOf(*value);
 }
 
 void ProcessTranslator::setSensitivity(std::vector<eir::SensitivityEntry> sensitivity) {
@@ -323,8 +375,8 @@ ProcessTranslator::foldThroughReals(const ast::Expression& expression, const eir
     return Value{.reg = result, .type = type};
 }
 
-std::optional<ProcessTranslator::Value>
-ProcessTranslator::translateDelay(const ast::Expression& amount) {
+std::optional<std::uint64_t> ProcessTranslator::constantDelay(const ast::Expression& amount,
+                                                              bool& constant) {
     const slang::TimeScale scale = timeScaleHere();
     const std::int8_t unit = timeExponentOf(scale.base);
     const std::int8_t precision = timeExponentOf(scale.precision);
@@ -332,69 +384,109 @@ ProcessTranslator::translateDelay(const ast::Expression& amount) {
 
     ast::EvalContext context(module->evaluationScope());
     const slang::ConstantValue value = amount.eval(context);
-    if (value.isInteger() || value.isReal()) {
-        // The delay as a count of the scope's precision, which the language rounds it to.
-        std::optional<std::uint64_t> counts;
-        bool negative = false;
-        if (value.isInteger()) {
-            const slang::SVInt& integer = value.integer();
-            if (integer.hasUnknown()) {
-                counts = 0;
-            } else if (integer.isSigned() && integer.isNegative()) {
-                negative = true;
-            } else if (const std::optional<std::uint64_t> whole = integer.as<std::uint64_t>()) {
-                counts = scaledUp(*whole, unit - precision);
-            }
-        } else {
-            const double real = value.real();
-            negative = real < 0;
-            const long double inPrecision =
-                std::round(static_cast<long double>(real)
-                           * static_cast<long double>(powerOfTen(unit - precision)));
-            if (!negative && inPrecision < 0x1p64L)
-                counts = static_cast<std::uint64_t>(inPrecision);
-        }
-        if (negative) {
-            module->reportUnsupported(amount.sourceRange.start(), "a negative delay");
-            failed = true;
-            return std::nullopt;
-        }
+    constant = value.isInteger() || value.isReal();
+    if (!constant) return std::nullopt;
 
-        // Then as a count of the run's unit, which a coarser one rounds to the nearest, a half
-        // up, as a simulator run at a coarser precision rounds.
-        std::optional<std::uint64_t> ticks;
-        if (counts.has_value() && precision >= run) {
-            ticks = scaledUp(*counts, precision - run);
-        } else if (counts.has_value()) {
-            const std::uint64_t divisor = powerOfTen(run - precision);
-            const std::uint64_t remainder = *counts % divisor;
-            const std::uint64_t rounded =
-                (*counts / divisor) + (remainder >= divisor - remainder ? 1 : 0);
-            if (remainder != 0) {
-                module->reportRoundedDelay(amount.sourceRange.start(), timeText(*counts, precision),
-                                           timeText(rounded, run));
-            }
-            ticks = rounded;
+    // The delay as a count of the scope's precision, which the language rounds it to.
+    std::optional<std::uint64_t> counts;
+    bool negative = false;
+    if (value.isInteger()) {
+        const slang::SVInt& integer = value.integer();
+        if (integer.hasUnknown()) {
+            counts = 0;
+        } else if (integer.isSigned() && integer.isNegative()) {
+            negative = true;
+        } else if (const std::optional<std::uint64_t> whole = integer.as<std::uint64_t>()) {
+            counts = scaledUp(*whole, unit - precision);
         }
-        if (!ticks.has_value()) {
-            module->reportUnsupported(amount.sourceRange.start(),
-                                      "a delay longer than 64 bits of the run's time unit count");
-            failed = true;
-            return std::nullopt;
-        }
+    } else {
+        const double real = value.real();
+        negative = real < 0;
+        const long double inPrecision =
+            std::round(static_cast<long double>(real)
+                       * static_cast<long double>(powerOfTen(unit - precision)));
+        if (!negative && inPrecision < 0x1p64L) counts = static_cast<std::uint64_t>(inPrecision);
+    }
+    if (negative) {
+        module->reportUnsupported(amount.sourceRange.start(), "a negative delay");
+        failed = true;
+        return std::nullopt;
+    }
 
+    // Then as a count of the run's unit, which a coarser one rounds to the nearest, a half
+    // up, as a simulator run at a coarser precision rounds.
+    std::optional<std::uint64_t> ticks;
+    if (counts.has_value() && precision >= run) {
+        ticks = scaledUp(*counts, precision - run);
+    } else if (counts.has_value()) {
+        const std::uint64_t divisor = powerOfTen(run - precision);
+        const std::uint64_t remainder = *counts % divisor;
+        const std::uint64_t rounded =
+            (*counts / divisor) + (remainder >= divisor - remainder ? 1 : 0);
+        if (remainder != 0) {
+            module->reportRoundedDelay(amount.sourceRange.start(), timeText(*counts, precision),
+                                       timeText(rounded, run));
+        }
+        ticks = rounded;
+    }
+    if (!ticks.has_value()) {
+        module->reportUnsupported(amount.sourceRange.start(),
+                                  "a delay longer than 64 bits of the run's time unit count");
+        failed = true;
+        return std::nullopt;
+    }
+    return ticks;
+}
+
+std::optional<ProcessTranslator::Value>
+ProcessTranslator::translateDelay(const ast::Expression& amount) {
+    bool constant = false;
+    const std::optional<std::uint64_t> ticks = constantDelay(amount, constant);
+    if (constant) {
+        if (!ticks.has_value()) return std::nullopt;
         const eir::Type type = eir::Type::bits(64, false, false);
-        const std::uint32_t constant = addConstant(eir::BitVector::fromUInt64(*ticks, 64));
+        const std::uint32_t index = addConstant(eir::BitVector::fromUInt64(*ticks, 64));
         const std::uint32_t result = newRegister(type);
         emit(eir::Instruction::make(eir::Opcode::LoadConstant, eir::Operand::reg(result),
-                                    eir::Operand::constant(constant)));
+                                    eir::Operand::constant(index)));
         return Value{.reg = result, .type = type};
     }
+
+    const slang::TimeScale scale = timeScaleHere();
+    const std::int8_t unit = timeExponentOf(scale.base);
+    const std::int8_t precision = timeExponentOf(scale.precision);
+    const std::int8_t run = module->runTimeUnit();
 
     // Known only as the process runs: a count of the scope's unit, so a whole number of its
     // precision, scaled to the run's.
     std::optional<Value> counted = translateExpression(amount);
-    if (!counted.has_value() || unit == run) return counted;
+    if (!counted.has_value()) return counted;
+
+    // A real counts the scope's unit too, but in fractions of it: rounded to a whole number of
+    // the scope's precision, which is then the count to scale.
+    if (counted->type.isReal()) {
+        const Value factor = realConstant(static_cast<double>(powerOfTen(unit - precision)));
+        const std::uint32_t scaled = newRegister(eir::Type::real());
+        emit(eir::Instruction::make(eir::Opcode::Multiply, eir::Operand::reg(scaled),
+                                    eir::Operand::reg(counted->reg),
+                                    eir::Operand::reg(factor.reg)));
+        counted = coerce(Value{.reg = scaled, .type = eir::Type::real()},
+                         eir::Type::bits(64, false, false));
+        if (precision > run) {
+            return offsetArithmetic(
+                eir::Opcode::Multiply, *counted,
+                offsetConstant(static_cast<std::int64_t>(powerOfTen(precision - run))));
+        }
+        if (precision < run) {
+            const std::uint64_t divisor = powerOfTen(run - precision);
+            const Value rounded = offsetArithmetic(
+                eir::Opcode::Add, *counted, offsetConstant(static_cast<std::int64_t>(divisor / 2)));
+            return offsetArithmetic(eir::Opcode::Divide, rounded,
+                                    offsetConstant(static_cast<std::int64_t>(divisor)));
+        }
+        return counted;
+    }
+    if (unit == run) return counted;
     const Value wide = coerce(*counted, eir::Type::bits(64, false, counted->type.isFourState()));
     if (unit > run) {
         return offsetArithmetic(eir::Opcode::Multiply, wide,
@@ -468,13 +560,40 @@ ProcessTranslator::eventEntry(const ast::Expression& expression, ast::EdgeKind e
     }
 }
 
+std::optional<eir::SensitivityEntry>
+ProcessTranslator::eventValueEntry(const ast::Expression& expression, ast::EdgeKind edge) {
+    // An event on an expression is a change of its value, or an edge of it (IEEE 1800 section
+    // 9.4.2), so it is an event on an object a continuous assignment keeps at that value, which
+    // changes exactly when the value does. The assignment is the module's, so it cannot read the
+    // process's own variables, and evaluating it again must change nothing.
+    const std::optional<eir::EdgeKind> kind = toEdgeKind(edge);
+    if (!kind.has_value() || hasSideEffects(expression)) return std::nullopt;
+    bool readsLocal = false;
+    expression.visit(ast::makeVisitor([&](auto&, const ast::NamedValueExpression& named) {
+        if (localFor(named.symbol) != nullptr) readsLocal = true;
+    }));
+    if (readsLocal) return std::nullopt;
+
+    const std::optional<std::uint32_t> held = module->addEventValue(expression);
+    if (!held.has_value()) {
+        failed = true;
+        return std::nullopt;
+    }
+    noteRead(*held);
+    return eir::SensitivityEntry{.objectIndex = *held, .edge = *kind};
+}
+
 eir::Process ProcessTranslator::take() {
     std::ranges::sort(reads);
     reads.erase(std::ranges::unique(reads).begin(), reads.end());
     eir::normaliseWriteSet(writes);
 
+    std::ranges::sort(overrides);
+    overrides.erase(std::ranges::unique(overrides).begin(), overrides.end());
+
     process.readSet = reads;
     process.writeSet = writes;
+    process.overrideSet = overrides;
     return std::move(process);
 }
 
@@ -524,6 +643,19 @@ bool ProcessTranslator::translateObjectInto(const ast::Expression& target,
     return !failed;
 }
 
+bool ProcessTranslator::translateOverride(std::uint32_t objectIndex, const ast::Expression& value) {
+    const std::optional<Value> translated = translateExpression(value);
+    if (!translated.has_value()) return false;
+
+    const eir::Type objectType = module->definition().objects[objectIndex].type;
+    const Value stored = coerceState(coerce(*translated, objectType), objectType);
+    overrides.push_back(objectIndex);
+    emit(eir::Instruction::make(eir::Opcode::Override, {}, eir::Operand::object(objectIndex),
+                                eir::Operand::reg(stored.reg)));
+    emit(eir::Instruction::make(eir::Opcode::Return));
+    return !failed;
+}
+
 void ProcessTranslator::inferSensitivityFromReads() {
     std::ranges::sort(reads);
     reads.erase(std::ranges::unique(reads).begin(), reads.end());
@@ -537,33 +669,614 @@ void ProcessTranslator::inferSensitivityFromReads() {
     }
 }
 
-bool ProcessTranslator::translateContinuousAssignment(const ast::Expression& assignment,
-                                                      const ast::TimingControl* delay) {
-    if (delay != nullptr) {
-        // A single delay; a rise, fall and turn-off triple delays each transition by its own
-        // amount, which a store with one delay cannot do.
-        const ast::Expression* amount = nullptr;
-        if (delay->kind == ast::TimingControlKind::Delay) {
-            amount = &delay->as<ast::DelayControl>().expr;
-        } else if (delay->kind == ast::TimingControlKind::Delay3
-                   && delay->as<ast::Delay3Control>().expr2 == nullptr) {
-            amount = &delay->as<ast::Delay3Control>().expr1;
-        }
-        if (amount == nullptr) {
-            module->reportUnsupported(delay->sourceRange.start(),
-                                      "separate rise, fall and turn-off delays");
-            return false;
-        }
-        const std::optional<Value> ticks = translateDelay(*amount);
+bool ProcessTranslator::setContinuousDelay(const ast::TimingControl& delay) {
+    // One delay, or a rise, fall and turn-off triple, which delays each value by its own.
+    std::array<const ast::Expression*, 3> amounts{};
+    if (delay.kind == ast::TimingControlKind::Delay) {
+        amounts[0] = &delay.as<ast::DelayControl>().expr;
+    } else if (delay.kind == ast::TimingControlKind::Delay3) {
+        const auto& triple = delay.as<ast::Delay3Control>();
+        amounts = {&triple.expr1, triple.expr2, triple.expr3};
+    }
+    if (amounts[0] == nullptr) {
+        module->reportUnsupported(delay.sourceRange.start(), "this kind of delay");
+        return false;
+    }
+    if (amounts[1] == nullptr) {
+        const std::optional<Value> ticks = translateDelay(*amounts[0]);
         if (!ticks.has_value()) return false;
         storeDelay = ticks->reg;
+        return true;
     }
+
+    std::array<std::uint64_t, 3> ticks{};
+    for (std::size_t index = 0; index < 3; ++index) {
+        if (amounts[index] == nullptr) continue;
+        bool constant = false;
+        const std::optional<std::uint64_t> counted = constantDelay(*amounts[index], constant);
+        if (!constant) {
+            module->reportUnsupported(amounts[index]->sourceRange.start(),
+                                      "separate rise, fall and turn-off delays known only as the "
+                                      "design runs");
+            failed = true;
+        }
+        if (!counted.has_value()) return false;
+        ticks[index] = *counted;
+    }
+    // Two give the turn-off delay as the shorter of them.
+    if (amounts[2] == nullptr) ticks[2] = std::min(ticks[0], ticks[1]);
+
+    const std::uint32_t rise = newRegister(eir::Type::bits(64, false, false));
+    emit(eir::Instruction::make(
+        eir::Opcode::LoadConstant, eir::Operand::reg(rise),
+        eir::Operand::constant(addConstant(eir::BitVector::fromUInt64(ticks[0], 64)))));
+    storeDelay = rise;
+    if (ticks[1] != ticks[0] || ticks[2] != ticks[0]) transitionDelays = ticks;
+    return true;
+}
+
+std::optional<std::uint32_t> ProcessTranslator::storeDelayFor(std::uint32_t stored,
+                                                              std::uint32_t width,
+                                                              const ast::Expression* target) {
+    if (!transitionDelays.has_value()) return storeDelay;
+    if (width != 1) {
+        module->reportUnsupported(target != nullptr ? target->sourceRange.start()
+                                                    : slang::SourceLocation(),
+                                  "separate rise, fall and turn-off delays on a vector");
+        failed = true;
+        return std::nullopt;
+    }
+    const eir::Type time = eir::Type::bits(64, false, false);
+    const auto ticks = [&](std::uint64_t value) {
+        const std::uint32_t result = newRegister(time);
+        emit(eir::Instruction::make(
+            eir::Opcode::LoadConstant, eir::Operand::reg(result),
+            eir::Operand::constant(addConstant(eir::BitVector::fromUInt64(value, 64)))));
+        return result;
+    };
+    const auto is = [&](eir::Logic level) {
+        const std::uint32_t result = newRegister(eir::Type::logic());
+        emit(eir::Instruction::make(eir::Opcode::CaseEqual, eir::Operand::reg(result),
+                                    eir::Operand::reg(stored),
+                                    eir::Operand::reg(constantRegister(level))));
+        return result;
+    };
+    const auto select = [&](std::uint32_t condition, std::uint32_t whenTrue,
+                            std::uint32_t whenFalse) {
+        const std::uint32_t result = newRegister(time);
+        emit(eir::Instruction::make(eir::Opcode::Conditional, eir::Operand::reg(result),
+                                    eir::Operand::reg(condition), eir::Operand::reg(whenTrue),
+                                    eir::Operand::reg(whenFalse)));
+        return result;
+    };
+    const auto [rise, fall, turnOff] = *transitionDelays;
+    const std::uint32_t toUnknown = ticks(std::min({rise, fall, turnOff}));
+    return select(is(eir::Logic::One), ticks(rise),
+                  select(is(eir::Logic::Zero), ticks(fall),
+                         select(is(eir::Logic::HighZ), ticks(turnOff), toUnknown)));
+}
+
+bool ProcessTranslator::translateContinuousAssignment(const ast::Expression& assignment,
+                                                      const ast::TimingControl* delay) {
+    if (delay != nullptr && !setContinuousDelay(*delay)) return false;
 
     if (!translateExpression(assignment).has_value() && failed) return false;
 
     if (!currentBlockTerminated()) emit(eir::Instruction::make(eir::Opcode::Return));
 
     return !failed;
+}
+
+bool ProcessTranslator::translateGate(const ast::PrimitiveInstanceSymbol& gate) {
+    const ast::TimingControl* delay = gate.getDelay();
+    if (delay != nullptr && !setContinuousDelay(*delay)) return false;
+
+    // slang binds an output as the target of an assignment it builds, and an input converted to
+    // one bit of `logic`; an unconnected terminal is null.
+    std::vector<const ast::Expression*> terminals;
+    for (const ast::Expression* connection : gate.getPortConnections()) {
+        if (connection != nullptr && connection->kind == ast::ExpressionKind::Assignment)
+            connection = &connection->as<ast::AssignmentExpression>().left();
+        terminals.push_back(connection);
+    }
+    const auto input = [&](const ast::Expression* terminal) -> std::optional<Value> {
+        if (terminal == nullptr)
+            return Value{.reg = constantRegister(eir::Logic::HighZ), .type = eir::Type::logic()};
+        const std::optional<Value> value = translateExpression(*terminal);
+        if (!value.has_value()) return std::nullopt;
+        return coerce(*value, eir::Type::logic());
+    };
+    const auto apply = [&](eir::Opcode opcode, std::uint32_t left,
+                           std::optional<std::uint32_t> right) {
+        const std::uint32_t result = newRegister(eir::Type::logic());
+        if (right.has_value()) {
+            emit(eir::Instruction::make(opcode, eir::Operand::reg(result), eir::Operand::reg(left),
+                                        eir::Operand::reg(*right)));
+        } else {
+            emit(
+                eir::Instruction::make(opcode, eir::Operand::reg(result), eir::Operand::reg(left)));
+        }
+        return result;
+    };
+    // What a buffer drives of its input: the input, with `z` read as `x`.
+    const auto buffered = [&](std::uint32_t value) {
+        return apply(eir::Opcode::Xor, value, constantRegister(eir::Logic::Zero));
+    };
+
+    const std::string_view name = gate.primitiveType.name;
+    std::vector<const ast::Expression*> outputs;
+    std::uint32_t driven = 0;
+    if (name == "and" || name == "or" || name == "xor" || name == "nand" || name == "nor"
+        || name == "xnor") {
+        eir::Opcode opcode = eir::Opcode::Xor;
+        if (name == "and" || name == "nand") opcode = eir::Opcode::And;
+        if (name == "or" || name == "nor") opcode = eir::Opcode::Or;
+        outputs = {terminals.front()};
+        for (std::size_t index = 1; index < terminals.size(); ++index) {
+            const std::optional<Value> value = input(terminals[index]);
+            if (!value.has_value()) return false;
+            driven = index == 1 ? buffered(value->reg) : apply(opcode, driven, value->reg);
+        }
+        if (name == "nand" || name == "nor" || name == "xnor")
+            driven = apply(eir::Opcode::Not, driven, std::nullopt);
+    } else if (name == "buf" || name == "not") {
+        outputs.assign(terminals.begin(), terminals.end() - 1);
+        const std::optional<Value> value = input(terminals.back());
+        if (!value.has_value()) return false;
+        driven = name == "buf" ? buffered(value->reg)
+                               : apply(eir::Opcode::Not, value->reg, std::nullopt);
+    } else if (name == "bufif0" || name == "bufif1" || name == "notif0" || name == "notif1") {
+        outputs = {terminals[0]};
+        const std::optional<Value> data = input(terminals[1]);
+        if (!data.has_value()) return false;
+        const std::optional<Value> control = input(terminals[2]);
+        if (!control.has_value()) return false;
+        const std::uint32_t passed = name.starts_with("buf")
+                                         ? buffered(data->reg)
+                                         : apply(eir::Opcode::Not, data->reg, std::nullopt);
+        const std::uint32_t released = constantRegister(eir::Logic::HighZ);
+        const bool onOne = name.ends_with('1');
+        driven = newRegister(eir::Type::logic());
+        emit(eir::Instruction::make(eir::Opcode::Conditional, eir::Operand::reg(driven),
+                                    eir::Operand::reg(control->reg),
+                                    eir::Operand::reg(onOne ? passed : released),
+                                    eir::Operand::reg(onOne ? released : passed)));
+    } else if (name == "pullup" || name == "pulldown") {
+        outputs = terminals;
+        driven = constantRegister(name == "pullup" ? eir::Logic::One : eir::Logic::Zero);
+    } else if (name == "nmos" || name == "pmos" || name == "cmos") {
+        // A switch passes its input, `z` included, while its control holds it on, and drives
+        // `z` while it holds it off. An unknown control merges the two, which is `z` for a `z`
+        // input and `x` for any other: the standard's `L` and `H` are no values four states hold.
+        // `cmos` is on while either half is, its n-control 1 or its p-control 0.
+        outputs = {terminals[0]};
+        const std::optional<Value> data = input(terminals[1]);
+        if (!data.has_value()) return false;
+        const std::optional<Value> control = input(terminals[2]);
+        if (!control.has_value()) return false;
+        std::uint32_t on = control->reg;
+        if (name == "cmos") {
+            const std::optional<Value> pControl = input(terminals[3]);
+            if (!pControl.has_value()) return false;
+            on = apply(eir::Opcode::Or, on, apply(eir::Opcode::Not, pControl->reg, std::nullopt));
+        }
+        const std::uint32_t released = constantRegister(eir::Logic::HighZ);
+        const bool onOne = name != "pmos";
+        driven = newRegister(eir::Type::logic());
+        emit(eir::Instruction::make(eir::Opcode::Conditional, eir::Operand::reg(driven),
+                                    eir::Operand::reg(on),
+                                    eir::Operand::reg(onOne ? data->reg : released),
+                                    eir::Operand::reg(onOne ? released : data->reg)));
+    } else {
+        module->reportUnsupported(gate.location, std::format("the switch '{}'", name));
+        return false;
+    }
+
+    for (const ast::Expression* output : outputs) {
+        if (output == nullptr) continue;
+        if (!assignTo(*output, Value{.reg = driven, .type = eir::Type::logic()}, false))
+            return false;
+    }
+    if (!currentBlockTerminated()) emit(eir::Instruction::make(eir::Opcode::Return));
+    return !failed;
+}
+
+bool ProcessTranslator::translatePrimitive(const ast::PrimitiveInstanceSymbol& instance,
+                                           std::optional<std::uint32_t> held) {
+    const ast::PrimitiveSymbol& primitive = instance.primitiveType;
+    const ast::TimingControl* delay = instance.getDelay();
+    if (delay != nullptr && !setContinuousDelay(*delay)) return false;
+
+    std::vector<const ast::Expression*> terminals;
+    for (const ast::Expression* connection : instance.getPortConnections()) {
+        if (connection != nullptr && connection->kind == ast::ExpressionKind::Assignment)
+            connection = &connection->as<ast::AssignmentExpression>().left();
+        terminals.push_back(connection);
+    }
+    const auto inputs = static_cast<std::uint32_t>(terminals.size() - 1);
+    if (terminals.size() < 2 || inputs > eir::udp::MaxInputs) {
+        module->reportUnsupported(
+            instance.location,
+            std::format("the user-defined primitive '{}', of {} inputs, more than {}",
+                        primitive.name, inputs, eir::udp::MaxInputs));
+        failed = true;
+        return false;
+    }
+
+    // slang gives each row's input fields as one string, an edge in parentheses taking four
+    // characters and every other symbol one.
+    std::vector<eir::udp::Row> rows;
+    rows.reserve(primitive.table.size());
+    for (const ast::PrimitiveSymbol::TableEntry& entry : primitive.table) {
+        eir::udp::Row row;
+        for (std::size_t at = 0; at < entry.inputs.size();) {
+            const std::size_t length = entry.inputs[at] == '(' ? 4 : 1;
+            const std::optional<eir::udp::Field> field =
+                eir::udp::fieldOf(entry.inputs.substr(at, length));
+            if (!field.has_value()) {
+                module->reportUnsupported(instance.location,
+                                          std::format("the table symbol '{}' of '{}'",
+                                                      entry.inputs.substr(at, length),
+                                                      primitive.name));
+                failed = true;
+                return false;
+            }
+            row.inputs.push_back(*field);
+            at += length;
+        }
+        const std::optional<eir::udp::Field> state =
+            held.has_value() ? eir::udp::fieldOf(std::string_view(&entry.state, 1))
+                             : eir::udp::anyState();
+        const std::optional<eir::udp::Output> output = eir::udp::outputOf(entry.output);
+        if (!state.has_value() || !output.has_value() || row.inputs.size() != inputs) {
+            module->reportUnsupported(instance.location,
+                                      std::format("a row of the table of '{}'", primitive.name));
+            failed = true;
+            return false;
+        }
+        row.state = *state;
+        row.output = *output;
+        rows.push_back(std::move(row));
+    }
+    const std::uint32_t table = addConstant(eir::udp::encode(rows, inputs));
+
+    // The inputs, the first the most significant bit, as a concatenation of them would be.
+    const eir::Type inputsType = eir::Type::bits(inputs, false, true);
+    const auto splice = [&](std::uint32_t into, std::uint32_t value, std::uint32_t offset) {
+        const std::uint32_t at = newRegister(eir::Type::bits(32, false, false));
+        emit(eir::Instruction::make(
+            eir::Opcode::LoadConstant, eir::Operand::reg(at),
+            eir::Operand::constant(addConstant(eir::BitVector::fromUInt64(offset, 32)))));
+        emit(eir::Instruction::make(eir::Opcode::SplicePart, eir::Operand::reg(into),
+                                    eir::Operand::reg(value), eir::Operand::reg(at)));
+    };
+    const auto zeroOf = [&](eir::Type type) {
+        const std::uint32_t result = newRegister(type);
+        emit(eir::Instruction::make(eir::Opcode::LoadConstant, eir::Operand::reg(result),
+                                    eir::Operand::constant(addConstant(eir::BitVector::filled(
+                                        type.bitWidth(), eir::Logic::Zero)))));
+        return result;
+    };
+    const std::uint32_t packed = zeroOf(inputsType);
+    for (std::uint32_t input = 0; input < inputs; ++input) {
+        std::uint32_t value = constantRegister(eir::Logic::HighZ);
+        if (const ast::Expression* terminal = terminals[input + 1]) {
+            const std::optional<Value> translated = translateExpression(*terminal);
+            if (!translated.has_value()) return false;
+            value = coerce(*translated, eir::Type::logic()).reg;
+        }
+        splice(packed, value, inputs - 1 - input);
+    }
+
+    const std::uint32_t output = newRegister(eir::Type::logic());
+    if (!held.has_value()) {
+        emit(eir::Instruction::make(eir::Opcode::UdpCombinational, eir::Operand::reg(output),
+                                    eir::Operand::reg(packed), eir::Operand::constant(table)));
+    } else {
+        const eir::Type heldType = eir::Type::bits(inputs + 1, false, true);
+        const std::uint32_t before = newRegister(heldType);
+        noteRead(*held);
+        emit(eir::Instruction::make(eir::Opcode::ReadObject, eir::Operand::reg(before),
+                                    eir::Operand::object(*held)));
+        emit(eir::Instruction::make(eir::Opcode::UdpSequential, eir::Operand::reg(output),
+                                    eir::Operand::reg(packed), eir::Operand::reg(before),
+                                    eir::Operand::constant(table)));
+
+        // What it has now taken, at once, whatever delay its output has.
+        const std::uint32_t after = zeroOf(heldType);
+        splice(after, packed, 1);
+        splice(after, output, 0);
+        noteWholeWrite(*held);
+        emit(eir::Instruction::make(eir::Opcode::Store, {}, eir::Operand::object(*held),
+                                    eir::Operand::reg(after)));
+    }
+
+    if (terminals.front() != nullptr
+        && !assignTo(*terminals.front(), Value{.reg = output, .type = eir::Type::logic()}, false))
+        return false;
+    if (!currentBlockTerminated()) emit(eir::Instruction::make(eir::Opcode::Return));
+    return !failed;
+}
+
+bool ProcessTranslator::translateModulePaths(const OutputPaths& paths) {
+    const eir::Type time = eir::Type::bits(64, false, false);
+    const eir::Type bit = eir::Type::logic();
+    const std::uint32_t outputWidth = module->definition().objects[paths.output].type.bitWidth();
+
+    const auto constant = [&](const eir::BitVector& value, eir::Type type) {
+        const std::uint32_t result = newRegister(type);
+        emit(eir::Instruction::make(eir::Opcode::LoadConstant, eir::Operand::reg(result),
+                                    eir::Operand::constant(addConstant(value))));
+        return result;
+    };
+    const auto timeConstant = [&](std::uint64_t value) {
+        return constant(eir::BitVector::fromUInt64(value, 64), time);
+    };
+    const auto apply = [&](eir::Opcode opcode, eir::Type type, std::uint32_t a, std::uint32_t b) {
+        const std::uint32_t result = newRegister(type);
+        emit(eir::Instruction::make(opcode, eir::Operand::reg(result), eir::Operand::reg(a),
+                                    eir::Operand::reg(b)));
+        return result;
+    };
+    const auto select = [&](std::uint32_t condition, std::uint32_t whenTrue,
+                            std::uint32_t whenFalse, eir::Type type) {
+        const std::uint32_t result = newRegister(type);
+        emit(eir::Instruction::make(eir::Opcode::Conditional, eir::Operand::reg(result),
+                                    eir::Operand::reg(condition), eir::Operand::reg(whenTrue),
+                                    eir::Operand::reg(whenFalse)));
+        return result;
+    };
+    // A window of an object, at a bit offset known now.
+    const auto window = [&](std::uint32_t objectIndex, std::uint32_t lowBit, std::uint32_t width) {
+        noteRead(objectIndex);
+        const eir::Type type = eir::Type::bits(width, false, true);
+        const std::uint32_t result = newRegister(type);
+        if (lowBit == 0 && width == module->definition().objects[objectIndex].type.bitWidth()) {
+            emit(eir::Instruction::make(eir::Opcode::ReadObject, eir::Operand::reg(result),
+                                        eir::Operand::object(objectIndex)));
+            return result;
+        }
+        const std::uint32_t at =
+            constant(eir::BitVector::fromUInt64(lowBit, 32), eir::Type::bits(32, false, false));
+        emit(eir::Instruction::make(eir::Opcode::ReadObjectPart, eir::Operand::reg(result),
+                                    eir::Operand::object(objectIndex), eir::Operand::reg(at)));
+        return result;
+    };
+    const auto splice = [&](std::uint32_t into, std::uint32_t value, std::uint32_t offset) {
+        const std::uint32_t at =
+            constant(eir::BitVector::fromUInt64(offset, 32), eir::Type::bits(32, false, false));
+        emit(eir::Instruction::make(eir::Opcode::SplicePart, eir::Operand::reg(into),
+                                    eir::Operand::reg(value), eir::Operand::reg(at)));
+    };
+    const auto is = [&](std::uint32_t value, eir::Logic level) {
+        eir::BitVector expected(1);
+        expected.mutableRef().set(0, level);
+        return apply(eir::Opcode::CaseEqual, bit, value, constant(expected, bit));
+    };
+    const auto minimum = [&](std::uint32_t a, std::uint32_t b) {
+        return select(apply(eir::Opcode::LessThan, bit, a, b), a, b, time);
+    };
+
+    // Bits no path reaches, beside bits that paths do, take what the body gives them at once.
+    if (paths.sources.empty()) {
+        const std::uint32_t value = window(paths.internal, paths.lowBit, paths.width);
+        if (paths.lowBit == 0 && paths.width == outputWidth) {
+            noteWholeWrite(paths.output);
+            emit(eir::Instruction::make(eir::Opcode::Store, {}, eir::Operand::object(paths.output),
+                                        eir::Operand::reg(value)));
+        } else {
+            noteWrite(paths.output, paths.lowBit, paths.width);
+            const std::uint32_t at = constant(eir::BitVector::fromUInt64(paths.lowBit, 32),
+                                              eir::Type::bits(32, false, false));
+            emit(eir::Instruction::make(eir::Opcode::StorePart, {},
+                                        eir::Operand::object(paths.output),
+                                        eir::Operand::reg(value), eir::Operand::reg(at)));
+        }
+        emit(eir::Instruction::make(eir::Opcode::Return));
+        return true;
+    }
+
+    // Each source's change, now, against its value as last taken: the time it last changed is
+    // now when it changed as its edge asks, and is kept otherwise.
+    const std::uint32_t now = newRegister(time);
+    emit(eir::Instruction::make(eir::Opcode::ReadTime, eir::Operand::reg(now)));
+    std::uint32_t seenWidth = 0;
+    for (const OutputPaths::Source& source : paths.sources) seenWidth += source.width;
+    const std::uint32_t seen = constant(eir::BitVector::filled(seenWidth, eir::Logic::Zero),
+                                        eir::Type::bits(seenWidth, false, true));
+    const auto timesWidth = static_cast<std::uint32_t>(64 * paths.sources.size());
+    const std::uint32_t times = constant(eir::BitVector::filled(timesWidth, eir::Logic::Zero),
+                                         eir::Type::bits(timesWidth, false, false));
+    std::vector<std::uint32_t> changedAt;
+    std::uint32_t offset = 0;
+    for (std::size_t index = 0; index < paths.sources.size(); ++index) {
+        const OutputPaths::Source& source = paths.sources[index];
+        const std::uint32_t present = window(source.objectIndex, source.lowBit, source.width);
+        const std::uint32_t before = window(paths.sourcesSeen, offset, source.width);
+        std::uint32_t counted = apply(eir::Opcode::CaseNotEqual, bit, present, before);
+        if (source.edge != ast::EdgeKind::None) {
+            // An edge of a vector is one of its least significant bit (section 9.4.2).
+            const auto lowest = [&](std::uint32_t value) {
+                if (source.width == 1) return value;
+                const std::uint32_t result = newRegister(bit);
+                emit(eir::Instruction::make(eir::Opcode::Truncate, eir::Operand::reg(result),
+                                            eir::Operand::reg(value)));
+                return result;
+            };
+            const std::uint32_t was = lowest(before);
+            const std::uint32_t becomes = lowest(present);
+            const std::uint32_t moved = apply(eir::Opcode::CaseNotEqual, bit, becomes, was);
+            const auto edgeTo = [&](eir::Logic from, eir::Logic to) {
+                // From `from` to anything else, or from anything else to `to`.
+                const std::uint32_t leaves =
+                    apply(eir::Opcode::LogicalAnd, bit, is(was, from), moved);
+                const std::uint32_t arrives =
+                    apply(eir::Opcode::LogicalAnd, bit, is(becomes, to), moved);
+                return apply(eir::Opcode::LogicalOr, bit, leaves, arrives);
+            };
+            const std::uint32_t rises = edgeTo(eir::Logic::Zero, eir::Logic::One);
+            const std::uint32_t falls = edgeTo(eir::Logic::One, eir::Logic::Zero);
+            switch (source.edge) {
+            case ast::EdgeKind::PosEdge: counted = rises; break;
+            case ast::EdgeKind::NegEdge: counted = falls; break;
+            case ast::EdgeKind::BothEdges:
+            case ast::EdgeKind::None:
+                counted = apply(eir::Opcode::LogicalOr, bit, rises, falls);
+                break;
+            }
+        }
+        const std::uint32_t previous =
+            window(paths.changedAt, static_cast<std::uint32_t>(64 * index), 64);
+        const std::uint32_t last = select(counted, now, previous, time);
+        splice(seen, present, offset);
+        splice(times, last, static_cast<std::uint32_t>(64 * index));
+        changedAt.push_back(last);
+        offset += source.width;
+    }
+    noteWholeWrite(paths.sourcesSeen);
+    emit(eir::Instruction::make(eir::Opcode::Store, {}, eir::Operand::object(paths.sourcesSeen),
+                                eir::Operand::reg(seen)));
+    noteWholeWrite(paths.changedAt);
+    emit(eir::Instruction::make(eir::Opcode::Store, {}, eir::Operand::object(paths.changedAt),
+                                eir::Operand::reg(times)));
+
+    // Only a change of what the body gives the output is scheduled: an input changing alone
+    // must not put back a change still on its way.
+    const std::uint32_t value = window(paths.internal, paths.lowBit, paths.width);
+    const std::uint32_t old = window(paths.scheduled, 0, paths.width);
+    const std::uint32_t schedule = newBlock("path-schedule");
+    const std::uint32_t done = newBlock("path-done");
+    emit(
+        eir::Instruction::make(eir::Opcode::BranchIf, {},
+                               eir::Operand::reg(apply(eir::Opcode::CaseNotEqual, bit, value, old)),
+                               eir::Operand::block(schedule), eir::Operand::block(done)));
+    selectBlock(schedule);
+    noteWholeWrite(paths.scheduled);
+    emit(eir::Instruction::make(eir::Opcode::Store, {}, eir::Operand::object(paths.scheduled),
+                                eir::Operand::reg(value)));
+
+    // Each path's delay for the transition the output makes (section 30.5.2): the six the
+    // standard names, and the six to and from x that it derives from them.
+    std::uint32_t best = timeConstant(0);
+    std::uint32_t delay = timeConstant(0);
+    std::uint32_t found = constantRegister(eir::Logic::Zero);
+    for (const OutputPaths::Path& path : paths.paths) {
+        std::array<std::uint64_t, 6> six{};
+        for (std::size_t index = 0; index < six.size(); ++index) {
+            bool isConstant = false;
+            const std::optional<std::uint64_t> ticks =
+                constantDelay(*path.delays[index], isConstant);
+            if (!isConstant || !ticks.has_value()) {
+                if (!failed) {
+                    module->reportUnsupported(path.delays[index]->sourceRange.start(),
+                                              "a module path delay that is not a constant");
+                    failed = true;
+                }
+                return false;
+            }
+            six[index] = *ticks;
+        }
+        const auto [d01, d10, d0z, dz1, d1z, dz0] = six;
+        // From, to, delay: 0, 1, z and x as they are written.
+        const std::array<std::tuple<eir::Logic, eir::Logic, std::uint64_t>, 12> transitions{{
+            {eir::Logic::Zero, eir::Logic::One, d01},
+            {eir::Logic::One, eir::Logic::Zero, d10},
+            {eir::Logic::Zero, eir::Logic::HighZ, d0z},
+            {eir::Logic::HighZ, eir::Logic::One, dz1},
+            {eir::Logic::One, eir::Logic::HighZ, d1z},
+            {eir::Logic::HighZ, eir::Logic::Zero, dz0},
+            {eir::Logic::Zero, eir::Logic::Unknown, std::min(d01, d0z)},
+            {eir::Logic::One, eir::Logic::Unknown, std::min(d10, d1z)},
+            {eir::Logic::HighZ, eir::Logic::Unknown, std::min(dz1, dz0)},
+            {eir::Logic::Unknown, eir::Logic::Zero, std::max(d10, dz0)},
+            {eir::Logic::Unknown, eir::Logic::One, std::max(d01, dz1)},
+            {eir::Logic::Unknown, eir::Logic::HighZ, std::max(d1z, d0z)},
+        }};
+        const bool uniform = std::ranges::all_of(
+            transitions, [&](const auto& transition) { return std::get<2>(transition) == d01; });
+        std::uint32_t pathDelay = timeConstant(d01);
+        if (!uniform) {
+            // A vector's bits may make different transitions at once, which one delay of the
+            // bits cannot follow.
+            if (paths.width != 1) {
+                module->reportUnsupported(
+                    path.delays[0]->sourceRange.start(),
+                    std::format("delays that differ by transition on a module path to the vector "
+                                "'{}'",
+                                module->definition().objects[paths.output].name));
+                failed = true;
+                return false;
+            }
+            for (const auto& [from, to, ticks] : transitions) {
+                const std::uint32_t taken =
+                    apply(eir::Opcode::LogicalAnd, bit, is(old, from), is(value, to));
+                pathDelay = select(taken, timeConstant(ticks), pathDelay, time);
+            }
+        }
+
+        std::uint32_t enabled = constantRegister(eir::Logic::One);
+        if (path.condition != nullptr) {
+            const std::optional<Value> condition = translateCondition(*path.condition);
+            if (!condition.has_value()) return false;
+            std::uint32_t truth = condition->reg;
+            if (condition->type.bitWidth() != 1) {
+                truth = newRegister(bit);
+                emit(eir::Instruction::make(eir::Opcode::ReduceOr, eir::Operand::reg(truth),
+                                            eir::Operand::reg(condition->reg)));
+            }
+            enabled = is(truth, eir::Logic::One);
+        }
+
+        // The most recent change decides, and of changes at one time, the shortest delay.
+        const std::uint32_t when = changedAt[path.source];
+        const std::uint32_t newer =
+            apply(eir::Opcode::LogicalAnd, bit, enabled,
+                  apply(eir::Opcode::LogicalOr, bit, is(found, eir::Logic::Zero),
+                        apply(eir::Opcode::LessThan, bit, best, when)));
+        const std::uint32_t same =
+            apply(eir::Opcode::LogicalAnd, bit, apply(eir::Opcode::LogicalAnd, bit, enabled, found),
+                  apply(eir::Opcode::Equal, bit, when, best));
+        delay =
+            select(newer, pathDelay, select(same, minimum(pathDelay, delay), delay, time), time);
+        best = select(newer, when, best, time);
+        found = apply(eir::Opcode::LogicalOr, bit, found, enabled);
+    }
+
+    // No earlier than now: a change that comes after its path's delay has run out is the
+    // larger of the two delays, as the standard has it of a path and the logic behind it.
+    const std::uint32_t until = apply(eir::Opcode::Add, time, best, delay);
+    const std::uint32_t later =
+        apply(eir::Opcode::LogicalAnd, bit, found, apply(eir::Opcode::LessThan, bit, now, until));
+    const std::uint32_t wait =
+        select(later, apply(eir::Opcode::Subtract, time, until, now), timeConstant(0), time);
+    if (paths.lowBit == 0 && paths.width == outputWidth) {
+        noteWholeWrite(paths.output);
+        emit(eir::Instruction::make(
+            paths.transport ? eir::Opcode::StoreTransport : eir::Opcode::StoreDelayed, {},
+            eir::Operand::object(paths.output), eir::Operand::reg(value), eir::Operand::reg(wait)));
+    } else {
+        // The offset in the low 64 bits, the delay in the 64 above.
+        noteWrite(paths.output, paths.lowBit, paths.width);
+        const std::uint32_t both = constant(eir::BitVector::filled(128, eir::Logic::Zero),
+                                            eir::Type::bits(128, false, false));
+        splice(both, timeConstant(paths.lowBit), 0);
+        splice(both, wait, 64);
+        emit(eir::Instruction::make(
+            paths.transport ? eir::Opcode::StorePartTransport : eir::Opcode::StorePartDelayed, {},
+            eir::Operand::object(paths.output), eir::Operand::reg(value), eir::Operand::reg(both)));
+    }
+    emit(eir::Instruction::make(eir::Opcode::Jump, {}, eir::Operand::block(done)));
+    selectBlock(done);
+    emit(eir::Instruction::make(eir::Opcode::Return));
+    return !failed;
+}
+
+std::uint32_t ProcessTranslator::constantRegister(eir::Logic value) {
+    const std::uint32_t result = newRegister(eir::Type::logic());
+    emit(eir::Instruction::make(
+        eir::Opcode::LoadConstant, eir::Operand::reg(result),
+        eir::Operand::constant(addConstant(eir::BitVector::filled(1, value)))));
+    return result;
 }
 
 // ---------------------------------------------------------------------------
@@ -624,6 +1337,12 @@ bool ProcessTranslator::translateStatement(const ast::Statement& statement) {
 
     case ast::StatementKind::ImmediateAssertion: return translateImmediateAssertion(statement);
 
+    case ast::StatementKind::ProceduralAssign: return translateProceduralAssign(statement);
+
+    case ast::StatementKind::ProceduralDeassign: return translateProceduralDeassign(statement);
+
+    case ast::StatementKind::EventTrigger: return translateEventTrigger(statement);
+
     case ast::StatementKind::List:
     case ast::StatementKind::Block: return translateBlock(statement);
 
@@ -651,6 +1370,7 @@ bool ProcessTranslator::translateStatement(const ast::Statement& statement) {
     case ast::StatementKind::ForeachLoop: return translateForeachLoop(statement);
     case ast::StatementKind::Break: return translateLoopJump(statement, true);
     case ast::StatementKind::Continue: return translateLoopJump(statement, false);
+    case ast::StatementKind::Disable: return translateDisable(statement);
 
     // slang marks a statement invalid when anything in it is, a dead branch included. One in
     // a design that reached translation holds only errors dead code excused, so what it wraps
@@ -678,7 +1398,7 @@ bool ProcessTranslator::translateWait(const ast::Statement& statement) {
     // What the condition reads is what can make it true, so those are what it waits on.
     selectBlock(test);
     const std::size_t readsBefore = reads.size();
-    const std::optional<Value> condition = translateExpression(wait.cond);
+    const std::optional<Value> condition = translateCondition(wait.cond);
     if (!condition.has_value()) return false;
     std::vector<std::uint32_t> watched(reads.begin() + static_cast<std::ptrdiff_t>(readsBefore),
                                        reads.end());
@@ -740,8 +1460,33 @@ bool ProcessTranslator::translateReturn(const ast::Statement& statement) {
 }
 
 bool ProcessTranslator::translateBlock(const ast::Statement& statement) {
-    if (statement.kind == ast::StatementKind::Block)
-        return translateStatement(statement.as<ast::BlockStatement>().body);
+    if (statement.kind == ast::StatementKind::Block) {
+        // A fork runs its statements at once, each a process of its own, which one process
+        // running them in turn would not.
+        const auto& block = statement.as<ast::BlockStatement>();
+        if (block.blockKind != ast::StatementBlockKind::Sequential) {
+            module->reportUnsupported(statement.sourceRange.start(), "a `fork` block");
+            failed = true;
+            return false;
+        }
+        if (block.blockSymbol == nullptr || block.blockSymbol->name.empty())
+            return translateStatement(block.body);
+
+        // A named block is one a `disable` in it can end, going on after it.
+        namedBlocks.push_back(
+            NamedBlock{.symbol = block.blockSymbol, .inlineDepth = inlineFrames.size()});
+        const bool translated = translateStatement(block.body);
+        const std::optional<std::uint32_t> exitBlock = namedBlocks.back().exitBlock;
+        namedBlocks.pop_back();
+        if (!translated) return false;
+        if (exitBlock.has_value()) {
+            const eir::Operand exit = eir::Operand::block(*exitBlock);
+            if (!currentBlockTerminated())
+                emit(eir::Instruction::make(eir::Opcode::Jump, {}, exit));
+            selectBlock(*exitBlock);
+        }
+        return true;
+    }
 
     for (const ast::Statement* child : statement.as<ast::StatementList>().list) {
         if (!translateStatement(*child)) return false;
@@ -773,7 +1518,7 @@ bool ProcessTranslator::translateConditional(const ast::Statement& statement) {
         return live == nullptr || translateStatement(*live);
     }
 
-    const std::optional<Value> condition = translateExpression(*conditional.conditions[0].expr);
+    const std::optional<Value> condition = translateCondition(*conditional.conditions[0].expr);
     if (!condition.has_value()) return false;
 
     const std::uint32_t thenBlock = newBlock("if-then");
@@ -797,6 +1542,96 @@ bool ProcessTranslator::translateConditional(const ast::Statement& statement) {
     return true;
 }
 
+bool ProcessTranslator::translateProceduralAssign(const ast::Statement& statement) {
+    const auto& procedural = statement.as<ast::ProceduralAssignStatement>();
+    const auto& assignment = procedural.assignment.as<ast::AssignmentExpression>();
+    const std::optional<std::uint32_t> target =
+        overrideTarget(assignment.left(), procedural.isForce ? "force" : "assign");
+    if (!target.has_value()) return false;
+
+    // Its value is written now, by the statement, so that what follows it sees the target
+    // assigned; the override's process writes it again whenever it changes.
+    const std::optional<Value> value = translateExpression(assignment.right());
+    if (!value.has_value()) return false;
+    const eir::Type objectType = module->definition().objects[*target].type;
+    const Value stored = coerceState(coerce(*value, objectType), objectType);
+
+    const std::optional<std::uint32_t> holder = module->addOverrideProcess(
+        *target, assignment.right(), procedural.isForce, statement.sourceRange.start());
+    if (!holder.has_value()) {
+        failed = true;
+        return false;
+    }
+    emit(eir::Instruction::make(procedural.isForce ? eir::Opcode::Force : eir::Opcode::Assign, {},
+                                eir::Operand::object(*target), eir::Operand::reg(stored.reg),
+                                eir::Operand::immediate(*holder)));
+    return true;
+}
+
+bool ProcessTranslator::translateEventTrigger(const ast::Statement& statement) {
+    const auto& trigger = statement.as<ast::EventTriggerStatement>();
+    const ast::Expression& target = trigger.target;
+    const bool named = target.kind == ast::ExpressionKind::NamedValue
+                       || target.kind == ast::ExpressionKind::HierarchicalValue;
+    if (trigger.timing != nullptr || !named) {
+        module->reportUnsupported(statement.sourceRange.start(),
+                                  trigger.timing != nullptr ? "a delayed event trigger"
+                                                            : "triggering this kind of event");
+        failed = true;
+        return false;
+    }
+    const std::optional<std::uint32_t> event =
+        module->objectFor(target.as<ast::ValueExpressionBase>().symbol);
+    if (!event.has_value()) {
+        failed = true;
+        return false;
+    }
+    const eir::Type bit = eir::Type::bits(1, false, false);
+    const std::uint32_t before = newRegister(bit);
+    noteRead(*event);
+    emit(eir::Instruction::make(eir::Opcode::ReadObject, eir::Operand::reg(before),
+                                eir::Operand::object(*event)));
+    const std::uint32_t after = newRegister(bit);
+    emit(eir::Instruction::make(eir::Opcode::Not, eir::Operand::reg(after),
+                                eir::Operand::reg(before)));
+    noteWholeWrite(*event);
+    emit(eir::Instruction::make(trigger.isNonBlocking ? eir::Opcode::StoreNonBlocking
+                                                      : eir::Opcode::Store,
+                                {}, eir::Operand::object(*event), eir::Operand::reg(after)));
+    return true;
+}
+
+bool ProcessTranslator::translateProceduralDeassign(const ast::Statement& statement) {
+    const auto& procedural = statement.as<ast::ProceduralDeassignStatement>();
+    const std::optional<std::uint32_t> target =
+        overrideTarget(procedural.lvalue, procedural.isRelease ? "release" : "deassign");
+    if (!target.has_value()) return false;
+    emit(eir::Instruction::make(procedural.isRelease ? eir::Opcode::Release : eir::Opcode::Deassign,
+                                {}, eir::Operand::object(*target)));
+    return true;
+}
+
+std::optional<std::uint32_t> ProcessTranslator::overrideTarget(const ast::Expression& target,
+                                                               std::string_view statement) {
+    const bool named = target.kind == ast::ExpressionKind::NamedValue
+                       || target.kind == ast::ExpressionKind::HierarchicalValue;
+    if (!named || localFor(target.as<ast::ValueExpressionBase>().symbol) != nullptr) {
+        module->reportUnsupported(
+            target.sourceRange.start(),
+            std::format("`{}` of anything but a whole variable or net", statement));
+        failed = true;
+        return std::nullopt;
+    }
+    const std::optional<std::uint32_t> objectIndex =
+        module->objectFor(target.as<ast::ValueExpressionBase>().symbol);
+    if (!objectIndex.has_value()) {
+        failed = true;
+        return std::nullopt;
+    }
+    overrides.push_back(*objectIndex);
+    return objectIndex;
+}
+
 bool ProcessTranslator::translateImmediateAssertion(const ast::Statement& statement) {
     const auto& assertion = statement.as<ast::ImmediateAssertionStatement>();
 
@@ -816,7 +1651,7 @@ bool ProcessTranslator::translateImmediateAssertion(const ast::Statement& statem
         return false;
     }
 
-    const std::optional<Value> condition = translateExpression(assertion.cond);
+    const std::optional<Value> condition = translateCondition(assertion.cond);
     if (!condition.has_value()) return false;
 
     // An assertion holds when its expression is true; 0, X and Z all fail it (IEEE 1800
@@ -977,7 +1812,7 @@ bool ProcessTranslator::translateForLoop(const ast::Statement& statement) {
 
     selectBlock(testBlock);
     if (loop.stopExpr != nullptr) {
-        const std::optional<Value> condition = translateExpression(*loop.stopExpr);
+        const std::optional<Value> condition = translateCondition(*loop.stopExpr);
         if (!condition.has_value()) return false;
         emit(eir::Instruction::make(eir::Opcode::BranchIf, {}, eir::Operand::reg(condition->reg),
                                     eir::Operand::block(bodyBlock),
@@ -1028,7 +1863,7 @@ bool ProcessTranslator::translateWhileLoop(const ast::Statement& statement, bool
                                 eir::Operand::block(testFirst ? testBlock : bodyBlock)));
 
     selectBlock(testBlock);
-    const std::optional<Value> test = translateExpression(*condition);
+    const std::optional<Value> test = translateCondition(*condition);
     if (!test.has_value()) return false;
     emit(eir::Instruction::make(eir::Opcode::BranchIf, {}, eir::Operand::reg(test->reg),
                                 eir::Operand::block(bodyBlock), eir::Operand::block(exitBlock)));
@@ -1226,6 +2061,34 @@ bool ProcessTranslator::translateLoopJump(const ast::Statement& statement, bool 
     return true;
 }
 
+bool ProcessTranslator::translateDisable(const ast::Statement& statement) {
+    // The block ends and what follows it runs: the next iteration where the block is a loop's
+    // body, past the loop where it holds one (IEEE 1800 section 9.6.2). Any other target, a
+    // block of another process, of the caller of the subroutine the statement is in, or a task,
+    // ends whatever is running it at the time, which the translation of one body cannot see.
+    const ast::Expression& target = statement.as<ast::DisableStatement>().target;
+    const ast::Symbol* symbol = nullptr;
+    if (target.kind == ast::ExpressionKind::ArbitrarySymbol)
+        symbol = target.as<ast::ArbitrarySymbolExpression>().symbol.get();
+    for (std::size_t index = namedBlocks.size(); index-- > 0;) {
+        NamedBlock& block = namedBlocks[index];
+        if (block.symbol != symbol) continue;
+        if (block.inlineDepth != inlineFrames.size()) break;
+        if (!block.exitBlock.has_value()) block.exitBlock = newBlock("after-disabled");
+        emit(eir::Instruction::make(eir::Opcode::Jump, {}, eir::Operand::block(*block.exitBlock)));
+
+        // Anything after it is unreachable but still has to be emitted somewhere.
+        selectBlock(newBlock("after-disable"));
+        return true;
+    }
+    module->reportUnsupported(
+        statement.sourceRange.start(),
+        std::format("a `disable` of '{}', which is not a block of the code it is in",
+                    symbol != nullptr ? std::string_view(symbol->name) : std::string_view("?")));
+    failed = true;
+    return false;
+}
+
 bool ProcessTranslator::translateTimed(const ast::Statement& statement) {
     const auto& timed = statement.as<ast::TimedStatement>();
 
@@ -1263,12 +2126,13 @@ bool ProcessTranslator::translateTimingControl(const ast::TimingControl& timing)
                 module->reportUnsupported(one.sourceRange.start(), "`iff` on an event control");
                 return false;
             }
-            const std::optional<eir::SensitivityEntry> entry = eventEntry(event.expr, event.edge);
+            std::optional<eir::SensitivityEntry> entry = eventEntry(event.expr, event.edge);
+            if (!entry.has_value() && !failed) entry = eventValueEntry(event.expr, event.edge);
             if (!entry.has_value()) {
                 if (!failed) {
                     module->reportUnsupported(one.sourceRange.start(),
-                                              "an event control on an expression rather than a "
-                                              "signal or a constant select of one");
+                                              "an event control on an expression that reads a "
+                                              "variable of the process's own or changes something");
                 }
                 return false;
             }
@@ -1330,10 +2194,22 @@ std::optional<ProcessTranslator::Value>
 ProcessTranslator::translateExpression(const ast::Expression& expression) {
     if (failed) return std::nullopt;
 
+    // An event's bit is how its triggers reach what waits on it, not a value it has: what an
+    // expression of one would read, `.triggered` among them, is something else. An assignment of
+    // one, whose type is the event's, makes two events one (IEEE 1800 section 15.5.5).
+    if (expression.type->isEvent()) {
+        module->reportUnsupported(expression.sourceRange.start(),
+                                  expression.kind == ast::ExpressionKind::Assignment
+                                      ? "an assignment to an event"
+                                      : "an event used as a value");
+        failed = true;
+        return std::nullopt;
+    }
+
     const std::optional<eir::Type> type = module->convertType(*expression.type);
 
-    // Where an integral value comes out of a real computation, either the whole computation is
-    // a constant or it cannot be translated; folding it is the one way it can work.
+    // Where an integral value comes out of a real computation of constants, it is folded, which
+    // gives what slang's own evaluation of it gives.
     const auto realOperand = [](const ast::Expression& operand) {
         return operand.type->isFloating();
     };
@@ -1365,6 +2241,9 @@ ProcessTranslator::translateExpression(const ast::Expression& expression) {
         return Value{.reg = result, .type = *type};
     }
 
+    case ast::ExpressionKind::RealLiteral:
+        return realConstant(expression.as<ast::RealLiteral>().getValue());
+
     case ast::ExpressionKind::UnbasedUnsizedIntegerLiteral: {
         if (!type.has_value()) break;
         const std::uint32_t constant =
@@ -1392,17 +2271,13 @@ ProcessTranslator::translateExpression(const ast::Expression& expression) {
         // A local of a subroutine being inlined lives in a register.
         if (const Value* local = localFor(symbol)) return copyOf(*local);
 
-        // A parameter or an enumeration's value is a constant, not state: reading it must not
-        // create an object, because an object would be a per-instance slot for a value that
-        // never changes.
-        if (symbol.kind == slang::ast::SymbolKind::Parameter
-            || symbol.kind == slang::ast::SymbolKind::EnumValue) {
-            const slang::ConstantValue& value = symbol.kind == slang::ast::SymbolKind::Parameter
-                                                    ? symbol.as<ast::ParameterSymbol>().getValue()
-                                                    : symbol.as<ast::EnumValueSymbol>().getValue();
+        // A parameter, a specparam or an enumeration's value is a constant, not state: reading
+        // it must not create an object, because an object would be a per-instance slot for a
+        // value that never changes.
+        if (const slang::ConstantValue* value = constantOf(symbol)) {
             if (!type.has_value()) break;
             const std::optional<eir::BitVector> bits =
-                module->constantBits(value, *expression.type);
+                module->constantBits(*value, *expression.type);
             if (!bits.has_value()) break;
             const std::uint32_t constant = addConstant(*bits);
             const std::uint32_t result = newRegister(*type);
@@ -1486,6 +2361,15 @@ ProcessTranslator::translateExpression(const ast::Expression& expression) {
 
 ProcessTranslator::Value ProcessTranslator::compare(eir::Opcode opcode, const Value& left,
                                                     const Value& right) {
+    // A real against anything compares as reals.
+    if (left.type.isReal() || right.type.isReal()) {
+        const Value a = coerce(left, eir::Type::real());
+        const Value b = coerce(right, eir::Type::real());
+        const std::uint32_t result = newRegister(eir::Type::logic());
+        emit(eir::Instruction::make(opcode, eir::Operand::reg(result), eir::Operand::reg(a.reg),
+                                    eir::Operand::reg(b.reg)));
+        return Value{.reg = result, .type = eir::Type::logic()};
+    }
     // Comparison operands keep their own width, extended to whichever is wider, because the
     // result is one bit and the comparison itself decides the signedness.
     const bool isSigned = left.type.isSigned() && right.type.isSigned();
@@ -1604,9 +2488,11 @@ ProcessTranslator::translateBinary(const ast::Expression& expression) {
     };
 
     const auto logical = [&](eir::Opcode opcode) -> std::optional<Value> {
+        const Value a = truthOf(*left);
+        const Value b = truthOf(*right);
         const std::uint32_t result = newRegister(eir::Type::logic());
-        emit(eir::Instruction::make(opcode, eir::Operand::reg(result), eir::Operand::reg(left->reg),
-                                    eir::Operand::reg(right->reg)));
+        emit(eir::Instruction::make(opcode, eir::Operand::reg(result), eir::Operand::reg(a.reg),
+                                    eir::Operand::reg(b.reg)));
         return Value{.reg = result, .type = eir::Type::logic()};
     };
 
@@ -1649,7 +2535,13 @@ ProcessTranslator::translateBinary(const ast::Expression& expression) {
 
     case ast::BinaryOperator::Power: {
         // The exponent is self-determined, as a shift amount is, and its signedness decides
-        // what a negative one means, so it travels as an immediate.
+        // what a negative one means, so it travels as an immediate. A real raises to a whole
+        // power only.
+        if (right->type.isReal()) {
+            module->reportUnsupported(expression.sourceRange.start(), "a real exponent");
+            failed = true;
+            return std::nullopt;
+        }
         const Value base = coerce(*left, *resultType);
         const std::uint32_t result = newRegister(*resultType);
         eir::Instruction instruction =
@@ -1755,9 +2647,10 @@ ProcessTranslator::translateUnary(const ast::Expression& expression) {
     case ast::UnaryOperator::BitwiseXnor: return reduction(eir::Opcode::ReduceXor, true);
 
     case ast::UnaryOperator::LogicalNot: {
+        const Value truth = truthOf(*operand);
         const std::uint32_t result = newRegister(eir::Type::logic());
         emit(eir::Instruction::make(eir::Opcode::LogicalNot, eir::Operand::reg(result),
-                                    eir::Operand::reg(operand->reg)));
+                                    eir::Operand::reg(truth.reg)));
         return Value{.reg = result, .type = eir::Type::logic()};
     }
 
@@ -1794,7 +2687,7 @@ ProcessTranslator::translateConditionalExpression(const ast::Expression& express
         return coerce(*selected, knownType.value_or(selected->type));
     }
 
-    const std::optional<Value> condition = translateExpression(*conditional.conditions[0].expr);
+    const std::optional<Value> condition = translateCondition(*conditional.conditions[0].expr);
     if (!condition.has_value()) return std::nullopt;
 
     const std::optional<eir::Type> resultType = knownType;
@@ -2228,9 +3121,7 @@ ProcessTranslator::locate(const ast::Expression& expression) {
                             .reachWidth = local->type.bitWidth(),
                             .rootIsLocal = true};
         }
-        if (symbol.kind == slang::ast::SymbolKind::Parameter
-            || symbol.kind == slang::ast::SymbolKind::EnumValue)
-            break;
+        if (constantOf(symbol) != nullptr) break;
 
         const std::optional<std::uint32_t> objectIndex = module->objectFor(symbol);
         if (!objectIndex.has_value()) {
@@ -2523,11 +3414,8 @@ bool ProcessTranslator::writeLocation(const ast::Expression& target, const Locat
 
     if (location.whole) {
         noteWholeWrite(location.objectIndex);
-        emitWholeStore(location.objectIndex, stored.reg, nonBlocking);
-        return true;
+        return emitWholeStore(location.objectIndex, stored.reg, nonBlocking);
     }
-
-    if (refuseDelayedWrite(target)) return false;
 
     // The bits written, for the driver this process is: exactly the window when it is
     // constant, and everything it could reach when it moves.
@@ -2538,6 +3426,32 @@ bool ProcessTranslator::writeLocation(const ast::Expression& target, const Locat
     if (!written) return true;
 
     const Value low = lowOf(location);
+    if (storeDelay.has_value()) {
+        // The offset and the delay in one operand, the offset in the low 64 bits.
+        const eir::Type both = eir::Type::bits(128, false, true);
+        const std::uint32_t packed = newRegister(both);
+        emit(eir::Instruction::make(
+            eir::Opcode::LoadConstant, eir::Operand::reg(packed),
+            eir::Operand::constant(addConstant(eir::BitVector::filled(128, eir::Logic::Zero)))));
+        const auto splice = [&](std::uint32_t value, std::uint64_t at) {
+            const std::uint32_t offset = newRegister(eir::Type::bits(32, false, false));
+            emit(eir::Instruction::make(
+                eir::Opcode::LoadConstant, eir::Operand::reg(offset),
+                eir::Operand::constant(addConstant(eir::BitVector::fromUInt64(at, 32)))));
+            emit(eir::Instruction::make(eir::Opcode::SplicePart, eir::Operand::reg(packed),
+                                        eir::Operand::reg(value), eir::Operand::reg(offset)));
+        };
+        const std::optional<std::uint32_t> delay =
+            storeDelayFor(stored.reg, stored.type.bitWidth(), &target);
+        if (!delay.has_value()) return false;
+        splice(coerce(low, eir::Type::bits(64, false, low.type.isFourState())).reg, 0);
+        splice(*delay, 64);
+        emit(eir::Instruction::make(nonBlocking ? eir::Opcode::StorePartNonBlockingDelayed
+                                                : eir::Opcode::StorePartDelayed,
+                                    {}, eir::Operand::object(location.objectIndex),
+                                    eir::Operand::reg(stored.reg), eir::Operand::reg(packed)));
+        return true;
+    }
     emit(eir::Instruction::make(nonBlocking ? eir::Opcode::StorePartNonBlocking
                                             : eir::Opcode::StorePart,
                                 {}, eir::Operand::object(location.objectIndex),
@@ -2545,23 +3459,25 @@ bool ProcessTranslator::writeLocation(const ast::Expression& target, const Locat
     return true;
 }
 
-void ProcessTranslator::emitWholeStore(std::uint32_t objectIndex, std::uint32_t reg,
+bool ProcessTranslator::emitWholeStore(std::uint32_t objectIndex, std::uint32_t reg,
                                        bool nonBlocking) {
     if (storeDelay.has_value()) {
-        emit(eir::Instruction::make(nonBlocking ? eir::Opcode::StoreNonBlockingDelayed
-                                                : eir::Opcode::StoreDelayed,
-                                    {}, eir::Operand::object(objectIndex), eir::Operand::reg(reg),
-                                    eir::Operand::reg(*storeDelay)));
-        return;
+        const std::optional<std::uint32_t> delay =
+            storeDelayFor(reg, module->definition().objects[objectIndex].type.bitWidth(), nullptr);
+        if (!delay.has_value()) return false;
+        emit(eir::Instruction::make(
+            nonBlocking ? eir::Opcode::StoreNonBlockingDelayed : eir::Opcode::StoreDelayed, {},
+            eir::Operand::object(objectIndex), eir::Operand::reg(reg), eir::Operand::reg(*delay)));
+        return true;
     }
     emit(eir::Instruction::make(nonBlocking ? eir::Opcode::StoreNonBlocking : eir::Opcode::Store,
                                 {}, eir::Operand::object(objectIndex), eir::Operand::reg(reg)));
+    return true;
 }
 
 bool ProcessTranslator::refuseDelayedWrite(const ast::Expression& target) {
     if (!storeDelay.has_value()) return false;
-    module->reportUnsupported(target.sourceRange.start(),
-                              "a delayed write to part of a signal, or to a local variable");
+    module->reportUnsupported(target.sourceRange.start(), "a delayed write to a local variable");
     failed = true;
     return true;
 }
@@ -2584,10 +3500,40 @@ ProcessTranslator::translateFileOpen(const ast::CallExpression& call,
             eir::SysTaskArgument{.value = eir::Operand::reg(value->reg), .type = value->type});
     }
 
+    // A call whose name or mode is a vector, which slang refuses and Enzan excuses (see
+    // FileNameArguments), has slang's error type: `$fopen` gives an `int` all the same.
+    const std::optional<eir::Type> resultType =
+        expression.type->isError() ? std::optional<eir::Type>(eir::Type::bits(32, true, false))
+                                   : module->convertType(*expression.type);
+    if (!resultType.has_value()) {
+        module->reportUnsupported(expression.sourceRange.start(), "this use of $fopen's result");
+        failed = true;
+        return std::nullopt;
+    }
+    const std::uint32_t index = addSysCall(std::move(descriptor));
+    const eir::Type word = eir::Type::bits(32, false, false);
+    const std::uint32_t result = newRegister(word);
+    emit(eir::Instruction::make(eir::Opcode::SysFunction, eir::Operand::reg(result),
+                                eir::Operand::sysCall(index)));
+    return coerce(Value{.reg = result, .type = word}, *resultType);
+}
+
+std::optional<ProcessTranslator::Value>
+ProcessTranslator::translateFileGetCharacter(const ast::CallExpression& call,
+                                             const ast::Expression& expression) {
+    // slang has checked that there is one argument, the descriptor.
+    eir::SysTaskCall descriptor;
+    descriptor.kind = eir::SysTaskKind::FileGetCharacter;
+    descriptor.location = module->convertLocation(expression.sourceRange.start());
+    const std::optional<Value> file = translateExpression(*call.arguments()[0]);
+    if (!file.has_value()) return std::nullopt;
+    descriptor.arguments.push_back(
+        eir::SysTaskArgument{.value = eir::Operand::reg(file->reg), .type = file->type});
+
     const std::optional<eir::Type> resultType = module->convertType(*expression.type);
     if (!resultType.has_value()) return std::nullopt;
     const std::uint32_t index = addSysCall(std::move(descriptor));
-    const eir::Type word = eir::Type::bits(32, false, false);
+    const eir::Type word = eir::Type::bits(32, true, false);
     const std::uint32_t result = newRegister(word);
     emit(eir::Instruction::make(eir::Opcode::SysFunction, eir::Operand::reg(result),
                                 eir::Operand::sysCall(index)));
@@ -2666,7 +3612,48 @@ ProcessTranslator::translateCall(const ast::Expression& expression) {
 
     if (call.isSystemCall()) {
         const std::string_view name = call.getSubroutineName();
-        if (name == "$time" || name == "$stime" || name == "$realtime") {
+        if (name == "$realtime") {
+            // The run's ticks counted in the calling scope's unit, a fraction of it included.
+            const eir::Type ticksType = eir::Type::bits(64, false, false);
+            const std::uint32_t ticks = newRegister(ticksType);
+            emit(eir::Instruction::make(eir::Opcode::ReadTime, eir::Operand::reg(ticks)));
+            const Value time = coerce(Value{.reg = ticks, .type = ticksType}, eir::Type::real());
+            const int coarser = timeExponentOf(timeScaleHere().base) - module->runTimeUnit();
+            if (coarser == 0) return time;
+            const Value factor =
+                realConstant(static_cast<double>(powerOfTen(coarser > 0 ? coarser : -coarser)));
+            const std::uint32_t result = newRegister(eir::Type::real());
+            emit(eir::Instruction::make(coarser > 0 ? eir::Opcode::Divide : eir::Opcode::Multiply,
+                                        eir::Operand::reg(result), eir::Operand::reg(time.reg),
+                                        eir::Operand::reg(factor.reg)));
+            return Value{.reg = result, .type = eir::Type::real()};
+        }
+
+        // The conversions IEEE 1800 section 20.5 names: `$rtoi` drops the fraction where an
+        // assignment would round it, `$itor` is the assignment's, and the other two move the
+        // bits of the double unchanged.
+        if ((name == "$rtoi" || name == "$itor" || name == "$realtobits" || name == "$bitstoreal")
+            && call.arguments().size() == 1) {
+            const std::optional<eir::Type> type = module->convertType(*expression.type);
+            const std::optional<Value> argument = translateExpression(*call.arguments()[0]);
+            if (!type.has_value() || !argument.has_value()) return std::nullopt;
+            if (name == "$itor") return coerce(*argument, *type);
+            const std::uint32_t result = newRegister(*type);
+            if (name == "$rtoi") {
+                const Value real = coerce(*argument, eir::Type::real());
+                emit(eir::Instruction::make(eir::Opcode::Truncate, eir::Operand::reg(result),
+                                            eir::Operand::reg(real.reg)));
+                return Value{.reg = result, .type = *type};
+            }
+            const Value bits =
+                coerce(*argument, name == "$realtobits" ? eir::Type::real()
+                                                        : eir::Type::bits(64, false, false));
+            emit(eir::Instruction::make(eir::Opcode::Move, eir::Operand::reg(result),
+                                        eir::Operand::reg(bits.reg)));
+            return Value{.reg = result, .type = *type};
+        }
+
+        if (name == "$time" || name == "$stime") {
             // The run's ticks, counted in the calling scope's unit and rounded to a whole one
             // (IEEE 1800 section 20.3.1).
             const std::optional<eir::Type> type = module->convertType(*expression.type);
@@ -2717,6 +3704,7 @@ ProcessTranslator::translateCall(const ast::Expression& expression) {
         if (name == "$random" || name == "$urandom" || name == "$urandom_range")
             return translateRandom(name, call, expression);
         if (name == "$fopen") return translateFileOpen(call, expression);
+        if (name == "$fgetc") return translateFileGetCharacter(call, expression);
 
         // `$clog2` of a variable, such as a loop index; slang has folded every constant one.
         if (name == "$clog2" && call.arguments().size() == 1) {
@@ -3009,6 +3997,12 @@ ProcessTranslator::translateAssignment(const ast::Expression& expression) {
 
 bool ProcessTranslator::assignTo(const ast::Expression& target, const Value& value,
                                  bool nonBlocking) {
+    // Assigning one event to another makes them one event (IEEE 1800 section 15.5.5).
+    if (target.type->isEvent()) {
+        module->reportUnsupported(target.sourceRange.start(), "an assignment to an event");
+        failed = true;
+        return false;
+    }
     switch (target.kind) {
     case ast::ExpressionKind::NamedValue:
     case ast::ExpressionKind::HierarchicalValue: {
@@ -3032,8 +4026,7 @@ bool ProcessTranslator::assignTo(const ast::Expression& target, const Value& val
         const Value stored = coerceState(widened, objectType);
 
         noteWholeWrite(*objectIndex);
-        emitWholeStore(*objectIndex, stored.reg, nonBlocking);
-        return true;
+        return emitWholeStore(*objectIndex, stored.reg, nonBlocking);
     }
 
     case ast::ExpressionKind::ElementSelect:
@@ -3261,11 +4254,9 @@ std::optional<std::int64_t> ProcessTranslator::constantValueOf(const ast::Expres
         return expression.as<ast::IntegerLiteral>().getValue().as<std::int64_t>();
 
     if (expression.kind == ast::ExpressionKind::NamedValue) {
-        const ast::ValueSymbol& symbol = expression.as<ast::ValueExpressionBase>().symbol;
-        if (symbol.kind == slang::ast::SymbolKind::Parameter) {
-            const slang::ConstantValue& value = symbol.as<ast::ParameterSymbol>().getValue();
-            if (value.isInteger()) return value.integer().as<std::int64_t>();
-        }
+        const slang::ConstantValue* value =
+            constantOf(expression.as<ast::ValueExpressionBase>().symbol);
+        if (value != nullptr && value->isInteger()) return value->integer().as<std::int64_t>();
     }
 
     if (const slang::ConstantValue* constant = expression.getConstant();

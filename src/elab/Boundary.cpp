@@ -204,19 +204,26 @@ private:
 };
 
 /// Converts `value`, a register of one side's representation, into a new register of `target`,
-/// the other side's: SystemVerilog's bits when `toShown`, the VHDL side's codes otherwise.
+/// the other side's: SystemVerilog's bits when `toShown`, the VHDL side's codes otherwise, `weak`
+/// saying which values of the bits are driven weakly (eir::WeakZero and eir::WeakOne).
 std::uint32_t convert(Builder& body, std::uint32_t value, const std::vector<Leaf>& leaves,
-                      bool toShown, eir::Type target) {
+                      bool toShown, eir::Type target, std::uint8_t weak) {
     // Each leaf's own conversion, from a register of its bits on the side converted from.
     const auto one = [&](const Leaf& leaf, std::uint32_t from) {
         const std::uint32_t into =
             body.reg(eir::Type::bits(toShown ? leaf.shownWidth() : leaf.width, false, true));
         if (leaf.encoding == Encoding::Bits) {
             body.emit(Instruction::make(Opcode::Move, Operand::reg(into), Operand::reg(from)));
+        } else if (toShown) {
+            body.emit(
+                Instruction::make(Opcode::Present, Operand::reg(into), Operand::reg(from),
+                                  Operand::immediate(static_cast<std::uint32_t>(leaf.encoding))));
         } else {
+            // Only std_ulogic has weak values; a bit's or a boolean's are as strong as any.
             body.emit(Instruction::make(
-                toShown ? Opcode::Present : Opcode::Encode, Operand::reg(into), Operand::reg(from),
-                Operand::immediate(static_cast<std::uint32_t>(leaf.encoding))));
+                Opcode::Encode, Operand::reg(into), Operand::reg(from),
+                Operand::immediate(static_cast<std::uint32_t>(leaf.encoding)),
+                Operand::immediate(leaf.encoding == Encoding::VhdlLogic ? weak : 0U)));
         }
         return into;
     };
@@ -263,6 +270,10 @@ struct Conversion {
     std::uint32_t to = 0;
     eir::Type toType;
     bool toShown = false;
+
+    /// Which values of the bits converted are driven weakly, eir::WeakZero and eir::WeakOne, into
+    /// VHDL.
+    std::uint8_t weak = 0;
 };
 
 /// A process that converts `conversion.from` into `conversion.to` whenever it changes, and once at
@@ -285,7 +296,7 @@ eir::Process converter(const Conversion& conversion, const std::vector<Leaf>& le
     body.emit(Instruction::make(Opcode::ReadObject, Operand::reg(read),
                                 Operand::object(conversion.from)));
     const std::uint32_t converted =
-        convert(body, read, leaves, conversion.toShown, conversion.toType);
+        convert(body, read, leaves, conversion.toShown, conversion.toType, conversion.weak);
     if (drives) {
         const std::uint32_t now =
             body.constant(eir::BitVector::fromUInt64(0, 64), eir::Type::bits(64, true, false));
@@ -336,6 +347,31 @@ eir::Object standIn(const eir::Object& object, std::string name, SourceLocation 
     result.enumIndex = eir::Object::NoEnum;
     result.hierarchicalPath.clear();
     return result;
+}
+
+/// Which values `object`, a port of the SystemVerilog `definition`, is driven with weakly, as
+/// eir::WeakZero and eir::WeakOne: those every driver of it in the body drives weakly, as a pull-up
+/// drives its
+/// 1. None when the body has no driver of it, or one whose strength is not known here: a
+/// procedural write, which is strong, or an instance inside driving it.
+std::uint8_t weakValues(const eir::ModuleDefinition& definition, std::uint32_t object) {
+    bool driven = false;
+    bool zero = true;
+    bool one = true;
+    for (const eir::Process& process : definition.processes) {
+        if (!eir::writesObject(process.writeSet, object)) continue;
+        if (process.kind != eir::ProcessKind::ContinuousAssign) return 0;
+        driven = true;
+        zero = zero && eir::isWeak(process.strength.zero);
+        one = one && eir::isWeak(process.strength.one);
+    }
+    for (const eir::Instance& instance : definition.instances) {
+        for (const eir::PortConnection& connection : instance.connections) {
+            if (connection.connected() && connection.drivenObject() == object) return 0;
+        }
+    }
+    if (!driven) return 0;
+    return static_cast<std::uint8_t>((zero ? eir::WeakZero : 0U) | (one ? eir::WeakOne : 0U));
 }
 
 /// Connects one port of `instance` through conversions, adding to `parent` what that takes.
@@ -420,13 +456,16 @@ bool bridge(eir::ModuleDefinition& parent, const eir::Instance& instance,
                 assignment(base + "$assign", instance.location, shownIndex, outerType, outerDrive));
             return;
         }
+        // A value the module drives weakly drives the VHDL signal weakly, as L or H, so that a
+        // pull-up yields to the signal's other drivers as it does on a net.
         addProcess(converter(Conversion{.name = base + "$out",
                                         .location = instance.location,
                                         .from = from,
                                         .fromType = innerType,
                                         .to = outerDrive,
                                         .toType = outerType,
-                                        .toShown = false},
+                                        .toShown = false,
+                                        .weak = weakValues(child, port.objectIndex)},
                              *leaves, true));
     };
 

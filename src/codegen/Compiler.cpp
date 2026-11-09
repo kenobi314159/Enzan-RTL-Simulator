@@ -34,16 +34,6 @@ std::uint32_t CompiledDesign::subprogramBodyIndex(std::uint32_t definitionIndex,
 
 namespace {
 
-/// True for the opcodes that write an object, which are the ones the runtime routes.
-bool isStore(eir::Opcode opcode) noexcept {
-    return opcode == eir::Opcode::Store || opcode == eir::Opcode::StorePart
-           || opcode == eir::Opcode::StoreNonBlocking || opcode == eir::Opcode::StorePartNonBlocking
-           || opcode == eir::Opcode::StoreDelayed || opcode == eir::Opcode::StoreNonBlockingDelayed
-           || opcode == eir::Opcode::Drive || opcode == eir::Opcode::DriveTransport
-           || opcode == eir::Opcode::DrivePart || opcode == eir::Opcode::DrivePartAfter
-           || opcode == eir::Opcode::DriveTransportPart;
-}
-
 /// Assigns each virtual register a Word offset in the frame and records its width.
 ///
 /// Every register lives in the frame, wide ones included, so the frame is also the
@@ -312,7 +302,7 @@ bool Compiler::compileBody(const eir::ModuleDefinition& definition, const eir::B
             // A store has no destination register, so `dst` carries its object's position
             // among the objects the process writes, which is what the runtime routes it by:
             // straight into the signal, or through the process's drivers of it.
-            if (isStore(source.opcode)) {
+            if (eir::isStore(source.opcode)) {
                 const auto position = std::ranges::lower_bound(written, source.a.index());
                 if (position == written.end() || *position != source.a.index()) {
                     reportInvalid(definition, body,
@@ -378,6 +368,8 @@ bool Compiler::compileSysTaskCalls(const eir::ModuleDefinition& definition, cons
         for (const eir::SysTaskArgument& argument : call.arguments) {
             SysTaskDescriptor::Argument compiled;
             compiled.isSigned = argument.type.isSigned();
+            compiled.isReal = argument.type.isReal();
+            compiled.isString = argument.type.kind() == eir::Type::Kind::String;
             compiled.bitWidth = argument.type.bitWidth();
 
             switch (argument.value.kind()) {

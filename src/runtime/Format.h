@@ -20,6 +20,14 @@ struct FormatArgument {
     /// argument because the format string does not say it — a `%d` prints `-1` or
     /// `255` for the same bits depending on the argument's declared type.
     bool isSigned = false;
+
+    /// Whether the value is a real's double, which `%f`, `%e` and `%g` render as C does, and
+    /// every other conversion as the integer it rounds to.
+    bool isReal = false;
+
+    /// For a string whose length only the run knows, its characters, which every conversion
+    /// shows as they are; the value is then its handle.
+    const std::string* text = nullptr;
 };
 
 /// Everything a conversion may need besides the arguments themselves.
@@ -30,17 +38,19 @@ struct FormatContext {
     /// The unit a `%t` argument counts, the calling scope's, or nothing when it counts the run's.
     std::optional<TimeExponent> argumentUnit;
 
-    /// The hierarchical path `%m` expands to.
+    /// The hierarchical name `%m` expands to, dot-separated: `tb.u_dut`.
     std::string_view scopeName;
 };
 
 /// Formats a `$display`, `$write` or severity task call.
 ///
-/// Supports `%d`, `%h`/`%x`, `%b`, `%o`, `%s`, `%t`, `%m` and `%%`, each optionally with a `0` flag
-/// meaning "no padding", and each optionally uppercase. `%t` consumes an argument counting
-/// `argumentUnit` and renders it in the run's unit; `%m` consumes none and expands to the scope
-/// name. Anything else is copied through literally rather than swallowed, so a format string Enzan
-/// does not understand is visible in the transcript instead of silently losing output.
+/// Supports `%d`, `%h`/`%x`, `%b`, `%o`, `%s`, `%t`, `%m`, `%f`, `%e`, `%g` and `%%`, each
+/// optionally with a `0` flag meaning "no padding", and each optionally uppercase; `%f`, `%e` and
+/// `%g` take a precision after the field width as C's do, an integer argument converting to a real.
+/// `%t` consumes an argument counting `argumentUnit` and renders it in the run's unit; `%m`
+/// consumes none and expands to the scope name. Anything else is copied through literally rather
+/// than swallowed, so a format string Enzan does not understand is visible in the transcript
+/// instead of silently losing output.
 ///
 /// Without the `0` flag a numeric conversion is padded to the width the value's type can
 /// need — `%d` on an 8-bit value is three characters wide — which is what IEEE 1800
@@ -56,7 +66,8 @@ std::string formatSystemTask(std::string_view format, std::span<const FormatArgu
 /// Formats the arguments of a call that had no format string.
 ///
 /// `$display(a, b)` concatenates its arguments in their default form, which for a vector
-/// is decimal. There is no separator, matching every other simulator.
+/// is decimal, and for a real `%g` with its trailing zeros kept, as Icarus Verilog shows it. There
+/// is no separator, matching every other simulator.
 std::string formatDefault(std::span<const FormatArgument> arguments);
 
 /// Renders `value` as ASCII characters, which is what `%s` does.

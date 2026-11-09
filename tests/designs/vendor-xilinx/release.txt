@@ -1,0 +1,3 @@
+# The Vivado release the harness last passed with. The one place it is named; run.sh warns when
+# XILINX_VIVADO is another.
+2026.1

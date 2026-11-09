@@ -33,4 +33,9 @@ if ! diff -r "$work/reference" "$work/enzan"; then
     echo "FAIL: Enzan's output differs from Icarus Verilog's"
     exit 1
 fi
+# A design that checks itself and fails fails under both, and they agree.
+if grep -q '^FAIL' "$work/enzan/transcript.out"; then
+    echo "FAIL: the design reports a failure ($work/enzan/transcript.out)"
+    exit 1
+fi
 echo "PASS $name"

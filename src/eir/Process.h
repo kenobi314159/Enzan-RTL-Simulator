@@ -63,6 +63,17 @@ enum class SysTaskKind : std::uint8_t {
     /// four bytes, the lowest first, for a read to learn its length from.
     FileWriteValue,
 
+    // Strings whose lengths only the run knows, held in the kernel's scratch (DESIGN_GUIDE.md
+    // section 4.1) by handle: the first argument of each, but StringMark's and StringRelease's.
+    // The kernel keeps each one's bounds, and an index of one is of those bounds.
+
+    /// Writes the characters of the second argument, the leftmost in its highest bits, into the
+    /// string from the index the first after the handle holds; a part reaching outside the string
+    /// ends the run with a failure.
+    StringSplice,
+    /// Releases every string made since the mark the argument holds, which StringMark gave.
+    StringRelease,
+
     // System functions, run by SysFunction, which have a result.
 
     /// `$random`, IEEE 1364's generator. With no argument it draws from the simulation's
@@ -77,6 +88,9 @@ enum class SysTaskKind : std::uint8_t {
     /// `$fopen(name, mode)`: a file descriptor, or with no mode a channel of a multichannel
     /// descriptor; 0 when the file cannot be opened.
     FileOpen,
+    /// `$fgetc(fd)`: the next byte of the file the descriptor names, or -1 at its end and when
+    /// the descriptor names no file open for reading (IEEE 1800 section 21.3.4.1).
+    FileGetCharacter,
 
     // std.textio, run natively over the kernel's heap, whose lines are handles: 0 for `null`, and
     // otherwise numbered as they are allocated, freed ones reused last first, so that a run
@@ -93,10 +107,28 @@ enum class SysTaskKind : std::uint8_t {
     /// `readline`: frees the line the second argument designates and results in the handle of a
     /// new one holding the next line of the file the first names, without its line end.
     LineReadLine,
-    /// `read` of a character: takes the first character off the line the argument designates.
-    /// The result is the character's code in its low byte, and above it a bit saying whether
-    /// there was one.
+    /// `read` of a character: takes the first character off the line the first argument
+    /// designates. The result is the character's code in its low byte, and above it a bit saying
+    /// whether there was one; with a second argument that is not 0, a `read` with no `good` to
+    /// tell, an empty line ends the run with a failure instead.
     LineReadCharacter,
+    /// `read` of a string: the string the second argument holds with its characters replaced by
+    /// as many taken off the line the first argument designates, the leftmost in the highest
+    /// bits, and above them a bit saying whether the line held that many. A line holding fewer
+    /// keeps them and gives the string back as it was, as GHDL's textio does; with a third
+    /// argument that is not 0, a `read` with no `good` to tell, it ends the run with a failure.
+    LineReadString,
+    /// The length of the line the argument designates, its 'LENGTH, 'HIGH and 'RIGHT: a line
+    /// the runtime holds is indexed from 1, as NVC's textio makes every one. A null line ends the
+    /// run with a failure.
+    LineLength,
+    /// The character of the line the first argument designates at the index the second holds, in
+    /// the result's low byte; an index outside the line ends the run with a failure.
+    LineElement,
+    /// The characters of the line the first argument designates from the index the second holds,
+    /// as many as fill the result, the leftmost in its highest bits; a slice reaching outside the
+    /// line ends the run with a failure.
+    LineSlice,
     /// `endfile`: whether the file the argument names has nothing left to read.
     FileEnd,
     /// `write` of a string whose length only the run shows, built in a line of its own: appends
@@ -110,7 +142,42 @@ enum class SysTaskKind : std::uint8_t {
     /// in its top 32 bits, and below them the array with its leftmost elements replaced by the
     /// value's leftmost, as many as fit.
     FileReadValue,
+
+    /// A new string of run-time length, of the bounds the first two arguments give, ascending
+    /// where the third is not 0, each character the fourth's code. The result is its handle.
+    StringNew,
+    /// The string's left bound in the highest 64 bits of the result, its right below that, and
+    /// its length in the lowest 64.
+    StringBounds,
+    /// The characters of the string from the index the second argument holds, as many as fill
+    /// the result, the leftmost in its highest bits; one is an element. A part reaching outside
+    /// the string ends the run with a failure.
+    StringSlice,
+    /// A new string holding the elements of the array the first argument holds, of the bounds the
+    /// second and third give, from the index the fourth holds to the one the fifth does, in the
+    /// direction the sixth says, ascending where it is not 0. A slice reaching outside the array
+    /// ends the run with a failure. The result is its handle.
+    StringFromArray,
+    /// The array the first argument holds, of the bounds the second and third give, with the
+    /// elements at the indices of the string the fourth designates replaced by its characters.
+    StringIntoArray,
+    /// How the string compares with the one the second argument designates, character by
+    /// character from the left and a shorter one first where one runs out: -1, 0 or 1, in 8 bits.
+    StringCompare,
+    /// std.textio's `read` into the string: as many characters as it holds taken off the line
+    /// the second argument designates, where it holds that many, as LineReadString takes them,
+    /// with the third argument as LineReadString's. The result is whether it did.
+    StringRead,
+    /// How many strings of run-time length there are, the mark StringRelease releases to.
+    StringMark,
 };
+
+/// The severities a Report takes as its first argument: the positions of
+/// `std.standard.severity_level`.
+inline constexpr std::uint8_t SeverityNote = 0;
+inline constexpr std::uint8_t SeverityWarning = 1;
+inline constexpr std::uint8_t SeverityError = 2;
+inline constexpr std::uint8_t SeverityFailure = 3;
 
 std::string_view toString(SysTaskKind kind) noexcept;
 
@@ -197,6 +264,11 @@ enum class ProcessKind : std::uint8_t {
     /// A continuous assignment (`assign`), modelled as a process sensitive to
     /// everything on its right-hand side.
     ContinuousAssign,
+    /// What a procedural `assign` or `force` assigns once it has started: the value evaluated
+    /// again whenever anything it reads changes, and written while the statement's override
+    /// holds its target (IEEE 1800 section 10.6). The statement itself starts the override and
+    /// writes its first value, so this never runs at time zero.
+    Override,
 };
 
 std::string_view toString(ProcessKind kind) noexcept;
@@ -368,6 +440,28 @@ struct Body {
     std::vector<WriteExtent> writeSet;
 };
 
+/// A strength a driver drives a value with (IEEE 1800 section 28.11), of the four levels a
+/// value can be driven at. Resolution tells only two classes apart, `Supply` and `Strong` the
+/// strong, `Pull` and `Weak` the weak, and elaboration refuses drivers whose levels the standard
+/// orders and a class does not (DESIGN_GUIDE.md section 3.7).
+enum class Strength : std::uint8_t { Supply, Strong, Pull, Weak };
+
+/// True for `Pull` and `Weak`, which yield to any driver of the strong class.
+[[nodiscard]] constexpr bool isWeak(Strength strength) noexcept {
+    return strength == Strength::Pull || strength == Strength::Weak;
+}
+
+/// The strengths a driver drives 0 and 1 with; strong for both unless declared otherwise.
+struct DriveStrength {
+    Strength zero = Strength::Strong;
+    Strength one = Strength::Strong;
+
+    /// True when either value is driven in the weak class.
+    [[nodiscard]] constexpr bool anyWeak() const noexcept { return isWeak(zero) || isWeak(one); }
+
+    friend bool operator==(const DriveStrength&, const DriveStrength&) = default;
+};
+
 /// An EIR-B process: the body of one procedural block, scheduled by the kernel.
 struct Process : Body {
     ProcessKind kind = ProcessKind::Always;
@@ -380,6 +474,10 @@ struct Process : Body {
     /// not a race the last write wins. Elaboration treats its writes as it treats a continuous
     /// assignment's.
     bool drivesSignals = false;
+
+    /// What a continuous assignment drives with, as `assign (strong1, weak0)` declares it. Every
+    /// other process drives strong.
+    DriveStrength strength;
 
     /// True for a VHDL postponed process (IEEE 1076 section 11.3): past initialization, it
     /// resumes only in the last delta cycle of a time step, once nothing else is due then, and so
@@ -403,6 +501,12 @@ struct Process : Body {
     /// An empty list waits for nothing, so the process never resumes: VHDL's `wait;`, which is
     /// how a testbench process ends.
     std::vector<std::vector<SensitivityEntry>> eventLists;
+
+    /// The objects the process's `assign`, `force`, `deassign` and `release` name, sorted and
+    /// each once. Declared beside the write set rather than in it, because an override writes an
+    /// object without driving it: a forced net keeps its drivers, which take it back on release
+    /// (DESIGN_GUIDE.md section 3.7).
+    std::vector<std::uint32_t> overrideSet;
 };
 
 /// A body that is called rather than scheduled: a VHDL function or procedure, and in time a

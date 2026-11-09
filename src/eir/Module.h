@@ -59,10 +59,16 @@ void present(Encoding encoding, ConstBitRef stored, BitRef shown) noexcept;
 /// unknown or high-impedance `bit` or `boolean`.
 [[nodiscard]] bool storeShown(Encoding encoding, ConstBitRef shown, BitRef stored) noexcept;
 
+/// Which of a value's 0s and 1s are driven weakly, as Encode's third operand gives it: a set of
+/// these bits.
+inline constexpr std::uint8_t WeakZero = 1U << 0;
+inline constexpr std::uint8_t WeakOne = 1U << 1;
+
 /// As `storeShown`, for a value that has to arrive whatever it holds, as one crossing from
 /// SystemVerilog into VHDL does: an unknown or high-impedance bit becomes a `bit`'s or a
-/// `boolean`'s 0, as assigning one to a two-state variable makes it.
-void encode(Encoding encoding, ConstBitRef shown, BitRef stored) noexcept;
+/// `boolean`'s 0, as assigning one to a two-state variable makes it. A 0 that `weak` says is
+/// driven weakly is a `std_ulogic`'s L, a weak 1 its H, and an unknown of two weak values its W.
+void encode(Encoding encoding, ConstBitRef shown, BitRef stored, std::uint8_t weak = 0) noexcept;
 
 /// What an object stored as `encoding` holds, for a diagnostic: `std_ulogic codes`.
 [[nodiscard]] std::string_view toString(Encoding encoding) noexcept;
@@ -90,8 +96,8 @@ enum class NetKind : std::uint8_t {
     Tri0,
     /// Pulled to 1 likewise.
     Tri1,
-    /// Always 0. Its supply strength beats every driver Enzan can model, all of which are
-    /// strong.
+    /// Always 0. Its supply strength beats every driver but one of supply strength, which
+    /// elaboration refuses, since the two would contend as equals.
     Supply0,
     /// Always 1.
     Supply1,
@@ -480,6 +486,11 @@ struct ModuleDefinition {
 
     /// What this parameterisation's parameters were resolved to, in declaration order.
     std::vector<Parameter> parameters;
+
+    /// Where the first timing check of this definition's specify blocks is, or an invalid
+    /// location when it has none. A timing check is not run, and a run instantiating one says
+    /// so, so the check itself is not kept: only where to point the user.
+    SourceLocation firstTimingCheck;
 
     /// Returns the index of the object called `name`, or nothing.
     ///

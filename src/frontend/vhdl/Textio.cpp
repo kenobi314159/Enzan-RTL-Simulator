@@ -217,6 +217,7 @@ bool BodyTranslator::appendToLine(tree_t expression, std::uint32_t sink) {
         write.formatIndex = addString(std::exchange(format, {}));
         arguments.clear();
         const Value written = systemFunction(std::move(write), handle);
+        releaseMessageScratch();
         emit(eir::Instruction::make(eir::Opcode::Move, eir::Operand::reg(sink),
                                     eir::Operand::reg(written.reg)));
     };
@@ -268,6 +269,76 @@ std::optional<BodyTranslator::Value> BodyTranslator::endOfFile(tree_t call) {
         eir::SysTaskArgument{.value = eir::Operand::reg(file->reg), .type = file->type});
     const Value ended = systemFunction(std::move(function), eir::Type::bits(1, false, false));
     return booleanOf(ended.reg, tree_type(call));
+}
+
+std::optional<BodyTranslator::Value> BodyTranslator::lineLength(tree_t attribute) {
+    type_t type = tree_type(attribute);
+    const std::optional<eir::Type> storage = scalarStorage(type);
+    if (!storage) {
+        fail(attribute, "this attribute of a line");
+        return std::nullopt;
+    }
+    const std::optional<Value> line = expression(tree_value(tree_name(attribute)));
+    if (!line) return std::nullopt;
+    eir::SysTaskCall function;
+    function.kind = eir::SysTaskKind::LineLength;
+    function.location = owner.locate(attribute);
+    function.arguments.push_back(
+        eir::SysTaskArgument{.value = eir::Operand::reg(line->reg), .type = line->type});
+    Value length = resize(systemFunction(std::move(function), eir::Type::bits(32, false, false)),
+                          storage->bitWidth());
+    length.vhdlType = type;
+    return length;
+}
+
+std::optional<BodyTranslator::Value> BodyTranslator::linePart(tree_t expression, type_t type) {
+    const std::optional<Value> line = this->expression(tree_value(tree_value(expression)));
+    if (!line) return std::nullopt;
+    eir::SysTaskCall function;
+    function.location = owner.locate(expression);
+    function.arguments.push_back(
+        eir::SysTaskArgument{.value = eir::Operand::reg(line->reg), .type = line->type});
+    const eir::Type position = eir::Type::bits(64, true, false);
+
+    if (tree_kind(expression) == T_ARRAY_REF) {
+        const std::optional<eir::Type> storage = scalarStorage(type);
+        if (tree_params(expression) != 1 || !storage) {
+            fail(expression, "this element of a line");
+            return std::nullopt;
+        }
+        const std::optional<Value> index = this->expression(tree_value(tree_param(expression, 0)));
+        if (!index) return std::nullopt;
+        const Value at = resize(*index, position.bitWidth());
+        function.kind = eir::SysTaskKind::LineElement;
+        function.arguments.push_back(
+            eir::SysTaskArgument{.value = eir::Operand::reg(at.reg), .type = position});
+        Value character =
+            resize(systemFunction(std::move(function), eir::Type::bits(8, false, false)),
+                   storage->bitWidth());
+        character.vhdlType = type;
+        return character;
+    }
+
+    // A slice's bounds fold where they are counted from the line's start, as `l(l'low to l'low +
+    // 2)` is; its length then does.
+    const std::optional<Folder::Range> bounds = folder().range(tree_range(expression, 0));
+    if (!bounds || !bounds->ascending || bounds->length() <= 0) {
+        fail(expression, "a slice of a line other than one rising over bounds that fold");
+        return std::nullopt;
+    }
+    const std::optional<Layout> layout = arrayLayout(*bounds, type_elem(type), folder());
+    if (!layout) {
+        fail(expression, "this slice of a line");
+        return std::nullopt;
+    }
+    function.kind = eir::SysTaskKind::LineSlice;
+    function.arguments.push_back(eir::SysTaskArgument{
+        .value = eir::Operand::reg(constant(bounds->left, position, nullptr).reg),
+        .type = position});
+    Value slice = systemFunction(std::move(function), layout->storage);
+    slice.vhdlType = type;
+    slice.layout = *layout;
+    return slice;
 }
 
 std::optional<bool> BodyTranslator::nativeProcedure(tree_t call, tree_t declaration) {
@@ -328,6 +399,7 @@ std::optional<bool> BodyTranslator::nativeProcedure(tree_t call, tree_t declarat
             native.formatIndex = addString(std::move(format));
             emit(eir::Instruction::make(eir::Opcode::SysTask, {},
                                         eir::Operand::sysCall(addSysCall(std::move(native)))));
+            releaseMessageScratch();
             return true;
         }
 
@@ -413,6 +485,21 @@ std::optional<bool> BodyTranslator::nativeProcedure(tree_t call, tree_t declarat
                 writeBuiltString(written, *line, *justified, *field, native.location);
             return appended && assignWhole((*actuals)[0], *appended);
         }
+        // One whose length only the run knows is shown from the kernel holding it, a slice's
+        // copied there for the write.
+        if (runTimeString(written) != nullptr || isRunTimeSlice(written)) {
+            std::optional<Value> mark;
+            const std::optional<Value> string = scratchActual(written, mark);
+            if (!string) return false;
+            native.kind = eir::SysTaskKind::LineWrite;
+            native.formatIndex = addString("%s");
+            native.arguments = {argument(*line), argument(*justified), argument(*field),
+                                eir::SysTaskArgument{.value = eir::Operand::reg(string->reg),
+                                                     .type = eir::Type::string()}};
+            const Value appended = systemFunction(std::move(native), handle);
+            if (mark) releaseScratch(*mark);
+            return assignWhole((*actuals)[0], appended);
+        }
         const std::optional<Value> shown = value(1);
         if (!shown) return false;
         native.kind = eir::SysTaskKind::LineWrite;
@@ -433,13 +520,17 @@ std::optional<bool> BodyTranslator::nativeProcedure(tree_t call, tree_t declarat
         return assignWhole((*actuals)[1], systemFunction(std::move(native), handle));
     }
 
-    // `read(l, value)` and `read(l, value, good)` of a character.
+    // `read(l, value)` and `read(l, value, good)` of a character; with no `good` to tell, an empty
+    // line ends the run with a failure, as GHDL's textio does.
     if (procedure == "READ" && (actuals->size() == 2 || actuals->size() == 3)
         && isCharacters(tree_type((*actuals)[1])) && !type_is_array(tree_type((*actuals)[1]))) {
         const std::optional<Value> line = value(0);
         if (!line) return false;
         native.kind = eir::SysTaskKind::LineReadCharacter;
         native.arguments = {argument(*line)};
+        if (actuals->size() == 2)
+            native.arguments.push_back(
+                argument(constant(1, eir::Type::bits(1, false, false), nullptr)));
         const Value read = systemFunction(std::move(native), eir::Type::bits(16, false, false));
         const auto bits = [&](std::uint32_t low, std::uint32_t width) {
             const Value part{.reg = newRegister(eir::Type::bits(width, false, false)),
@@ -456,6 +547,51 @@ std::optional<bool> BodyTranslator::nativeProcedure(tree_t call, tree_t declarat
             if (!assignWhole((*actuals)[2], good)) return false;
         }
         return true;
+    }
+
+    // `read(l, value)` and `read(l, value, good)` of a string: as many characters as it holds,
+    // where the line has them. A null one takes none and is always read.
+    if (procedure == "READ" && (actuals->size() == 2 || actuals->size() == 3)
+        && type_is_array(tree_type((*actuals)[1])) && isCharacters(tree_type((*actuals)[1]))) {
+        const Value failing = constant(1, eir::Type::bits(1, false, false), nullptr);
+        // Into a string whose length only the run knows, which the kernel holds, or a slice of
+        // one known here whose length the run gives, through a copy there written back.
+        if (runTimeString((*actuals)[1]) != nullptr || isRunTimeSlice((*actuals)[1])) {
+            const std::optional<Value> line = value(0);
+            if (!line) return false;
+            std::optional<Value> mark;
+            const std::optional<Value> string = scratchActual((*actuals)[1], mark);
+            if (!string) return false;
+            native.kind = eir::SysTaskKind::StringRead;
+            native.arguments = {argument(*string), argument(*line)};
+            if (actuals->size() == 2) native.arguments.push_back(argument(failing));
+            const Value read = systemFunction(std::move(native), eir::Type::bits(1, false, false));
+            if (mark) {
+                if (!sliceFromScratch((*actuals)[1], *string)) return false;
+                releaseScratch(*mark);
+            }
+            if (actuals->size() == 2) return true;
+            return assignWhole((*actuals)[2], booleanOf(read.reg, tree_type((*actuals)[2])));
+        }
+        const std::optional<Place> target = place((*actuals)[1]);
+        if (!target) return false;
+        if (!target->isVariable) return fail((*actuals)[1], "a read into something not a variable");
+        Value good = constant(1, eir::Type::bits(1, false, false), nullptr);
+        if (!target->empty) {
+            const std::optional<Value> line = value(0);
+            if (!line) return false;
+            const Value before = read(*target, tree_type((*actuals)[1]));
+            const std::uint32_t width = target->layout.storage.bitWidth();
+            native.kind = eir::SysTaskKind::LineReadString;
+            native.arguments = {argument(*line), argument(before)};
+            if (actuals->size() == 2) native.arguments.push_back(argument(failing));
+            const Value taken =
+                systemFunction(std::move(native), eir::Type::bits(width + 1, false, false));
+            assignVariable(*target, bitsOf(taken, 0, width));
+            good = bitsOf(taken, width, 1);
+        }
+        if (actuals->size() == 2) return true;
+        return assignWhole((*actuals)[2], booleanOf(good.reg, tree_type((*actuals)[2])));
     }
 
     return fail(call, std::string("std.textio's ") + simpleName(tree_ident(declaration))

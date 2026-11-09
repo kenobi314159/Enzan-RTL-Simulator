@@ -11,6 +11,7 @@ enzan_add_component(
           Process.cpp
           Serialization.cpp
           Type.cpp
+          Udp.cpp
           UnitRequest.cpp
           Verifier.cpp
   HEADERS ArrayDimension.h
@@ -24,6 +25,7 @@ enzan_add_component(
           Process.h
           Serialization.h
           Type.h
+          Udp.h
           UnitRequest.h
           Verifier.h
   DEPENDS enzan::common)

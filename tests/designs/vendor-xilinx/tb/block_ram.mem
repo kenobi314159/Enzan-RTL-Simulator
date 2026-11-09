@@ -1,0 +1,9 @@
+// What tb_ramb36e1 and tb_ramb36e2 initialise their block RAMs with: a word of 36 bits a line, from address 0.
+123456789
+abcdef012
+0fedcba98
+f00000001
+555555555
+aaaaaaaaa
+000000000
+876543210

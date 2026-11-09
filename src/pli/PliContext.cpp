@@ -32,14 +32,6 @@ namespace {
 /// is one session per process; see the class comment.
 PliContext* currentContext = nullptr;
 
-/// `/tb/u_dut` as VPI names it: `tb.u_dut`.
-std::string dottedPath(std::string_view path) {
-    if (path.starts_with('/')) path.remove_prefix(1);
-    std::string dotted(path);
-    std::ranges::replace(dotted, '/', '.');
-    return dotted;
-}
-
 /// Whether two names are one in any case, as VHDL compares them.
 bool equalsIgnoringCase(std::string_view left, std::string_view right) {
     return std::ranges::equal(left, right, [](char a, char b) {
@@ -343,7 +335,7 @@ void PliContext::buildScopes() {
         scope.instance = instanceIndex;
         scope.name = enclosing != NoScope ? instance.name.substr(scopes[enclosing].prefix.size())
                                           : instance.name;
-        scope.fullName = dottedPath(instance.path);
+        scope.fullName = elab::dottedPath(instance.path);
         if (enclosing != NoScope) {
             scope.parent = enclosing;
             scopes[enclosing].children.push_back(scopeIndex);

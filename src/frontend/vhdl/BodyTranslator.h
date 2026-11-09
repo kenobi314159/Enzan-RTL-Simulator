@@ -37,6 +37,10 @@ struct Shape {
 
     /// For a parameter whose type's element is an unconstrained array, its elements' bounds.
     std::vector<std::optional<Folder::Range>> elementBounds;
+
+    /// For a string parameter whose actual's length only the run knows, the direction it runs:
+    /// the body is made for any length, and takes a string in the kernel's scratch.
+    std::vector<std::optional<bool>> runTimeStrings;
 };
 
 /// A subprogram specialised for one shape: where a call finds it, and what its parameters and its
@@ -227,6 +231,10 @@ private:
         /// For a function whose string result has a length only the run shows, the register of
         /// the line its `return`s write into instead.
         std::optional<std::uint32_t> lineSink;
+
+        /// The mark of the kernel's scratch taken before the first string of run-time length the
+        /// subprogram declares, released to as it returns.
+        std::optional<Value> scratchMark;
     };
 
     /// A loop that `exit` and `next` can name.
@@ -366,6 +374,82 @@ private:
     /// and merged under a mask of the slice's bits.
     bool movingSliceAssignment(tree_t statement);
 
+    // --- strings of run-time length, held in the kernel's scratch (Strings.cpp) -----------------
+
+    /// The string of run-time length `name` designates, a variable or a parameter holding one;
+    /// null for any other name.
+    [[nodiscard]] const Value* runTimeString(tree_t name) const;
+
+    /// The string of run-time length whose `'range` or `'reverse_range` `range` is; null for any
+    /// other range.
+    [[nodiscard]] const Value* runTimeStringRange(tree_t range) const;
+
+    /// `declaration`, a subprogram's variable or constant of a string subtype whose bounds only
+    /// the run knows, declared as a string in scratch. Nothing when it is not one of those.
+    std::optional<bool> declareRunTimeString(tree_t declaration);
+
+    /// A register holding a mark of the kernel's scratch, which what is made after it is
+    /// released to.
+    Value scratchMark();
+    void releaseScratch(const Value& mark);
+
+    /// The bounds of `string`, a string of run-time length: signed 64-bit registers.
+    struct StringBounds {
+        Value left;
+        Value right;
+        Value length;
+    };
+
+    StringBounds stringBounds(const Value& string, tree_t where);
+
+    /// `attribute` of `string`, a string of run-time length: one of its bounds or its length.
+    std::optional<Value> runTimeStringAttribute(tree_t attribute, const Value& string);
+
+    /// An element of `string`, a string of run-time length, or a slice of it over bounds that
+    /// fold: `expression`, of `type`.
+    std::optional<Value> runTimeStringPart(tree_t expression, const Value& string, type_t type);
+
+    /// `name := value`, of an element of a string of run-time length or a slice of it over bounds
+    /// that fold.
+    bool runTimeStringAssignment(tree_t name, const Value& string, tree_t value);
+
+    /// A comparison `expression` of two strings, one of them or both of run-time length.
+    std::optional<Value> runTimeStringComparison(tree_t expression, subprogram_kind_t kind);
+
+    /// The handle of a string in scratch holding the value of `expression`: a string of run-time
+    /// length's own, or one made for it from a string of a length known here. A string made is
+    /// released to the mark the caller took.
+    std::optional<Value> inScratch(tree_t expression);
+
+    /// A new string in scratch holding `value`, a string of a length known here.
+    Value copyToScratch(const Value& value, tree_t where);
+
+    /// Releases what the message just shown copied into scratch, if anything.
+    void releaseMessageScratch();
+
+    /// True when `expression` is a slice of a string of a length known here whose bounds and
+    /// length only the run knows, `m_string(1 to i)`, which a call takes as a string in scratch.
+    [[nodiscard]] bool isRunTimeSlice(tree_t expression) const;
+
+    /// True when `actual`, of a parameter of `formalType`, is a string whose length only the run
+    /// knows, or a slice of one that `isRunTimeSlice` is, which the call passes in scratch.
+    [[nodiscard]] bool passesInScratch(tree_t actual, type_t formalType) const;
+
+    /// The slice `expression` is, as `isRunTimeSlice` says, copied into a new string in scratch.
+    std::optional<Value> sliceToScratch(tree_t expression);
+
+    /// Writes `string` back into the slice `expression` is, an `out` or `inout` actual's.
+    bool sliceFromScratch(tree_t expression, const Value& string);
+
+    /// What a call passes for `actual`, which `passesInScratch`: a string of run-time length's
+    /// own handle, or a slice's copy, made once `mark` holds a mark of the scratch, taken here if
+    /// it holds none.
+    std::optional<Value> scratchActual(tree_t actual, std::optional<Value>& mark);
+
+    /// `left` and `right`, strings in scratch, compared as `kind` does: equality or an ordering.
+    Value stringComparison(const Value& left, const Value& right, subprogram_kind_t kind,
+                           tree_t expression);
+
     // --- std.textio and files, run natively (Textio.cpp) -----------------------------------------
 
     /// std.textio's procedures and the predefined file operations, which the runtime runs over its
@@ -375,6 +459,13 @@ private:
 
     /// `endfile(f)`.
     std::optional<Value> endOfFile(tree_t call);
+
+    /// A line's 'LENGTH, 'HIGH or 'RIGHT, `attribute`, which the runtime holding the line knows.
+    std::optional<Value> lineLength(tree_t attribute);
+
+    /// An element of a line, or a slice of it over bounds that fold, `expression`, of `type`, read
+    /// from the runtime holding the line.
+    std::optional<Value> linePart(tree_t expression, type_t type);
 
     /// A file the process declares: a register holding its descriptor, opened where it is
     /// declared when the declaration says so.
@@ -493,6 +584,16 @@ private:
     };
 
     std::optional<Offset> elementOffset(const Layout& layout, tree_t index);
+
+    /// Ends the run with a failure where it reaches this point, reporting `message`, with `%0d`
+    /// where `argument` goes when there is one.
+    void failAtRun(tree_t where, std::string message, const Value* argument = nullptr);
+
+    /// Ends the run with a failure where it reaches an assignment of a value `valueBits` wide to
+    /// `what`, `targetBits` wide and laid out as `target` where known: VHDL checks that their
+    /// lengths match only as the assignment runs, so a branch no run takes may hold one.
+    void failLength(tree_t where, std::uint32_t valueBits, std::uint32_t targetBits,
+                    const Layout* target, std::string_view what);
 
     /// Ends the run with a failure unless `position`, a signed 64-bit register, lies within
     /// `bounds`. `message` is the report, with `%0d` where the position goes.
@@ -625,6 +726,18 @@ private:
     /// The line the next inlined function's `return`s write into, which its frame takes.
     std::optional<std::uint32_t> nextLineSink;
     std::vector<Inlined> inlined;
+
+    /// The mark of the kernel's scratch a subprogram's own body takes before the first string of
+    /// run-time length it declares, released to at each of its returns.
+    std::optional<Value> ownScratchMark;
+
+    /// How many marks of the scratch are taken and not yet released to where translation is, an
+    /// inlined subprogram's or a statement's: a `wait` there would release what they hold.
+    std::uint32_t scratchHeld = 0;
+
+    /// The mark taken before the first slice of run-time length a message being built shows is
+    /// copied into scratch, which what shows the message releases once it has.
+    std::optional<Value> messageScratch;
 
     std::uint32_t current = 0;
     SourceLocation statementLocation;

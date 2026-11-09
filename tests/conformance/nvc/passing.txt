@@ -213,6 +213,7 @@ issue1506
 issue153
 issue1539
 issue1541
+issue1587
 issue16
 issue1600
 issue1606
@@ -407,6 +408,8 @@ slice4
 slice5
 stack1
 synopsys1
+textio2
+textio3
 toplevel1
 vecorder1
 vests10

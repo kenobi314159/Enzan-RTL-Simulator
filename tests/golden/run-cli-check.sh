@@ -108,12 +108,23 @@ expect 1 "'--listen' applies" "$enzan" analyse --listen k.sock tb.sv
 
 # Two values for one are two answers to one question, which the last no longer settles; the same
 # value again is the same answer. `--dry-run` stops before anything is analysed.
-expect 1 "'--top' was given twice" "$enzan" --top tb --top other tb.sv
 expect 1 "'--vcd' was given twice" "$enzan" --vcd a.vcd --vcd b.vcd tb.sv
 expect 1 "'--wave-scope' was given twice" "$enzan" --vcd-scope /tb --wave-scope /tb/u tb.sv
 expect 1 "sets the parameter 'W' twice" "$enzan" -G W=1 -GW=2 tb.sv
-expect 1 "the top level was given twice" "$enzan" run --in-lib libs/none --top tb other
 expect 0 "tb.sv" "$enzan" --dry-run -t tb --top tb -G W=1 -GW=1 tb.sv
+
+# --- several top levels --------------------------------------------------------------------------
+
+# `--top` is repeatable, each a root and the first the design's own; the same top again is the
+# same one. With none named, two candidates are refused, and `glbl` among them is said to be a top
+# of its own.
+if has systemverilog; then
+    printf 'module tb;\n  initial $display("PASS cli tb");\nendmodule\nmodule glbl;\nendmodule\n' \
+        >tops.sv
+    expect 0 "PASS cli tb" "$enzan" --top tb --top glbl --top tb tops.sv
+    expect 2 "top module 'other' was not found" "$enzan" --top tb --top other tb.sv
+    expect 2 "give \`--top\` for each" "$enzan" tops.sv
+fi
 
 # --- how long a run runs --------------------------------------------------------------------------
 

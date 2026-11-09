@@ -42,9 +42,10 @@ struct Slot {
     /// The kind of net, when `kind` is `Net`.
     eir::NetKind netKind = eir::NetKind::Wire;
 
-    /// For a net, the bits some continuous assignment drives, as merged extents of this slot.
-    /// They start at X, as a variable does, until their driver first runs; the bits outside
-    /// them hold the net's undriven value for good.
+    /// For a net, the bits some process writes, as merged extents of this slot: those a continuous
+    /// assignment drives, and those an output port's variable that is one slot with the net holds.
+    /// They start at X, as a variable does, until they are first written; the bits outside them
+    /// hold the net's undriven value for good.
     std::vector<eir::WriteExtent> drivenBits;
 
     /// The unpacked dimensions and element width of the object that declared this slot, when
@@ -103,6 +104,10 @@ struct SlotRange {
 
     friend bool operator==(SlotRange, SlotRange) noexcept = default;
 };
+
+/// `path` as SystemVerilog names a scope, `tb.u_dut` for `/tb/u_dut`: what `%m` prints and VPI
+/// calls a full name (IEEE 1800 sections 21.2.1.7 and 23.6).
+[[nodiscard]] std::string dottedPath(std::string_view path);
 
 /// One instantiated module.
 struct Instance {
@@ -216,6 +221,10 @@ struct Driver {
     std::uint32_t firstSegment = 0;
     std::uint32_t segmentCount = 0;
 
+    /// What it drives 0 and 1 with, fixed by its declaration: the driver's value changes during a
+    /// run, its strength never does (DESIGN_GUIDE.md section 3.7).
+    eir::DriveStrength strength;
+
     [[nodiscard]] std::uint32_t endBit() const noexcept { return lowBit + width; }
 };
 
@@ -234,6 +243,11 @@ struct Segment {
     /// its resolution call in the elaborated design's list.
     eir::NetKind netKind = eir::NetKind::Wire;
     std::uint32_t resolution = NoResolution;
+
+    /// Whether a driver drives a value in the weak class, so that the strong ones are resolved
+    /// first and the weak only where they leave a bit `z`. A segment of strong drivers alone takes
+    /// the plain fold.
+    bool weak = false;
 
     static constexpr std::uint32_t NoResolution = 0xFFFF'FFFFU;
 };
@@ -286,8 +300,12 @@ public:
     /// Total size of the state arena, in Words.
     [[nodiscard]] std::uint32_t arenaWords() const noexcept { return arenaSize; }
 
-    /// The name of the top-level module that was elaborated.
-    [[nodiscard]] const std::string& topModuleName() const noexcept { return topName; }
+    /// The name of the first top-level module elaborated, the design's own, which a window title
+    /// shows.
+    [[nodiscard]] const std::string& topModuleName() const noexcept { return topNames.front(); }
+
+    /// The names of every top level elaborated, in the order given.
+    [[nodiscard]] std::span<const std::string> topModuleNames() const noexcept { return topNames; }
 
     /// Returns the slot a hierarchical path names, or nothing.
     ///
@@ -330,7 +348,7 @@ private:
     std::vector<ResolutionCall> resolutionList;
     std::uint32_t widestDriverBits = 0;
     std::uint32_t arenaSize = 0;
-    std::string topName;
+    std::vector<std::string> topNames;
 
     /// Hierarchical path to slot, and to instance. Ordered containers: the GUI's
     /// hierarchy tree, `find` and any diagnostic that lists names must produce the

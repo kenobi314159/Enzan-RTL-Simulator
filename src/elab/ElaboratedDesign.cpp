@@ -2,7 +2,16 @@
 
 #include "elab/ElaboratedDesign.h"
 
+#include <algorithm>
+
 namespace enzan::elab {
+
+std::string dottedPath(std::string_view path) {
+    if (path.starts_with('/')) path.remove_prefix(1);
+    std::string dotted(path);
+    std::ranges::replace(dotted, '/', '.');
+    return dotted;
+}
 
 std::optional<std::uint32_t> ElaboratedDesign::findSlot(std::string_view path) const {
     const auto found = slotsByPath.find(path);

@@ -53,11 +53,14 @@ enzan run --gui --top tb design.sv testbench.sv
 | Packed and unpacked arrays, structs, enums, four-state values with X and Z | yes |
 | Nets with several drivers, resolved by their type | yes |
 | `` `timescale `` and `timeunit` | yes, each module's delays and `$time` in its own unit |
-| `real` and `string` variables and ports | not yet, reported by name |
+| `real` variables | yes; a `real` port not yet, reported by name |
+| `string` variables and ports | not yet, reported by name |
 | VHDL entities, architectures, processes, generics, generate, records, arrays | yes |
 | `std_logic_1164`, `numeric_std`, `math_real`, `std.textio` and files | yes |
 | VHDL access types beyond `line`, protected types, configurations | not yet, reported by name |
 | A design mixing SystemVerilog and VHDL, either instantiating the other | yes |
+| AMD Xilinx's simulation models, from your own Vivado | yes |
+| Altera's simulation models, from your own Quartus | `altera_mf`, LPM, `sgate` and Cyclone 10 LP netlists, from Verilog, and from VHDL through the component packages or on Altera's VHDL models |
 | VCD and FST waveforms | yes |
 | GUI: live waveforms, cursors, grouping, radixes, force and deposit, remote attach | yes |
 | GUI: the Processes and Source windows | not yet |
@@ -76,6 +79,8 @@ Using Enzan:
 - [Signal lists](docs/signal-lists.md): the file the wave window's rows are saved to.
 - [Libraries, file lists and make](docs/libraries.md): analysis libraries, `.f` files, and
   building a design with `make`.
+- [Vendors' simulation libraries](docs/vendor-libraries.md): AMD Xilinx's and Altera's models, read
+  from your own installation.
 - [Mixed-language designs](docs/mixed-language.md): what crosses between SystemVerilog and VHDL,
   and at what cost.
 - [cocotb](docs/cocotb.md): running cocotb testbenches.

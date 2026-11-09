@@ -663,7 +663,7 @@ TEST(Kernel, DisplayWritesToTheTranscript) {
     ASSERT_TRUE(simulation.ready()) << simulation.messages().front();
 
     simulation.run();
-    EXPECT_EQ(simulation.transcript(), "value = 42 at 0ps in /tb\n");
+    EXPECT_EQ(simulation.transcript(), "value = 42 at 0ps in tb\n");
 }
 
 /// `write(l, 42, left, 5); write(l, -7); writeline(output, l)`, and the handle writeline leaves in
@@ -734,6 +734,157 @@ TEST(Kernel, TextioLinesLiveInTheHeapAndAreWrittenWhole) {
     simulation.run();
     EXPECT_EQ(simulation.transcript(), "42   -7\n");
     EXPECT_EQ(simulation.value("/tb/after", Radix::Decimal), "1");
+}
+
+/// Strings of run-time length in the kernel's scratch: "aaaaa" from 1 to 5 with "bc" written from
+/// index 2, shown whole and as the slice of three from 2; its bounds stored in `bounds`, and the
+/// handle the next string has once the first is released to the mark before it in `again`. With
+/// `waits`, the process waits between the two instead of releasing.
+Design makeScratchStrings(bool waits) {
+    ProcessBuilder builder(ProcessKind::Initial, "strings");
+    const Type handle = Type::bits(64, false, false);
+    const Type index = Type::bits(64, true, false);
+    const std::uint32_t mark = builder.reg(handle);
+    const std::uint32_t string = builder.reg(handle);
+    const std::uint32_t one = builder.reg(index);
+    const std::uint32_t two = builder.reg(index);
+    const std::uint32_t five = builder.reg(index);
+    const std::uint32_t up = builder.reg(Type::bits(1, false, false));
+    const std::uint32_t fill = builder.reg(Type::bits(8, false, false));
+    const std::uint32_t pair = builder.reg(Type::bits(16, false, false));
+    const std::uint32_t bounds = builder.reg(Type::bits(192, false, false));
+    const std::uint32_t part = builder.reg(Type::bits(24, false, false));
+    const std::uint32_t again = builder.reg(handle);
+    const std::uint32_t delay = builder.reg(Type::bits(64, false, false));
+
+    const auto argument = [](std::uint32_t reg, Type type) {
+        return SysTaskArgument{.value = Operand::reg(reg), .type = type};
+    };
+    const auto call = [&](SysTaskKind kind, std::vector<SysTaskArgument> arguments,
+                          std::string_view format = {}) {
+        SysTaskCall made;
+        made.kind = kind;
+        made.arguments = std::move(arguments);
+        if (!format.empty()) made.formatIndex = builder.string(std::string(format));
+        return builder.sysCall(std::move(made));
+    };
+    const std::uint32_t marking = call(SysTaskKind::StringMark, {});
+    const std::uint32_t making =
+        call(SysTaskKind::StringNew, {argument(one, index), argument(five, index),
+                                      argument(up, Type::bits(1, false, false)),
+                                      argument(fill, Type::bits(8, false, false))});
+    const std::uint32_t splicing =
+        call(SysTaskKind::StringSplice, {argument(string, handle), argument(two, index),
+                                         argument(pair, Type::bits(16, false, false))});
+    const std::uint32_t measuring = call(SysTaskKind::StringBounds, {argument(string, handle)});
+    const std::uint32_t slicing =
+        call(SysTaskKind::StringSlice, {argument(string, handle), argument(two, index)});
+    const std::uint32_t showing = call(
+        SysTaskKind::Display,
+        {argument(string, Type::string()), argument(part, Type::bits(24, false, false))}, "%s|%s");
+    const std::uint32_t releasing = call(SysTaskKind::StringRelease, {argument(mark, handle)});
+
+    const auto load = [&](std::uint32_t reg, std::string_view literal) {
+        builder.emit(Instruction::make(Opcode::LoadConstant, Operand::reg(reg),
+                                       Operand::constant(builder.constant(literal))));
+    };
+    const auto function = [&](std::uint32_t result, std::uint32_t descriptor) {
+        builder.emit(Instruction::make(Opcode::SysFunction, Operand::reg(result),
+                                       Operand::sysCall(descriptor)));
+    };
+    builder.block("entry");
+    load(one, "64'sd1");
+    load(two, "64'sd2");
+    load(five, "64'sd5");
+    load(up, "1'b1");
+    load(fill, "8'h61");
+    load(pair, "16'h6263");
+    load(delay, "64'd10");
+    function(mark, marking);
+    function(string, making);
+    builder.emit(Instruction::make(Opcode::SysTask, {}, Operand::sysCall(splicing)));
+    function(bounds, measuring);
+    function(part, slicing);
+    builder.emit(Instruction::make(Opcode::SysTask, {}, Operand::sysCall(showing)));
+    builder.store(0, bounds);
+    if (waits) {
+        builder.emit(
+            Instruction::make(Opcode::WaitTime, {}, Operand::reg(delay), Operand::block(1)));
+        builder.block("after");
+    } else {
+        builder.emit(Instruction::make(Opcode::SysTask, {}, Operand::sysCall(releasing)));
+    }
+    function(again, making);
+    builder.store(1, again);
+    builder.emit(Instruction::make(Opcode::Return));
+
+    return designOf(makeTop({builder.finish()},
+                            {Object{.name = "bounds", .type = Type::bits(192, false, false)},
+                             Object{.name = "again", .type = handle}}));
+}
+
+TEST(Kernel, AStringOfRunTimeLengthLivesInScratchUntilReleasedToAMark) {
+    Simulation simulation(makeScratchStrings(false), "tb");
+    ASSERT_TRUE(simulation.ready()) << simulation.messages().front();
+    simulation.run();
+    EXPECT_EQ(simulation.transcript(), "abcaa|bca\n");
+    EXPECT_EQ(simulation.value("/tb/bounds", Radix::Hexadecimal),
+              "000000000000000100000000000000050000000000000005");
+    EXPECT_EQ(simulation.value("/tb/again", Radix::Decimal), "1");
+}
+
+TEST(Kernel, AProcessThatSuspendsReleasesItsStringsOfRunTimeLength) {
+    Simulation simulation(makeScratchStrings(true), "tb");
+    ASSERT_TRUE(simulation.ready()) << simulation.messages().front();
+    simulation.run();
+    EXPECT_EQ(simulation.value("/tb/again", Radix::Decimal), "1");
+}
+
+TEST(Kernel, AnIndexOutsideAStringOfRunTimeLengthEndsTheRun) {
+    ProcessBuilder builder(ProcessKind::Initial, "strings");
+    const Type handle = Type::bits(64, false, false);
+    const Type index = Type::bits(64, true, false);
+    const std::uint32_t string = builder.reg(handle);
+    const std::uint32_t three = builder.reg(index);
+    const std::uint32_t one = builder.reg(index);
+    const std::uint32_t down = builder.reg(Type::bits(1, false, false));
+    const std::uint32_t fill = builder.reg(Type::bits(8, false, false));
+    const std::uint32_t four = builder.reg(index);
+    const std::uint32_t element = builder.reg(Type::bits(8, false, false));
+    const auto argument = [](std::uint32_t reg, Type type) {
+        return SysTaskArgument{.value = Operand::reg(reg), .type = type};
+    };
+    SysTaskCall making;
+    making.kind = SysTaskKind::StringNew;
+    making.arguments = {argument(three, index), argument(one, index),
+                        argument(down, Type::bits(1, false, false)),
+                        argument(fill, Type::bits(8, false, false))};
+    const std::uint32_t make = builder.sysCall(std::move(making));
+    SysTaskCall slicing;
+    slicing.kind = SysTaskKind::StringSlice;
+    slicing.arguments = {argument(string, handle), argument(four, index)};
+    const std::uint32_t slice = builder.sysCall(std::move(slicing));
+
+    const auto load = [&](std::uint32_t reg, std::string_view literal) {
+        builder.emit(Instruction::make(Opcode::LoadConstant, Operand::reg(reg),
+                                       Operand::constant(builder.constant(literal))));
+    };
+    builder.block("entry");
+    load(three, "64'sd3");
+    load(one, "64'sd1");
+    load(down, "1'b0");
+    load(fill, "8'h20");
+    load(four, "64'sd4");
+    builder.emit(
+        Instruction::make(Opcode::SysFunction, Operand::reg(string), Operand::sysCall(make)));
+    builder.emit(
+        Instruction::make(Opcode::SysFunction, Operand::reg(element), Operand::sysCall(slice)));
+    builder.emit(Instruction::make(Opcode::Return));
+
+    Simulation simulation(designOf(makeTop({builder.finish()})), "tb");
+    ASSERT_TRUE(simulation.ready()) << simulation.messages().front();
+    EXPECT_EQ(simulation.run(), RunStatus::Error);
+    EXPECT_EQ(simulation.messages().front(), "index 4 is outside the bounds 3 downto 1");
 }
 
 TEST(Kernel, FinishEndsTheRun) {
@@ -2276,6 +2427,40 @@ TEST(Kernel, ADepositOnAResolvedNetHoldsOnlyUntilADriverChanges) {
     EXPECT_EQ(simulation.value("/tb/n"), "1");
 }
 
+TEST(Kernel, AReleaseResolvesAgainWhatTheDriversOfAForcedNetDrive) {
+    // The drivers keep their values while the force stands, so a release from outside resolves
+    // them at once, and the net does not wait for one of them to change.
+    Simulation simulation = twoDrivers("1'b1", "1'bz");
+    ASSERT_TRUE(simulation.ready()) << simulation.messages().front();
+    simulation.run();
+
+    Kernel& kernel = simulation.simulationKernel();
+    const std::uint32_t net = simulation.signal("/tb/n");
+    kernel.force(net, literal("1'b0"));
+    kernel.deposit(simulation.signal("/tb/a"), literal("1'bz"));
+    kernel.deposit(simulation.signal("/tb/b"), literal("1'b1"));
+    simulation.run();
+    EXPECT_EQ(simulation.value("/tb/n"), "0");
+
+    EXPECT_TRUE(kernel.release(net));
+    EXPECT_EQ(simulation.value("/tb/n"), "1");
+}
+
+TEST(Kernel, AReleasedUndrivenNetGoesBackToItsKindsValue) {
+    ModuleDefinition definition = makeTop({}, {Object{.name = "n",
+                                                      .type = Type::bits(2, false, true),
+                                                      .kind = enzan::eir::ObjectKind::Net,
+                                                      .netKind = enzan::eir::NetKind::Tri1}});
+    Simulation simulation(designOf(std::move(definition)), "tb");
+    ASSERT_TRUE(simulation.ready());
+
+    const std::uint32_t net = simulation.signal("/tb/n");
+    simulation.simulationKernel().force(net, literal("2'b00"));
+    EXPECT_EQ(simulation.value("/tb/n"), "00");
+    EXPECT_TRUE(simulation.simulationKernel().release(net));
+    EXPECT_EQ(simulation.value("/tb/n"), "11");
+}
+
 // ---------------------------------------------------------------------------
 // Calls of subprograms
 // ---------------------------------------------------------------------------
@@ -2494,7 +2679,8 @@ TEST(Kernel, RealsComputeAsDoublesAndRoundHalfwayAwayFromZero) {
 
 TEST(Kernel, CodesArePresentedAsBitsAndBitsEncodedAsCodes) {
     // What crosses a language boundary: std_ulogic's '1', '0', 'H' and 'Z' as the bits 1 0 1 z,
-    // and the bits 1 0 x z as std_ulogic's '1', '0', 'X' and 'Z' and as bits' 1, 0, 0 and 0.
+    // and the bits 1 0 x z as std_ulogic's '1', '0', 'X' and 'Z' and as bits' 1, 0, 0 and 0; and
+    // driven weakly, as 'H', 'L', 'W' and 'Z', or with only the 1 weak, as 'H', '0', 'X' and 'Z'.
     ProcessBuilder builder(ProcessKind::Initial, "boundary");
     const Type codes = Type::bits(32, false, false);
     const Type bits = Type::bits(4, false, true);
@@ -2503,6 +2689,8 @@ TEST(Kernel, CodesArePresentedAsBitsAndBitsEncodedAsCodes) {
     const std::uint32_t shown = builder.reg(bits);
     const std::uint32_t asLogic = builder.reg(codes);
     const std::uint32_t asBit = builder.reg(codes);
+    const std::uint32_t asWeak = builder.reg(codes);
+    const std::uint32_t asWeakOne = builder.reg(codes);
     const auto encoding = [](enzan::eir::Encoding which) {
         return Operand::immediate(static_cast<std::uint32_t>(which));
     };
@@ -2516,23 +2704,35 @@ TEST(Kernel, CodesArePresentedAsBitsAndBitsEncodedAsCodes) {
     builder.emit(Instruction::make(Opcode::LoadConstant, Operand::reg(shown),
                                    Operand::constant(builder.constant("4'b10xz"))));
     builder.emit(Instruction::make(Opcode::Encode, Operand::reg(asLogic), Operand::reg(shown),
-                                   encoding(enzan::eir::Encoding::VhdlLogic)));
+                                   encoding(enzan::eir::Encoding::VhdlLogic),
+                                   Operand::immediate(0)));
     builder.emit(Instruction::make(Opcode::Encode, Operand::reg(asBit), Operand::reg(shown),
-                                   encoding(enzan::eir::Encoding::VhdlBit)));
+                                   encoding(enzan::eir::Encoding::VhdlBit), Operand::immediate(0)));
+    builder.emit(Instruction::make(Opcode::Encode, Operand::reg(asWeak), Operand::reg(shown),
+                                   encoding(enzan::eir::Encoding::VhdlLogic),
+                                   Operand::immediate(enzan::eir::WeakZero | enzan::eir::WeakOne)));
+    builder.emit(Instruction::make(Opcode::Encode, Operand::reg(asWeakOne), Operand::reg(shown),
+                                   encoding(enzan::eir::Encoding::VhdlLogic),
+                                   Operand::immediate(enzan::eir::WeakOne)));
     builder.store(0, presented);
     builder.store(1, asLogic);
     builder.store(2, asBit);
+    builder.store(3, asWeak);
+    builder.store(4, asWeakOne);
     builder.emit(Instruction::make(Opcode::Return));
 
-    ModuleDefinition definition = makeTop({builder.finish()}, {Object{.name = "a", .type = bits},
-                                                               Object{.name = "b", .type = codes},
-                                                               Object{.name = "c", .type = codes}});
+    ModuleDefinition definition = makeTop(
+        {builder.finish()}, {Object{.name = "a", .type = bits}, Object{.name = "b", .type = codes},
+                             Object{.name = "c", .type = codes}, Object{.name = "d", .type = codes},
+                             Object{.name = "e", .type = codes}});
     Simulation simulation(designOf(std::move(definition)), "tb");
     ASSERT_TRUE(simulation.ready()) << reportedMessages(simulation);
     EXPECT_EQ(simulation.run(), RunStatus::Quiescent);
     EXPECT_EQ(simulation.value("/tb/a", Radix::Binary), "101z");
     EXPECT_EQ(simulation.value("/tb/b", Radix::Hexadecimal), "03020104");
     EXPECT_EQ(simulation.value("/tb/c", Radix::Hexadecimal), "01000000");
+    EXPECT_EQ(simulation.value("/tb/d", Radix::Hexadecimal), "07060504");
+    EXPECT_EQ(simulation.value("/tb/e", Radix::Hexadecimal), "07020104");
 }
 
 TEST(Kernel, OneWordOperationsMatchTheGeneralRoutines) {

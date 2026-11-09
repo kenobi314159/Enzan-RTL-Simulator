@@ -376,6 +376,35 @@ std::optional<Layout> nullLayout(const Folder::Range& index, type_t elementType,
                   .element = std::make_shared<const Layout>(*element)};
 }
 
+Layout runTimeStringLayout(type_t type, bool ascending) {
+    return Layout{.storage = eir::Type::bits(64, false, false),
+                  .array = false,
+                  .index = Folder::Range{.left = 0, .right = 0, .ascending = ascending},
+                  .elementBits = 8,
+                  .elementType = type_elem(type),
+                  .element = nullptr,
+                  .inner = {},
+                  .recordType = nullptr,
+                  .fields = {},
+                  .fieldOffsets = {},
+                  .runTimeString = true};
+}
+
+bool isStringType(type_t type) {
+    if (!type_is_array(type) || dimension_of(type) != 1) return false;
+    type_t element = type_elem(type);
+    return type_is_enum(element)
+           && std::string_view(istr(type_ident(type_base_recur(element))))
+                  == "STD.STANDARD.CHARACTER";
+}
+
+bool isDereferencedLine(tree_t name) {
+    if (tree_kind(name) != T_ALL || !tree_has_value(name) || !tree_has_type(tree_value(name)))
+        return false;
+    type_t access = tree_type(tree_value(name));
+    return type_kind(type_base_recur(access)) == T_ACCESS && scalarStorage(access).has_value();
+}
+
 std::optional<Layout> declaredNullLayout(tree_t declaration, const Folder& folder) {
     type_t type = tree_type(declaration);
     if (!type_is_array(type) || dimension_of(type) != 1) return std::nullopt;

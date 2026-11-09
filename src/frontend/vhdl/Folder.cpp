@@ -415,6 +415,12 @@ std::optional<std::int64_t> Folder::attribute(tree_t expression) const {
     case ATTR_LENGTH:
     case ATTR_ASCENDING: {
         if (!tree_has_type(prefix)) return std::nullopt;
+        // A line the runtime holds rises from 1, as NVC's textio makes every one; where it ends
+        // only the run knows.
+        if (isDereferencedLine(prefix)) {
+            if (kind == ATTR_LEFT || kind == ATTR_LOW || kind == ATTR_ASCENDING) return 1;
+            return std::nullopt;
+        }
         // An array's attribute names a dimension, the first unless a parameter says otherwise.
         unsigned dimension = 0;
         if (tree_params(expression) > 0) {
@@ -708,6 +714,11 @@ public:
                     break;
                 }
                 if (!type_is_scalar(type)) {
+                    // A variable of an access type with no initial value, a line most often,
+                    // holds nothing a value could need; a statement that uses it stops the run,
+                    // as one the run cannot do, and one that never does is AMD's unimacro, whose
+                    // functions declare a line for a message they never write.
+                    if (type_is_access(type) && !tree_has_value(declaration)) break;
                     return stopsAt(declaration, FoldStop::Reason::VariableType);
                 }
                 const std::optional<std::int64_t> initial =

@@ -8,6 +8,9 @@
 #include "eir/Module.h"
 #include "eir/Verifier.h"
 #include "frontend/sv/DeadCode.h"
+#include "frontend/sv/DefParams.h"
+#include "frontend/sv/FileNameArguments.h"
+#include "frontend/sv/NonStandardPaths.h"
 #include "frontend/sv/ProcessTranslator.h"
 #include "frontend/sv/SvIntConversion.h"
 
@@ -18,6 +21,7 @@
 #include "slang/ast/Statement.h"
 #include "slang/ast/Symbol.h"
 #include "slang/ast/expressions/AssignmentExpressions.h"
+#include "slang/ast/expressions/CallExpression.h"
 #include "slang/ast/expressions/ConversionExpression.h"
 #include "slang/ast/expressions/MiscExpressions.h"
 #include "slang/ast/statements/MiscStatements.h"
@@ -27,6 +31,7 @@
 #include "slang/ast/symbols/MemberSymbols.h"
 #include "slang/ast/symbols/ParameterSymbols.h"
 #include "slang/ast/symbols/PortSymbols.h"
+#include "slang/ast/symbols/SpecifySymbols.h"
 #include "slang/ast/symbols/SubroutineSymbols.h"
 #include "slang/ast/symbols/ValueSymbol.h"
 #include "slang/ast/symbols/VariableSymbols.h"
@@ -35,6 +40,7 @@
 #include "slang/ast/types/Type.h"
 #include "slang/diagnostics/DiagnosticEngine.h"
 #include "slang/diagnostics/Diagnostics.h"
+#include "slang/diagnostics/PreprocessorDiags.h"
 #include "slang/numeric/Time.h"
 #include "slang/parsing/Preprocessor.h"
 #include "slang/syntax/AllSyntax.h"
@@ -44,6 +50,7 @@
 #include "slang/util/Bag.h"
 
 #include <algorithm>
+#include <bit>
 #include <cctype>
 #include <format>
 #include <limits>
@@ -164,6 +171,29 @@ const ast::InstanceSymbol* firstElement(const ast::InstanceArraySymbol& array) {
             return found;
     }
     return nullptr;
+}
+
+/// FNV-1a over `text`, in hexadecimal: stable across runs, builds and machines, which a std::hash
+/// is not required to be, so that a name made of it is the same wherever it is made.
+std::string digestOf(std::string_view text) {
+    std::uint64_t hash = 0xcbf2'9ce4'8422'2325ULL;
+    for (const char c : text) {
+        hash ^= static_cast<unsigned char>(c);
+        hash *= 0x0000'0100'0000'01b3ULL;
+    }
+    return std::format("{:016x}", hash);
+}
+
+/// What `expressions` name, for a diagnostic: each signal by its name, `'a', 'b'`, and anything
+/// else as an expression.
+std::string signalNames(std::span<const ast::Expression* const> expressions) {
+    std::string names;
+    for (const ast::Expression* expression : expressions) {
+        if (!names.empty()) names += ", ";
+        const ast::Symbol* symbol = expression->getSymbolReference();
+        names += symbol != nullptr ? std::format("'{}'", symbol->name) : "an expression";
+    }
+    return names;
 }
 
 /// The name an instance has in the module holding it: its own, or its array's with its index.
@@ -315,6 +345,15 @@ public:
     /// variable of, if one does.
     static const ast::PackageSymbol* packageOf(const ast::ValueSymbol& symbol);
 
+    /// The path from `from`'s instance to `name`, declared in `owner`, another instance's body.
+    /// Through one of `from`'s interface ports, `@bus/data`, when one reaches that instance; from
+    /// the root, `/other/reset`, when the two are under different top levels; otherwise up to the
+    /// instance both share and down to the one declaring it, `core/state` or `../u_peer/ready`.
+    /// Nothing when either instance has no name a path can use.
+    static std::optional<std::string> pathTo(const ast::InstanceBodySymbol& from,
+                                             const ast::InstanceBodySymbol& owner,
+                                             const std::string& name);
+
     /// Collects declarations and ports. Instances and processes come after, because an
     /// instance's connections resolve against this module's objects.
     bool collectDeclarations();
@@ -366,18 +405,39 @@ public:
     void reportRoundedDelay(slang::SourceLocation location, std::string_view delay,
                             std::string_view rounded) override;
 
+    std::optional<std::uint32_t> addOverrideProcess(std::uint32_t objectIndex,
+                                                    const ast::Expression& value, bool force,
+                                                    slang::SourceLocation location) override;
+
+    std::optional<std::uint32_t> addEventValue(const ast::Expression& expression) override;
+
 private:
     /// Walks a scope, collecting declarations and remembering what to translate later.
     bool collectScope(const ast::Scope& scope, const std::string& prefix);
 
+    /// Declares the static variables of a subroutine, in `scope` and the blocks within it.
+    void declareStatics(const ast::Scope& scope);
+
+    /// Reads what a functional simulation needs of a specify block: its module paths, its pulse
+    /// limits, and where its first timing check is.
+    void collectSpecifyBlock(const ast::SpecifyBlockSymbol& block);
+
+    /// Adds, for each output a module path with a delay reaches, the process that delays it, and
+    /// the objects it and the body's own writes of the output use. False, having reported, for a
+    /// path whose delay Enzan does not model.
+    bool translateModulePaths();
+
+    /// Sends the body's own writes of each output `translateModulePaths` delays to the object it
+    /// gave the output's process to read, every process's but the first `pathProcesses` from
+    /// `firstPathProcess`, which are the outputs' own.
+    void redirectDelayedOutputs(std::size_t firstPathProcess, std::size_t pathProcesses);
+
+    /// The object, bits and width a module path's terminal names: a port, or a constant select of
+    /// one. Nothing, having reported, for any other.
+    std::optional<OutputPaths::Source> pathTerminal(const ast::Expression& terminal);
+
     /// The EIR kind of a slang net kind, or nothing for one Enzan cannot resolve.
     static std::optional<eir::NetKind> convertNetKind(ast::NetType::NetKind kind);
-
-    /// Creates the object a hierarchical reference to `symbol`, declared in `owner` as `name`,
-    /// is: one with no storage and a path from this instance to that object.
-    std::optional<std::uint32_t> referenceTo(const ast::ValueSymbol& symbol,
-                                             const ast::InstanceBodySymbol& owner,
-                                             const std::string& name, eir::Type type);
 
     /// Records what `connection`, an interface port of `instance`, is connected to here.
     bool bindInterface(const ast::InstanceSymbol& instance, const ast::PortConnection& connection,
@@ -387,14 +447,17 @@ private:
     std::optional<std::uint32_t> referenceThrough(const ast::ValueSymbol& symbol, std::string path,
                                                   eir::Type type);
 
-    /// Reports a drive strength other than the default and returns false.
-    ///
-    /// Enzan resolves drivers without a strength model, which gives the right answer only when
-    /// every driver is strong: a `weak` driver contending with a strong one would resolve to X
-    /// where the strong one should win.
-    bool checkDriveStrength(
+    /// The strengths `strength` declares for 0 and for 1, strong where it declares none; nothing,
+    /// having reported, for `highz`, which drives `z` where a strength would and no model Enzan
+    /// reads uses.
+    std::optional<eir::DriveStrength> driveStrengthOf(
         std::pair<std::optional<ast::DriveStrength>, std::optional<ast::DriveStrength>> strength,
         slang::SourceLocation location);
+
+    /// The strengths a MOS switch passes from its data input: those every driver of the input
+    /// in this module has, supply reduced to strong (IEEE 1800 section 28.13). Nothing, having
+    /// reported, where this module does not fix them.
+    std::optional<eir::DriveStrength> switchStrength(const ast::PrimitiveInstanceSymbol& gate);
 
     /// Collects the elements of an instance array, and of the arrays nested in it.
     void collectInstanceArray(const ast::InstanceArraySymbol& array, const std::string& prefix) {
@@ -404,8 +467,19 @@ private:
             } else if (element->kind == slang::ast::SymbolKind::Instance) {
                 instances.push_back(CollectedInstance{
                     .prefix = prefix, .symbol = &element->as<ast::InstanceSymbol>()});
+            } else if (element->kind == slang::ast::SymbolKind::PrimitiveInstance) {
+                collectPrimitiveInstance(element->as<ast::PrimitiveInstanceSymbol>());
             }
         }
+    }
+
+    /// Keeps an instance of a built-in gate or of a user-defined primitive to translate as the
+    /// continuous assignment it is.
+    void collectPrimitiveInstance(const ast::PrimitiveInstanceSymbol& instance) {
+        if (instance.primitiveType.primitiveKind == ast::PrimitiveSymbol::UserDefined)
+            primitives.push_back(&instance);
+        else
+            gates.push_back(&instance);
     }
 
     /// Returns a name not already used by an object in this module.
@@ -452,19 +526,41 @@ private:
     std::vector<std::pair<std::string, const ast::ProceduralBlockSymbol*>> proceduralBlocks;
     std::vector<const ast::ContinuousAssignSymbol*> continuousAssignments;
 
+    /// Instances of built-in gates, each a continuous assignment of its outputs.
+    std::vector<const ast::PrimitiveInstanceSymbol*> gates;
+
+    /// Instances of user-defined primitives, each a continuous assignment of its output.
+    std::vector<const ast::PrimitiveInstanceSymbol*> primitives;
+
+    /// The module paths of this body's specify blocks, and whether their pulse limits are zero,
+    /// which lets every pulse through (`PATHPULSE$ = 0`).
+    std::vector<const ast::TimingPathSymbol*> modulePaths;
+    bool transportPaths = false;
+
+    /// What else a specify block says of pulses, a limit of one path or other than zero, a
+    /// pulse style or `showcancelled`: where it is and what, refused where a path has a delay.
+    std::vector<std::pair<slang::SourceLocation, std::string>> pulseShapers;
+
+    /// Each output a module path with a delay reaches, by its port's object, and the object the
+    /// body's own writes of it write instead.
+    std::map<std::uint32_t, std::uint32_t> delayedOutputs;
+
     /// The interface ports of this body, in declaration order.
     std::vector<const ast::InterfacePortSymbol*> interfacePorts;
 
-    /// How this body reaches `instance` through one of its interface ports: `@port`, or
-    /// `@port[2]` when the port is an array and the instance one of its elements. Empty when no
-    /// interface port reaches it.
-    [[nodiscard]] std::string portReaching(const ast::InstanceSymbol& instance) const {
-        for (const ast::InterfacePortSymbol* port : interfacePorts) {
-            const ast::Symbol* connected = port->getConnection().first;
-            if (connected == &instance) return std::format("@{}", port->name);
+    /// How `from` reaches `instance` through one of its interface ports: `@port`, or `@port[2]`
+    /// when the port is an array and the instance one of its elements. Empty when no interface
+    /// port reaches it.
+    [[nodiscard]] static std::string portReaching(const ast::InstanceBodySymbol& from,
+                                                  const ast::InstanceSymbol& instance) {
+        for (const ast::Symbol* portSymbol : from.getPortList()) {
+            if (portSymbol->kind != slang::ast::SymbolKind::InterfacePort) continue;
+            const auto& port = portSymbol->as<ast::InterfacePortSymbol>();
+            const ast::Symbol* connected = port.getConnection().first;
+            if (connected == &instance) return std::format("@{}", port.name);
             if (connected != nullptr && connected->kind == slang::ast::SymbolKind::InstanceArray
                 && containsElement(connected->as<ast::InstanceArraySymbol>(), instance)) {
-                return std::format("@{}{}", port->name, arraySuffixOf(instance));
+                return std::format("@{}{}", port.name, arraySuffixOf(instance));
             }
         }
         return {};
@@ -562,6 +658,12 @@ std::uint32_t ModuleBuilder::enumFor(const ast::Type& type) {
 }
 
 std::optional<eir::Type> ModuleBuilder::convertType(const ast::Type& type) {
+    // `real`, `realtime` and `shortreal` are all a double, as Type::real says.
+    if (type.isFloating()) return eir::Type::real();
+
+    // A named event is a bit its trigger toggles, so that what waits on it sees it change.
+    if (type.isEvent()) return eir::Type::bits(1, false, false);
+
     // Packed types — vectors, packed structs, packed arrays, enums — are all integral to
     // slang and all behave as bit vectors, so they convert for free.
     if (type.isIntegral()) {
@@ -572,9 +674,9 @@ std::optional<eir::Type> ModuleBuilder::convertType(const ast::Type& type) {
 
     // A fixed-size unpacked array and an unpacked struct are stored flat, as the vector of all
     // their bits: every operation the language allows on one as a whole — assignment,
-    // equality, a port connection — is then the same operation on bits. Reals, strings,
-    // unions, dynamic arrays and classes are none of these, and are reported where they are
-    // used, so that the diagnostic points at the user's line.
+    // equality, a port connection — is then the same operation on bits. Reals among them,
+    // strings, unions, dynamic arrays and classes are none of these, and are reported where they
+    // are used, so that the diagnostic points at the user's line.
     const ast::Type& canonical = type.getCanonicalType();
     std::uint64_t width = 0;
     bool fourState = false;
@@ -582,13 +684,13 @@ std::optional<eir::Type> ModuleBuilder::convertType(const ast::Type& type) {
     if (canonical.kind == slang::ast::SymbolKind::FixedSizeUnpackedArrayType) {
         const auto& array = canonical.as<ast::FixedSizeUnpackedArrayType>();
         const std::optional<eir::Type> element = convertType(array.elementType);
-        if (!element.has_value()) return std::nullopt;
+        if (!element.has_value() || element->isReal()) return std::nullopt;
         width = std::uint64_t{element->bitWidth()} * array.range.width();
         fourState = element->isFourState();
     } else if (canonical.kind == slang::ast::SymbolKind::UnpackedStructType) {
         for (const ast::FieldSymbol* field : canonical.as<ast::UnpackedStructType>().fields) {
             const std::optional<eir::Type> member = convertType(field->getType());
-            if (!member.has_value()) return std::nullopt;
+            if (!member.has_value() || member->isReal()) return std::nullopt;
             width += member->bitWidth();
             fourState = fourState || member->isFourState();
         }
@@ -604,6 +706,21 @@ std::optional<eir::BitVector> ModuleBuilder::constantBits(const slang::ConstantV
                                                           const ast::Type& type) {
     const std::optional<eir::Type> converted = convertType(type);
     if (!converted.has_value()) return std::nullopt;
+
+    // A real's bits are its double's, whatever kind of number the constant is.
+    if (converted->isReal()) {
+        double real = 0.0;
+        if (value.isReal()) {
+            real = value.real();
+        } else if (value.isShortReal()) {
+            real = static_cast<double>(value.shortReal());
+        } else if (value.isInteger() && !value.integer().hasUnknown()) {
+            real = value.integer().toDouble();
+        } else {
+            return std::nullopt;
+        }
+        return eir::BitVector::fromUInt64(std::bit_cast<std::uint64_t>(real), 64);
+    }
 
     if (value.isInteger()) {
         // One shared conversion, because the X/Z encodings of slang and Enzan differ and two
@@ -663,6 +780,51 @@ void ModuleBuilder::reportUnsupported(slang::SourceLocation location, std::strin
 void ModuleBuilder::reportRoundedDelay(slang::SourceLocation location, std::string_view delay,
                                        std::string_view rounded) {
     shared->diagnostics.report(DiagCode::DelayRounded, convertLocation(location), delay, rounded);
+}
+
+std::optional<std::uint32_t> ModuleBuilder::addOverrideProcess(std::uint32_t objectIndex,
+                                                               const ast::Expression& value,
+                                                               bool force,
+                                                               slang::SourceLocation location) {
+    ProcessTranslator translator(*this, eir::ProcessKind::Override,
+                                 std::format("{}@{}:{}", force ? "force" : "assign",
+                                             shared->slangSources.getFileName(location),
+                                             shared->slangSources.getLineNumber(location)),
+                                 convertLocation(location));
+    if (!translator.translateOverride(objectIndex, value)) return std::nullopt;
+
+    // Appended while the statement's own process is still being translated, so its index is
+    // fixed now and the statement can name it; processes are only ever appended.
+    const auto index = static_cast<std::uint32_t>(definitionValue.processes.size());
+    definitionValue.processes.push_back(translator.take());
+    return index;
+}
+
+std::optional<std::uint32_t> ModuleBuilder::addEventValue(const ast::Expression& expression) {
+    const slang::SourceLocation location = expression.sourceRange.start();
+    const std::optional<eir::Type> type = convertType(*expression.type);
+    if (!type.has_value()) {
+        reportUnsupported(location, "an event control on an expression of this type");
+        return std::nullopt;
+    }
+    eir::Object object;
+    object.name = uniqueObjectName("event$value");
+    object.type = *type;
+    object.kind = eir::ObjectKind::Variable;
+    object.location = convertLocation(location);
+    const std::uint32_t objectIndex = definitionValue.addObject(std::move(object));
+
+    ProcessTranslator translator(*this, eir::ProcessKind::ContinuousAssign,
+                                 std::format("event@{}:{}",
+                                             shared->slangSources.getFileName(location),
+                                             shared->slangSources.getLineNumber(location)),
+                                 convertLocation(location));
+    if (!translator.translateExpressionInto(objectIndex, expression)) return std::nullopt;
+
+    // Appended while the waiting process is still being translated, as an override's is, so
+    // it comes before that process and has the value before the process first waits on it.
+    definitionValue.processes.push_back(translator.take());
+    return objectIndex;
 }
 
 const ast::PackageSymbol* ModuleBuilder::packageOf(const ast::ValueSymbol& symbol) {
@@ -735,14 +897,13 @@ std::optional<std::uint32_t> ModuleBuilder::objectFor(const ast::ValueSymbol& sy
         // subroutine is in as well.
         if (subroutine != nullptr) name = *nameThere;
         if (owner != body) {
-            // Reached through an interface port, the reference names the port rather than the
-            // interface it happens to be connected to here: one definition serves every
-            // instance, and each may be connected to a different one.
-            if (owner->parentInstance != nullptr) {
-                if (const std::string port = portReaching(*owner->parentInstance); !port.empty())
-                    return referenceThrough(symbol, std::format("{}/{}", port, *nameThere), *type);
+            std::optional<std::string> path = pathTo(*body, *owner, *nameThere);
+            if (!path.has_value()) {
+                reportUnsupported(symbol.location,
+                                  std::format("the hierarchical reference to '{}'", symbol.name));
+                return std::nullopt;
             }
-            return referenceTo(symbol, *owner, *nameThere, *type);
+            return referenceThrough(symbol, std::move(*path), *type);
         }
     }
 
@@ -795,7 +956,7 @@ std::optional<std::uint32_t> ModuleBuilder::objectFor(const ast::ValueSymbol& sy
             reportUnsupported(symbol.location, "a delay on a net");
             return std::nullopt;
         }
-        if (!checkDriveStrength(net.getDriveStrength(), symbol.location)) return std::nullopt;
+        if (!driveStrengthOf(net.getDriveStrength(), symbol.location)) return std::nullopt;
     }
 
     // A net's initialiser is a continuous assignment, `wire w = a & b;`, translated with the
@@ -885,6 +1046,23 @@ bool ModuleBuilder::collectScope(const ast::Scope& scope, const std::string& pre
             collectInstanceArray(member.as<ast::InstanceArraySymbol>(), prefix);
             break;
 
+        case slang::ast::SymbolKind::PrimitiveInstance:
+            collectPrimitiveInstance(member.as<ast::PrimitiveInstanceSymbol>());
+            break;
+
+        case slang::ast::SymbolKind::SpecifyBlock:
+            collectSpecifyBlock(member.as<ast::SpecifyBlockSymbol>());
+            break;
+
+        case slang::ast::SymbolKind::NetAlias:
+            // An alias makes its nets one, so that a driver of either drives both; left out,
+            // each would see only its own drivers.
+            reportUnsupported(
+                member.location,
+                std::format("the net alias of {}",
+                            signalNames(member.as<ast::NetAliasSymbol>().getNetReferences())));
+            break;
+
         case slang::ast::SymbolKind::GenerateBlock: {
             // slang has already decided which generate branch is taken; an
             // uninstantiated one is the branch that was not, and must be skipped
@@ -921,6 +1099,13 @@ bool ModuleBuilder::collectScope(const ast::Scope& scope, const std::string& pre
             if (!collectScope(member.as<ast::StatementBlockSymbol>(), prefix)) return false;
             break;
 
+        case slang::ast::SymbolKind::Subroutine:
+            // A subroutine's static variables are storage of this module, which a call from
+            // another instance, `dev.is_family(name)`, reaches by reference, as it reaches the
+            // module's own: declared here, whether or not this module's own code calls it.
+            declareStatics(member.as<ast::SubroutineSymbol>());
+            break;
+
         default:
             // Type aliases, genvars, modports and the rest carry no state.
             // A construct that does carry state and is not handled — a task, a class —
@@ -931,6 +1116,363 @@ bool ModuleBuilder::collectScope(const ast::Scope& scope, const std::string& pre
     }
 
     return true;
+}
+
+void ModuleBuilder::declareStatics(const ast::Scope& scope) {
+    for (const ast::Symbol& member : scope.members()) {
+        if (member.kind == slang::ast::SymbolKind::StatementBlock) {
+            declareStatics(member.as<ast::StatementBlockSymbol>());
+            continue;
+        }
+        if (member.kind != slang::ast::SymbolKind::Variable) continue;
+        const auto& variable = member.as<ast::VariableSymbol>();
+
+        // One of a type Enzan cannot hold is reported only where it is used, as the rest of what
+        // an unused subroutine holds is.
+        if (staticSubroutineOf(variable) == nullptr || !convertType(variable.getType()).has_value())
+            continue;
+        objectFor(variable);
+    }
+}
+
+void ModuleBuilder::collectSpecifyBlock(const ast::SpecifyBlockSymbol& block) {
+    for (const ast::Symbol& member : block.members()) {
+        switch (member.kind) {
+        case slang::ast::SymbolKind::TimingPath:
+            modulePaths.push_back(&member.as<ast::TimingPathSymbol>());
+            break;
+
+        case slang::ast::SymbolKind::SystemTimingCheck:
+            if (!definitionValue.firstTimingCheck.valid())
+                definitionValue.firstTimingCheck = convertLocation(member.location);
+            break;
+
+        case slang::ast::SymbolKind::Specparam: {
+            // Every other specparam is a constant, which an expression naming one folds. slang
+            // marks only the form of two limits a pulse limit; one limit is both.
+            const auto& specparam = member.as<ast::SpecparamSymbol>();
+            if (!specparam.name.starts_with("PATHPULSE$")) break;
+            const bool zero = specparam.isPathPulse
+                                  ? specparam.getPulseRejectLimit().isFalse()
+                                        && specparam.getPulseErrorLimit().isFalse()
+                                  : specparam.getValue().isFalse();
+            if (zero && specparam.name == "PATHPULSE$") {
+                transportPaths = true;
+            } else {
+                pulseShapers.emplace_back(member.location,
+                                          std::format("the pulse limit '{}'", specparam.name));
+            }
+            break;
+        }
+
+        case slang::ast::SymbolKind::PulseStyle:
+            pulseShapers.emplace_back(member.location, "a pulse style or `showcancelled`");
+            break;
+
+        default: break;
+        }
+    }
+}
+
+std::optional<OutputPaths::Source> ModuleBuilder::pathTerminal(const ast::Expression& terminal) {
+    const ast::Expression* base = &terminal;
+    std::optional<std::int64_t> low;
+    if (terminal.kind == ast::ExpressionKind::ElementSelect) {
+        const auto& select = terminal.as<ast::ElementSelectExpression>();
+        base = &select.value();
+        ast::EvalContext context(*body);
+        const slang::ConstantValue index = select.selector().eval(context);
+        if (index.isInteger() && !index.integer().hasUnknown()) {
+            const auto position = index.integer().as<std::int32_t>();
+            if (position.has_value())
+                low = std::int64_t{base->type->getFixedRange().translateIndex(*position)}
+                      * terminal.type->getBitWidth();
+        }
+    } else if (terminal.kind == ast::ExpressionKind::RangeSelect) {
+        const auto& select = terminal.as<ast::RangeSelectExpression>();
+        base = &select.value();
+        if (select.getSelectionKind() == ast::RangeSelectionKind::Simple) {
+            ast::EvalContext context(*body);
+            const slang::ConstantValue left = select.left().eval(context);
+            const slang::ConstantValue right = select.right().eval(context);
+            const slang::ConstantRange range = base->type->getFixedRange();
+            if (left.isInteger() && right.isInteger()) {
+                const auto first = left.integer().as<std::int32_t>();
+                const auto second = right.integer().as<std::int32_t>();
+                if (first.has_value() && second.has_value())
+                    low = std::min(range.translateIndex(*first), range.translateIndex(*second));
+            }
+        }
+    } else {
+        low = 0;
+    }
+    if (base->kind != ast::ExpressionKind::NamedValue || !low.has_value()) {
+        reportUnsupported(terminal.sourceRange.start(),
+                          "a module path terminal other than a port or a constant select of one");
+        return std::nullopt;
+    }
+    const std::optional<std::uint32_t> objectIndex =
+        objectFor(base->as<ast::NamedValueExpression>().symbol);
+    if (!objectIndex.has_value()) return std::nullopt;
+    return OutputPaths::Source{.objectIndex = *objectIndex,
+                               .lowBit = static_cast<std::uint32_t>(*low),
+                               .width = terminal.type->getBitWidth()};
+}
+
+bool ModuleBuilder::translateModulePaths() {
+    // The delays of a path, as constants: a path with every one zero changes nothing, though it
+    // still takes part in choosing which path's delay applies.
+    const auto valuesOf = [this](const ast::TimingPathSymbol& path) {
+        std::vector<double> values;
+        for (const ast::Expression* delay : path.getDelays()) {
+            ast::EvalContext context(*body);
+            const slang::ConstantValue value = delay->eval(context);
+            double number = std::numeric_limits<double>::quiet_NaN();
+            if (value.isReal()) number = static_cast<double>(value.real());
+            if (value.isInteger()) number = value.integer().toDouble();
+            values.push_back(number);
+        }
+        return values;
+    };
+    const auto zero = [](const std::vector<double>& values) {
+        return std::ranges::all_of(values, [](double value) { return value == 0.0; });
+    };
+    if (std::ranges::all_of(
+            modulePaths, [&](const ast::TimingPathSymbol* path) { return zero(valuesOf(*path)); }))
+        return true;
+    for (const auto& [location, what] : pulseShapers) reportUnsupported(location, what);
+    if (!pulseShapers.empty()) return false;
+
+    // One path of one input window to one bit of an output, as the bit's paths are compared.
+    struct Arc {
+        OutputPaths::Source source;
+        const ast::TimingPathSymbol* path = nullptr;
+        std::vector<double> delays;
+    };
+
+    std::map<std::uint32_t, std::map<std::uint32_t, std::vector<Arc>>> arcsByOutput;
+    bool ok = true;
+    for (const ast::TimingPathSymbol* path : modulePaths) {
+        const std::vector<double> delays = valuesOf(*path);
+        const std::size_t count = delays.size();
+        // Twelve, which give the transitions to and from x their own, only when all one delay.
+        const bool oneDelay =
+            std::ranges::all_of(delays, [&](double value) { return value == delays.front(); });
+        const bool modelled =
+            count == 1 || count == 2 || count == 3 || count == 6 || (count == 12 && oneDelay);
+        if (!modelled) {
+            reportUnsupported(path->location, "a module path of twelve different delays");
+            ok = false;
+            continue;
+        }
+        if (path->getSyntax() != nullptr
+            && path->getSyntax()->kind == slang::syntax::SyntaxKind::IfNonePathDeclaration
+            && !zero(delays)) {
+            reportUnsupported(path->location, "an `ifnone` module path with a delay");
+            ok = false;
+            continue;
+        }
+        for (const ast::Expression* output : path->getOutputs()) {
+            const std::optional<OutputPaths::Source> to = pathTerminal(*output);
+            if (!to.has_value()) {
+                ok = false;
+                continue;
+            }
+            for (const ast::Expression* input : path->getInputs()) {
+                const std::optional<OutputPaths::Source> from = pathTerminal(*input);
+                if (!from.has_value()) {
+                    ok = false;
+                    continue;
+                }
+                // A parallel path pairs the bits of its terminals; a full one joins each input
+                // bit to every output bit, so a change of any is a change of the input.
+                const bool parallel =
+                    path->connectionKind == ast::TimingPathSymbol::ConnectionKind::Parallel;
+                for (std::uint32_t bit = 0; bit < to->width; ++bit) {
+                    OutputPaths::Source source = *from;
+                    source.edge = path->edgeIdentifier;
+                    if (parallel && from->width > 1) {
+                        source.lowBit = from->lowBit + bit;
+                        source.width = 1;
+                    }
+                    arcsByOutput[to->objectIndex][to->lowBit + bit].push_back(
+                        Arc{.source = source, .path = path, .delays = delays});
+                }
+            }
+        }
+    }
+    if (!ok) return false;
+
+    // A process delaying `width` bits of the output from `lowBit` by `arcs`, the paths each of
+    // them has, into the port from the body's copy of it; with no path, it copies them at once.
+    const auto addPathProcess = [&](const eir::Object& port, std::uint32_t output,
+                                    std::uint32_t internal, std::uint32_t lowBit,
+                                    std::uint32_t width, const std::vector<Arc>& arcs,
+                                    const ast::TimingPathSymbol& firstPath) {
+        OutputPaths paths;
+        paths.output = output;
+        paths.internal = internal;
+        paths.lowBit = lowBit;
+        paths.width = width;
+        paths.transport = transportPaths;
+        for (const Arc& arc : arcs) {
+            const auto found =
+                std::ranges::find_if(paths.sources, [&](const OutputPaths::Source& known) {
+                    return known.objectIndex == arc.source.objectIndex
+                           && known.lowBit == arc.source.lowBit && known.width == arc.source.width
+                           && known.edge == arc.source.edge;
+                });
+            const auto sourceIndex = static_cast<std::uint32_t>(found - paths.sources.begin());
+            if (found == paths.sources.end()) paths.sources.push_back(arc.source);
+
+            // The six transitions' delays from the one, two or three a path gives, as section
+            // 30.5.1 extends them.
+            const std::span<const ast::Expression* const> given = arc.path->getDelays();
+            std::array<const ast::Expression*, 6> six{};
+            switch (given.size()) {
+            case 2: six = {given[0], given[1], given[0], given[0], given[1], given[1]}; break;
+            case 3: six = {given[0], given[1], given[2], given[0], given[2], given[1]}; break;
+            case 6: std::ranges::copy(given, six.begin()); break;
+            default: six.fill(given[0]); break;
+            }
+            paths.paths.push_back(OutputPaths::Path{
+                .source = sourceIndex, .condition = arc.path->getConditionExpr(), .delays = six});
+        }
+
+        const bool whole = lowBit == 0 && width == port.type.bitWidth();
+        const std::string stem =
+            whole ? port.name : std::format("{}[{}:{}]", port.name, lowBit + width - 1, lowBit);
+        if (!arcs.empty()) {
+            std::uint32_t seenWidth = 0;
+            for (const OutputPaths::Source& source : paths.sources) seenWidth += source.width;
+            const auto addState = [&](std::string_view suffix, eir::Type type) {
+                eir::Object state;
+                state.name = uniqueObjectName(std::format("{}${}", stem, suffix));
+                state.type = type;
+                state.location = port.location;
+                return definitionValue.addObject(std::move(state));
+            };
+            paths.sourcesSeen = addState("seen", eir::Type::bits(seenWidth, false, true));
+            paths.changedAt = addState(
+                "changed", eir::Type::bits(static_cast<std::uint32_t>(64 * paths.sources.size()),
+                                           false, false));
+            paths.scheduled = addState(
+                "scheduled",
+                whole ? port.type : eir::Type::bits(width, false, port.type.isFourState()));
+        }
+
+        const ast::TimingPathSymbol& named = arcs.empty() ? firstPath : *arcs.front().path;
+        ProcessTranslator translator(
+            *this, eir::ProcessKind::ContinuousAssign,
+            std::format("specify@{}:{}", shared->slangSources.getFileName(named.location),
+                        shared->slangSources.getLineNumber(named.location)),
+            convertLocation(named.location));
+        if (!translator.translateModulePaths(paths)) return false;
+        definitionValue.processes.push_back(translator.take());
+        return true;
+    };
+
+    for (const auto& entry : arcsByOutput) {
+        // Named rather than bound, since the lambdas below capture them.
+        const std::uint32_t output = entry.first;
+        const std::map<std::uint32_t, std::vector<Arc>>& arcsByBit = entry.second;
+
+        // A copy, since the objects added below may move the table.
+        const eir::Object port = definitionValue.objects[output];
+        const bool hasDelay = std::ranges::any_of(arcsByBit, [&](const auto& entry) {
+            return std::ranges::any_of(entry.second,
+                                       [&](const Arc& arc) { return !zero(arc.delays); });
+        });
+        if (!hasDelay) continue;
+
+        // Bits with the same paths share a process; a carry chain's bits each have their own,
+        // and a parallel path between vectors gives each bit its own source.
+        const auto sameArcs = [](const std::vector<Arc>& a, const std::vector<Arc>& b) {
+            return std::ranges::equal(a, b, [](const Arc& x, const Arc& y) {
+                return x.source.objectIndex == y.source.objectIndex
+                       && x.source.lowBit == y.source.lowBit && x.source.width == y.source.width
+                       && x.source.edge == y.source.edge && x.delays == y.delays
+                       && (x.path->getConditionExpr() == nullptr)
+                              == (y.path->getConditionExpr() == nullptr)
+                       && (x.path->getConditionExpr() == nullptr
+                           || x.path->getConditionExpr()->syntax->toString()
+                                  == y.path->getConditionExpr()->syntax->toString());
+            });
+        };
+        const ast::TimingPathSymbol& firstPath = *arcsByBit.begin()->second.front().path;
+        const auto portIt =
+            std::ranges::find(definitionValue.ports, output, &eir::Port::objectIndex);
+        if (portIt == definitionValue.ports.end()
+            || portIt->direction != eir::PortDirection::Output) {
+            reportUnsupported(firstPath.location,
+                              std::format("a module path with a delay to '{}', which is not an "
+                                          "output",
+                                          port.name));
+            return false;
+        }
+
+        // The body's own writes of the output, its initial value among them, go to a copy
+        // beside the port; the port is the processes' alone, and what everything else reads,
+        // inside the body as well.
+        eir::Object internal = port;
+        internal.name = uniqueObjectName(std::format("{}$path", port.name));
+        definitionValue.objects[output].initialValue.reset();
+        const std::uint32_t internalIndex = definitionValue.addObject(std::move(internal));
+        delayedOutputs.emplace(output, internalIndex);
+
+        const std::vector<Arc> none;
+        const auto arcsOf = [&](std::uint32_t bit) -> const std::vector<Arc>& {
+            const auto found = arcsByBit.find(bit);
+            return found == arcsByBit.end() ? none : found->second;
+        };
+        const std::uint32_t width = port.type.bitWidth();
+        for (std::uint32_t low = 0; low < width;) {
+            std::uint32_t end = low + 1;
+            while (end < width && sameArcs(arcsOf(end), arcsOf(low))) ++end;
+            if (!addPathProcess(port, output, internalIndex, low, end - low, arcsOf(low),
+                                firstPath))
+                return false;
+            low = end;
+        }
+    }
+    return true;
+}
+
+void ModuleBuilder::redirectDelayedOutputs(std::size_t firstPathProcess,
+                                           std::size_t pathProcesses) {
+    if (delayedOutputs.empty()) return;
+    const auto redirected = [this](std::uint32_t objectIndex) {
+        const auto found = delayedOutputs.find(objectIndex);
+        return found == delayedOutputs.end() ? objectIndex : found->second;
+    };
+    for (std::size_t index = 0; index < definitionValue.processes.size(); ++index) {
+        if (index >= firstPathProcess && index < firstPathProcess + pathProcesses) continue;
+        eir::Process& process = definitionValue.processes[index];
+        for (eir::WriteExtent& extent : process.writeSet)
+            extent.objectIndex = redirected(extent.objectIndex);
+        eir::normaliseWriteSet(process.writeSet);
+        for (eir::BasicBlock& block : process.blocks) {
+            for (eir::Instruction& instruction : block.instructions) {
+                if (eir::isStore(instruction.opcode))
+                    instruction.a = eir::Operand::object(redirected(instruction.a.index()));
+            }
+        }
+        for (eir::SysTaskCall& call : process.sysCalls) {
+            if (call.objectIndex != eir::SysTaskCall::NoObject)
+                call.objectIndex = redirected(call.objectIndex);
+        }
+    }
+
+    // What an instance drives of a port connected to the output is the body's too; what it
+    // reads stays the port.
+    for (eir::Instance& instance : definitionValue.instances) {
+        for (eir::PortConnection& connection : instance.connections) {
+            if (connection.connected()
+                && connection.driveObjectIndex == eir::PortConnection::Unconnected
+                && delayedOutputs.contains(connection.objectIndex))
+                connection.driveObjectIndex = delayedOutputs.at(connection.objectIndex);
+        }
+    }
 }
 
 bool ModuleBuilder::collectDeclarations() {
@@ -955,6 +1497,10 @@ bool ModuleBuilder::collectDeclarations() {
         const std::optional<std::uint32_t> objectIndex =
             objectFor(port.internalSymbol->as<ast::ValueSymbol>());
         if (!objectIndex.has_value()) continue;
+        if (definitionValue.objects[*objectIndex].type.isReal()) {
+            reportUnsupported(port.location, std::format("the real port '{}'", port.name));
+            continue;
+        }
 
         eir::PortDirection direction = eir::PortDirection::Input;
         switch (port.direction) {
@@ -978,6 +1524,12 @@ bool ModuleBuilder::collectDeclarations() {
 }
 
 bool ModuleBuilder::translateProcesses() {
+    // First, so that the body's own writes of an output translated after them can be sent where
+    // the outputs' processes read them.
+    const std::size_t firstPathProcess = definitionValue.processes.size();
+    if (!translateModulePaths()) failed = true;
+    const std::size_t pathProcesses = definitionValue.processes.size() - firstPathProcess;
+
     for (const auto& [prefix, block] : proceduralBlocks) {
         eir::ProcessKind kind = eir::ProcessKind::Always;
         switch (block->procedureKind) {
@@ -1037,7 +1589,9 @@ bool ModuleBuilder::translateProcesses() {
     }
 
     for (const ast::ContinuousAssignSymbol* assignment : continuousAssignments) {
-        if (!checkDriveStrength(assignment->getDriveStrength(), assignment->location)) continue;
+        const std::optional<eir::DriveStrength> strength =
+            driveStrengthOf(assignment->getDriveStrength(), assignment->location);
+        if (!strength) continue;
 
         const SourceLocation location = convertLocation(assignment->location);
         ProcessTranslator translator(
@@ -1053,6 +1607,74 @@ bool ModuleBuilder::translateProcesses() {
         }
 
         definitionValue.processes.push_back(translator.take());
+        definitionValue.processes.back().strength = *strength;
+    }
+
+    for (const ast::PrimitiveInstanceSymbol* gate : gates) {
+        // `pullup` and `pulldown` drive at pull strength unless they say otherwise, and a MOS
+        // switch at its input's.
+        const std::string_view kind = gate->primitiveType.name;
+        const bool pull = kind == "pullup" || kind == "pulldown";
+        auto declared = gate->getDriveStrength();
+        if (pull && !declared.first && !declared.second)
+            declared = {ast::DriveStrength::Pull, ast::DriveStrength::Pull};
+        const std::optional<eir::DriveStrength> strength =
+            kind == "nmos" || kind == "pmos" || kind == "cmos"
+                ? switchStrength(*gate)
+                : driveStrengthOf(declared, gate->location);
+        if (!strength) continue;
+
+        ProcessTranslator translator(
+            *this, eir::ProcessKind::ContinuousAssign,
+            std::format("{}@{}:{}", gate->primitiveType.name,
+                        shared->slangSources.getFileName(gate->location),
+                        shared->slangSources.getLineNumber(gate->location)),
+            convertLocation(gate->location));
+        if (!translator.translateGate(*gate)) {
+            failed = true;
+            continue;
+        }
+        definitionValue.processes.push_back(translator.take());
+        definitionValue.processes.back().strength = *strength;
+    }
+
+    for (const ast::PrimitiveInstanceSymbol* instance : primitives) {
+        const std::optional<eir::DriveStrength> strength =
+            driveStrengthOf(instance->getDriveStrength(), instance->location);
+        if (!strength) continue;
+
+        // A sequential primitive's inputs as it last took them, x until it first has, above its
+        // state, which starts at its `initial` value or at x.
+        std::optional<std::uint32_t> held;
+        const ast::PrimitiveSymbol& primitive = instance->primitiveType;
+        if (primitive.isSequential) {
+            const auto width = static_cast<std::uint32_t>(instance->getPortConnections().size());
+            eir::Object object;
+            object.name = uniqueObjectName(std::format("{}$state", instance->name));
+            object.type = eir::Type::bits(width, false, true);
+            object.location = convertLocation(instance->location);
+            eir::BitVector initial = eir::BitVector::filled(width, eir::Logic::Unknown);
+            if (primitive.initVal != nullptr && primitive.initVal->isInteger()) {
+                const slang::logic_t bit = primitive.initVal->integer()[0];
+                if (!bit.isUnknown())
+                    initial.set(0, bit.value != 0 ? eir::Logic::One : eir::Logic::Zero);
+            }
+            object.initialValue = std::move(initial);
+            held = definitionValue.addObject(std::move(object));
+        }
+
+        ProcessTranslator translator(
+            *this, eir::ProcessKind::ContinuousAssign,
+            std::format("{}@{}:{}", primitive.name,
+                        shared->slangSources.getFileName(instance->location),
+                        shared->slangSources.getLineNumber(instance->location)),
+            convertLocation(instance->location));
+        if (!translator.translatePrimitive(*instance, held)) {
+            failed = true;
+            continue;
+        }
+        definitionValue.processes.push_back(translator.take());
+        definitionValue.processes.back().strength = *strength;
     }
 
     // By index, because translating one initialiser may meet a net not yet seen and add it,
@@ -1072,9 +1694,14 @@ bool ModuleBuilder::translateProcesses() {
             continue;
         }
 
+        // `tri (weak1, strong0) n = v` drives `n` with what the declaration says.
         definitionValue.processes.push_back(translator.take());
+        if (const std::optional<eir::DriveStrength> strength =
+                driveStrengthOf(net.getDriveStrength(), net.location))
+            definitionValue.processes.back().strength = *strength;
     }
 
+    redirectDelayedOutputs(firstPathProcess, pathProcesses);
     return !failed;
 }
 
@@ -1086,7 +1713,7 @@ bool ModuleBuilder::bindInterface(const ast::InstanceSymbol& instance,
         const auto& interface = connected->as<ast::InstanceSymbol>();
         const ast::InstanceBodySymbol* owner = nullptr;
         const std::optional<std::string> name = nameWithinBody(interface, owner);
-        target = name.has_value() && owner == body ? *name : portReaching(interface);
+        target = name.has_value() && owner == body ? *name : portReaching(*body, interface);
     } else if (connected != nullptr && connected->kind == slang::ast::SymbolKind::InstanceArray) {
         // A whole array, to an array port: what the elements are called here, or the port of
         // this body it arrived through. slang hands the connection over as an array of its own,
@@ -1120,27 +1747,39 @@ bool ModuleBuilder::bindInterface(const ast::InstanceSymbol& instance,
     return true;
 }
 
-std::optional<std::uint32_t> ModuleBuilder::referenceTo(const ast::ValueSymbol& symbol,
-                                                        const ast::InstanceBodySymbol& owner,
-                                                        const std::string& name, eir::Type type) {
-    const std::optional<std::vector<std::string>> here = instanceChain(*body);
-    const std::optional<std::vector<std::string>> there = instanceChain(owner);
-    if (!here.has_value() || !there.has_value()) {
-        reportUnsupported(symbol.location,
-                          std::format("the hierarchical reference to '{}'", symbol.name));
-        return std::nullopt;
+std::optional<std::string> ModuleBuilder::pathTo(const ast::InstanceBodySymbol& from,
+                                                 const ast::InstanceBodySymbol& owner,
+                                                 const std::string& name) {
+    // Reached through an interface port, the reference names the port rather than the
+    // interface it happens to be connected to here: one definition serves every instance, and
+    // each may be connected to a different one.
+    if (owner.parentInstance != nullptr) {
+        if (const std::string port = portReaching(from, *owner.parentInstance); !port.empty())
+            return std::format("{}/{}", port, name);
     }
+
+    const std::optional<std::vector<std::string>> here = instanceChain(from);
+    const std::optional<std::vector<std::string>> there = instanceChain(owner);
+    if (!here.has_value() || !there.has_value()) return std::nullopt;
 
     // Up from here to the instance both paths share, then down to the one declaring it.
     std::size_t common = 0;
     while (common < here->size() && common < there->size() && (*here)[common] == (*there)[common])
         ++common;
+
+    // Into another top level, sharing none, from the root: no path climbs out of one top into
+    // another, and one from the root is the same from every instance, at whatever depth it is.
+    if (common == 0 && !there->empty()) {
+        std::string path;
+        for (const std::string& level : *there) path += "/" + level;
+        return path + "/" + name;
+    }
+
     std::string path;
     for (std::size_t level = common; level < here->size(); ++level) path += "../";
     for (std::size_t level = common; level < there->size(); ++level) path += (*there)[level] + "/";
     path += name;
-
-    return referenceThrough(symbol, std::move(path), type);
+    return path;
 }
 
 std::optional<std::uint32_t> ModuleBuilder::referenceThrough(const ast::ValueSymbol& symbol,
@@ -1183,16 +1822,178 @@ std::optional<eir::NetKind> ModuleBuilder::convertNetKind(ast::NetType::NetKind 
     return std::nullopt;
 }
 
-bool ModuleBuilder::checkDriveStrength(
+std::optional<eir::DriveStrength> ModuleBuilder::driveStrengthOf(
     std::pair<std::optional<ast::DriveStrength>, std::optional<ast::DriveStrength>> strength,
     slang::SourceLocation location) {
-    const auto isDefault = [](std::optional<ast::DriveStrength> value) {
-        return !value.has_value() || *value == ast::DriveStrength::Strong;
+    bool highImpedance = false;
+    const auto levelOf = [&highImpedance](std::optional<ast::DriveStrength> value) {
+        switch (value.value_or(ast::DriveStrength::Strong)) {
+        case ast::DriveStrength::Supply: return eir::Strength::Supply;
+        case ast::DriveStrength::Strong: return eir::Strength::Strong;
+        case ast::DriveStrength::Pull: return eir::Strength::Pull;
+        case ast::DriveStrength::Weak: return eir::Strength::Weak;
+        case ast::DriveStrength::HighZ: highImpedance = true; return eir::Strength::Strong;
+        }
+        return eir::Strength::Strong;
     };
-    if (isDefault(strength.first) && isDefault(strength.second)) return true;
+    const eir::DriveStrength result{.zero = levelOf(strength.first),
+                                    .one = levelOf(strength.second)};
+    if (highImpedance) {
+        reportUnsupported(location, "a drive strength of highz");
+        return std::nullopt;
+    }
+    return result;
+}
 
-    reportUnsupported(location, "a drive strength other than strong");
-    return false;
+namespace {
+
+/// The variables and nets `target` writes: the one a select or a member access is of, and each
+/// a concatenation's operands write.
+void writtenSymbols(const ast::Expression& target, std::vector<const ast::Symbol*>& into) {
+    switch (target.kind) {
+    case ast::ExpressionKind::NamedValue:
+        into.push_back(&target.as<ast::NamedValueExpression>().symbol);
+        break;
+    case ast::ExpressionKind::ElementSelect:
+        writtenSymbols(target.as<ast::ElementSelectExpression>().value(), into);
+        break;
+    case ast::ExpressionKind::RangeSelect:
+        writtenSymbols(target.as<ast::RangeSelectExpression>().value(), into);
+        break;
+    case ast::ExpressionKind::MemberAccess:
+        writtenSymbols(target.as<ast::MemberAccessExpression>().value(), into);
+        break;
+    case ast::ExpressionKind::Concatenation:
+        for (const ast::Expression* operand : target.as<ast::ConcatenationExpression>().operands())
+            writtenSymbols(*operand, into);
+        break;
+    case ast::ExpressionKind::Conversion:
+        writtenSymbols(target.as<ast::ConversionExpression>().operand(), into);
+        break;
+    case ast::ExpressionKind::Assignment:
+        writtenSymbols(target.as<ast::AssignmentExpression>().left(), into);
+        break;
+    default: break;
+    }
+}
+
+/// True when `target` writes `symbol`.
+bool writes(const ast::Expression* target, const ast::Symbol& symbol) {
+    if (target == nullptr) return false;
+    std::vector<const ast::Symbol*> written;
+    writtenSymbols(*target, written);
+    return std::ranges::find(written, &symbol) != written.end();
+}
+
+/// The terminals a built-in gate drives: every one but the last of `buf` and `not`, every one of
+/// `pullup` and `pulldown`, and the first of the rest.
+std::span<const ast::Expression* const> gateOutputs(const ast::PrimitiveInstanceSymbol& gate) {
+    const std::span<const ast::Expression* const> terminals = gate.getPortConnections();
+    const std::string_view name = gate.primitiveType.name;
+    if (terminals.empty()) return terminals;
+    if (name == "buf" || name == "not") return terminals.first(terminals.size() - 1);
+    if (name == "pullup" || name == "pulldown") return terminals;
+    return terminals.first(1);
+}
+
+} // namespace
+
+std::optional<eir::DriveStrength>
+ModuleBuilder::switchStrength(const ast::PrimitiveInstanceSymbol& gate) {
+    const std::string_view name = gate.primitiveType.name;
+    const std::span<const ast::Expression* const> terminals = gate.getPortConnections();
+    const auto refuse = [&](std::string_view why) -> std::optional<eir::DriveStrength> {
+        reportUnsupported(gate.location,
+                          std::format("the switch '{}', since its data input {}", name, why));
+        return std::nullopt;
+    };
+
+    // The input slang has converted to one bit, of a variable or a net, or a constant, which
+    // drives as a continuous assignment of it would.
+    const ast::Expression* data = terminals.size() > 1 ? terminals[1] : nullptr;
+    while (data != nullptr && data->kind == ast::ExpressionKind::Conversion)
+        data = &data->as<ast::ConversionExpression>().operand();
+    while (data != nullptr
+           && (data->kind == ast::ExpressionKind::ElementSelect
+               || data->kind == ast::ExpressionKind::RangeSelect)) {
+        data = data->kind == ast::ExpressionKind::ElementSelect
+                   ? &data->as<ast::ElementSelectExpression>().value()
+                   : &data->as<ast::RangeSelectExpression>().value();
+    }
+    if (data == nullptr || data->getConstant() != nullptr) return eir::DriveStrength{};
+    if (data->kind != ast::ExpressionKind::NamedValue)
+        return refuse("is no signal of this module, whose drivers it could know");
+    const ast::ValueSymbol& input = data->as<ast::NamedValueExpression>().symbol;
+    if (input.kind != slang::ast::SymbolKind::Net) return eir::DriveStrength{};
+
+    for (const ast::Symbol* portSymbol : body->getPortList()) {
+        if (portSymbol->kind == slang::ast::SymbolKind::Port
+            && portSymbol->as<ast::PortSymbol>().internalSymbol == &input
+            && portSymbol->as<ast::PortSymbol>().direction != ast::ArgumentDirection::Out)
+            return refuse("is a port, which drivers outside the module may drive");
+    }
+
+    // Each driver's strengths, with supply read as strong; a highz one is reported where it is.
+    using Declared =
+        std::pair<std::optional<ast::DriveStrength>, std::optional<ast::DriveStrength>>;
+    const auto level = [](std::optional<ast::DriveStrength> value) {
+        switch (value.value_or(ast::DriveStrength::Strong)) {
+        case ast::DriveStrength::Pull: return eir::Strength::Pull;
+        case ast::DriveStrength::Weak: return eir::Strength::Weak;
+        case ast::DriveStrength::Supply:
+        case ast::DriveStrength::Strong:
+        case ast::DriveStrength::HighZ: return eir::Strength::Strong;
+        }
+        return eir::Strength::Strong;
+    };
+    std::vector<eir::DriveStrength> found;
+    const auto add = [&](const Declared& declared) {
+        found.push_back(
+            eir::DriveStrength{.zero = level(declared.first), .one = level(declared.second)});
+    };
+    const auto& net = input.as<ast::NetSymbol>();
+    if (net.getInitializer() != nullptr) add(net.getDriveStrength());
+    const ast::NetType::NetKind kind = net.netType.netKind;
+    if (kind == ast::NetType::Tri0 || kind == ast::NetType::Tri1)
+        add({ast::DriveStrength::Pull, ast::DriveStrength::Pull});
+    for (const ast::ContinuousAssignSymbol* assignment : continuousAssignments) {
+        if (writes(&assignment->getAssignment(), input)) add(assignment->getDriveStrength());
+    }
+    for (const ast::PrimitiveInstanceSymbol* other : gates) {
+        if (other == &gate) continue;
+        if (!std::ranges::any_of(gateOutputs(*other), [&input](const ast::Expression* output) {
+                return writes(output, input);
+            }))
+            continue;
+        const std::string_view otherName = other->primitiveType.name;
+        if (otherName.ends_with("mos") || otherName.starts_with("tran")
+            || otherName.starts_with("rtran"))
+            return refuse("is driven by another switch, which passes on a strength of its own");
+        const bool pull = otherName == "pullup" || otherName == "pulldown";
+        auto declared = other->getDriveStrength();
+        if (pull && !declared.first && !declared.second)
+            declared = {ast::DriveStrength::Pull, ast::DriveStrength::Pull};
+        add(declared);
+    }
+    for (const ast::PrimitiveInstanceSymbol* primitive : primitives) {
+        const std::span<const ast::Expression* const> outputs = primitive->getPortConnections();
+        if (!outputs.empty() && writes(outputs.front(), input)) add(primitive->getDriveStrength());
+    }
+    for (const CollectedInstance& instance : instances) {
+        for (const ast::PortConnection* connection : instance.symbol->getPortConnections()) {
+            if (connection->port.kind == slang::ast::SymbolKind::Port
+                && connection->port.as<ast::PortSymbol>().direction != ast::ArgumentDirection::In
+                && writes(connection->getExpression(), input))
+                return refuse("is driven by an instance, whose strength this module cannot see");
+        }
+    }
+
+    if (found.empty()) return eir::DriveStrength{};
+    if (!std::ranges::all_of(found, [&found](const eir::DriveStrength& strength) {
+            return strength == found.front();
+        }))
+        return refuse("has drivers of different strengths");
+    return found.front();
 }
 
 ModuleBuilder::SensitivityForm
@@ -1364,99 +2165,21 @@ bool ModuleBuilder::addInstance(
     return true;
 }
 
-/// Walks the elaborated hierarchy, translating each distinct module body once.
-class Walker {
-public:
-    Walker(eir::Design& target, ModuleBuilder::Shared sharedState)
-        : design(&target), shared(sharedState) {
-        shared.packageVariables = &packageVariables;
-    }
-
-    /// Translates `instance`'s body if it has not been seen, and returns its EIR name.
-    std::optional<std::string> translate(const ast::InstanceSymbol& instance);
-
-    /// Makes an instance of one of `units` ask for it into `requests` rather than be translated.
-    void standIn(const std::vector<eir::UnitInterface>& units,
-                 std::vector<eir::UnitRequest>& requests) {
-        interfaces = &units;
-        asked = &requests;
-    }
-
-    /// Adds a definition for each package whose variables the translated modules refer to.
-    bool translatePackages();
-
-    [[nodiscard]] bool ok() const noexcept { return succeeded; }
-
-private:
-    struct BodyInfo {
-        std::string name;
-        std::map<std::string, std::uint32_t, std::less<>> portIndices;
-    };
-
-    /// Returns the EIR name for one parameterisation of a module.
-    ///
-    /// slang caches one body per distinct parameterisation, so a parameterised module
-    /// produces several. Each becomes its own EIR definition — which is what keeps parameters
-    /// out of EIR entirely (see eir/Module.h) — and a suffix distinguishes them.
-    ///
-    /// **The suffix is a function of the parameter values, and of the interfaces the body's
-    /// ports are connected to, not a counter.** A counter numbers the parameterisations in the
-    /// order *this* compilation happened to walk them, which makes the name meaningless outside
-    /// it: `counter$1` from one analysis and `counter$1` from another would be different
-    /// modules wearing one name, and a design assembled from two libraries would resolve an
-    /// instance to the wrong body with nothing to say so. Deriving it from the values instead
-    /// gives a specialisation the same name wherever it is produced, which is what lets a
-    /// library be instantiated with parameters chosen by whoever uses it.
-    static std::string specialisedModuleName(const ast::InstanceBodySymbol& body);
-
-    eir::Design* design;
-    ModuleBuilder::Shared shared;
-    /// Bodies already translated, by the EIR name they were given.
-    ///
-    /// Keyed by name and not by `InstanceBodySymbol*`: slang hands out a separate body symbol
-    /// per instance even when the parameterisation is identical, so a pointer never matches and
-    /// every instance of a module was translated again and then discarded by the design's
-    /// replace-by-name. The name is a function of the definition, the parameters set on it and
-    /// the interfaces it is given (`specialisedModuleName`), so two bodies sharing a name are the
-    /// same module and one translation serves every instance of it.
-    ///
-    /// This is only sound because `BodyInfo::portIndices` is keyed by port name. A map keyed on
-    /// slang's port symbols belongs to the one body it came from, and reusing it for another
-    /// binds no connections at all — quietly, with the design still elaborating and simulating
-    /// to the wrong answer.
-    std::map<std::string, BodyInfo, std::less<>> bodies;
-    std::vector<const ast::ValueSymbol*> packageVariables;
-    bool succeeded = true;
-
-    /// The request `instance` of `unit` makes, as its placeholder.
-    std::optional<std::string> askFor(const ast::InstanceSymbol& instance,
-                                      const eir::UnitInterface& unit);
-
-    const std::vector<eir::UnitInterface>* interfaces = nullptr;
-    std::vector<eir::UnitRequest>* asked = nullptr;
-};
-
-bool Walker::translatePackages() {
-    // Packages in the order a module first used one of their variables, which is the order the
-    // modules were walked in, so the definitions come out the same on every run.
-    std::vector<const ast::PackageSymbol*> packages;
-    for (const ast::ValueSymbol* variable : packageVariables) {
-        const ast::PackageSymbol* package = ModuleBuilder::packageOf(*variable);
-        if (std::ranges::find(packages, package) == packages.end()) packages.push_back(package);
-    }
-
-    for (const ast::PackageSymbol* package : packages) {
-        ModuleBuilder builder(shared, *package);
-        for (const ast::ValueSymbol* variable : packageVariables) {
-            if (ModuleBuilder::packageOf(*variable) != package) continue;
-            if (!builder.objectFor(*variable).has_value()) return false;
-        }
-        design->addModule(builder.take());
-    }
-    return true;
-}
-
-std::string Walker::specialisedModuleName(const ast::InstanceBodySymbol& body) {
+/// Returns the EIR name for one parameterisation of a module.
+///
+/// slang caches one body per distinct parameterisation, so a parameterised module
+/// produces several. Each becomes its own EIR definition — which is what keeps parameters
+/// out of EIR entirely (see eir/Module.h) — and a suffix distinguishes them.
+///
+/// **The suffix is a function of the parameter values, and of the interfaces the body's
+/// ports are connected to, not a counter.** A counter numbers the parameterisations in the
+/// order *this* compilation happened to walk them, which makes the name meaningless outside
+/// it: `counter$1` from one analysis and `counter$1` from another would be different
+/// modules wearing one name, and a design assembled from two libraries would resolve an
+/// instance to the wrong body with nothing to say so. Deriving it from the values instead
+/// gives a specialisation the same name wherever it is produced, which is what lets a
+/// library be instantiated with parameters chosen by whoever uses it.
+std::string specialisedModuleName(const ast::InstanceBodySymbol& body) {
     std::string base(body.getDefinition().name);
 
     // Only the parameters set from outside: a localparam is derived inside the module from
@@ -1531,17 +2254,175 @@ std::string Walker::specialisedModuleName(const ast::InstanceBodySymbol& body) {
             if (!keep) c = '_';
         }
     } else {
-        // FNV-1a over the rendered values. Stable across runs, builds and machines, which a
-        // std::hash is not required to be.
-        std::uint64_t hash = 0xcbf2'9ce4'8422'2325ULL;
-        for (const char c : values) {
-            hash ^= static_cast<unsigned char>(c);
-            hash *= 0x0000'0100'0000'01b3ULL;
-        }
-        suffix = std::format("{:016x}", hash);
+        suffix = digestOf(values);
     }
 
     return std::format("{}${}", base, suffix);
+}
+
+/// What the names in an instance's body that reach past its own objects lead to, from that
+/// instance: for each, in the order slang holds them, the path a reference to it takes and the
+/// kind and type of what it reaches, or the object's own name when a hierarchical name comes back
+/// to the instance itself. A subroutine called by a name found upwards is inlined, so it is named
+/// by its module's parameterisation, and what its own body names is followed from here too.
+///
+/// Instances of one parameterisation translate alike only when these agree. A reference is a
+/// path from the instance holding it, so `tb.clk` read from two depths is `../clk` from one and
+/// `../../clk` from the other; `tb.u_seen.mark` is an object of `u_seen`'s own from `u_seen` and
+/// a reference from its sibling; and `../bump` is whichever ancestor's task of that name is
+/// nearest. slang keeps the names that leave an instance, but not where anything outside it can
+/// read them, so they are found here, by a walk of the body that a translation does not make.
+class ReachedNames : public ast::ASTVisitor<ReachedNames, ast::VisitFlags::AllGood> {
+public:
+    explicit ReachedNames(const ast::InstanceBodySymbol& from) : body(&from) {}
+
+    // A child's body is its own definition's; only its connections are written here.
+    void handle(const ast::InstanceSymbol& instance) { instance.visitExprs(*this); }
+
+    // A branch a generate condition rules out is never translated.
+    void handle(const ast::GenerateBlockSymbol& block) {
+        if (!block.isUninstantiated) visitDefault(block);
+    }
+
+    void handle(const ast::HierarchicalValueExpression& expression) {
+        note(expression.symbol, true);
+    }
+
+    void handle(const ast::NamedValueExpression& expression) { note(expression.symbol, false); }
+
+    // A subroutine found by its name upwards is inlined, and reaches its own module's objects
+    // from wherever it is called.
+    void handle(const ast::CallExpression& call) {
+        if (!call.isSystemCall()) {
+            const ast::SubroutineSymbol& subroutine = *std::get<0>(call.subroutine);
+            const ast::InstanceBodySymbol* owner = nullptr;
+            const std::optional<std::string> name = nameWithinBody(subroutine, owner);
+            if (name.has_value() && owner != nullptr && owner != body) {
+                reached.push_back(
+                    std::format("{} {}", ModuleBuilder::pathTo(*body, *owner, *name).value_or("?"),
+                                specialisedModuleName(*owner)));
+                if (entered.insert(&subroutine).second) subroutine.visit(*this);
+            }
+        }
+        visitDefault(call);
+    }
+
+    std::vector<std::string> reached;
+
+private:
+    void note(const ast::ValueSymbol& symbol, bool hierarchical) {
+        const ast::ValueSymbol* target = &symbol;
+        if (target->kind == slang::ast::SymbolKind::ModportPort) {
+            const ast::Symbol* internal = target->as<ast::ModportPortSymbol>().internalSymbol;
+            if (internal == nullptr || !ast::ValueSymbol::isKind(internal->kind)) return;
+            target = &internal->as<ast::ValueSymbol>();
+        }
+        // Only what has storage becomes a reference; a package's variable is at one absolute
+        // path from everywhere.
+        if (target->kind != slang::ast::SymbolKind::Variable
+            && target->kind != slang::ast::SymbolKind::Net)
+            return;
+        if (ModuleBuilder::packageOf(*target) != nullptr) return;
+
+        const ast::InstanceBodySymbol* owner = nullptr;
+        const std::optional<std::string> name = nameWithinBody(*target, owner);
+        if (!name.has_value() || owner == nullptr) return;
+        if (owner == body) {
+            if (hierarchical) reached.push_back(*name);
+            return;
+        }
+        reached.push_back(std::format("{} {} {}",
+                                      ModuleBuilder::pathTo(*body, *owner, *name).value_or("?"),
+                                      target->kind == slang::ast::SymbolKind::Net ? "net" : "var",
+                                      target->getType().toString()));
+    }
+
+    const ast::InstanceBodySymbol* body;
+
+    /// The subroutines of other modules already followed, so that a recursive one ends.
+    std::set<const ast::SubroutineSymbol*> entered;
+};
+
+/// Walks the elaborated hierarchy, translating each distinct module body once.
+class Walker {
+public:
+    Walker(eir::Design& target, ModuleBuilder::Shared sharedState)
+        : design(&target), shared(sharedState) {
+        shared.packageVariables = &packageVariables;
+    }
+
+    /// Translates `instance`'s body if it has not been seen, and returns its EIR name.
+    std::optional<std::string> translate(const ast::InstanceSymbol& instance);
+
+    /// Makes an instance of one of `units` ask for it into `requests` rather than be translated.
+    void standIn(const std::vector<eir::UnitInterface>& units,
+                 std::vector<eir::UnitRequest>& requests) {
+        interfaces = &units;
+        asked = &requests;
+    }
+
+    /// Adds a definition for each package whose variables the translated modules refer to.
+    bool translatePackages();
+
+    [[nodiscard]] bool ok() const noexcept { return succeeded; }
+
+private:
+    struct BodyInfo {
+        std::string name;
+        std::map<std::string, std::uint32_t, std::less<>> portIndices;
+    };
+
+    eir::Design* design;
+    ModuleBuilder::Shared shared;
+    /// Bodies already translated, by the EIR name they were given.
+    ///
+    /// Keyed by name and not by `InstanceBodySymbol*`: slang hands out a separate body symbol
+    /// per instance even when the parameterisation is identical, so a pointer never matches and
+    /// every instance of a module was translated again and then discarded by the design's
+    /// replace-by-name. The name is a function of the definition, the parameters set on it and
+    /// the interfaces it is given (`specialisedModuleName`), so two bodies sharing a name are the
+    /// same module and one translation serves every instance of it.
+    ///
+    /// This is only sound because `BodyInfo::portIndices` is keyed by port name. A map keyed on
+    /// slang's port symbols belongs to the one body it came from, and reusing it for another
+    /// binds no connections at all — quietly, with the design still elaborating and simulating
+    /// to the wrong answer.
+    std::map<std::string, BodyInfo, std::less<>> bodies;
+
+    /// Whether the body of each parameterisation names anything past its own objects, by the
+    /// name `specialisedModuleName` gives it, as the first instance of it showed. Only an
+    /// instance of one that does has its names followed (`ReachedNames`), so that the others
+    /// cost nothing more than a lookup.
+    std::map<std::string, bool, std::less<>> reachesPast;
+    std::vector<const ast::ValueSymbol*> packageVariables;
+    bool succeeded = true;
+
+    /// The request `instance` of `unit` makes, as its placeholder.
+    std::optional<std::string> askFor(const ast::InstanceSymbol& instance,
+                                      const eir::UnitInterface& unit);
+
+    const std::vector<eir::UnitInterface>* interfaces = nullptr;
+    std::vector<eir::UnitRequest>* asked = nullptr;
+};
+
+bool Walker::translatePackages() {
+    // Packages in the order a module first used one of their variables, which is the order the
+    // modules were walked in, so the definitions come out the same on every run.
+    std::vector<const ast::PackageSymbol*> packages;
+    for (const ast::ValueSymbol* variable : packageVariables) {
+        const ast::PackageSymbol* package = ModuleBuilder::packageOf(*variable);
+        if (std::ranges::find(packages, package) == packages.end()) packages.push_back(package);
+    }
+
+    for (const ast::PackageSymbol* package : packages) {
+        ModuleBuilder builder(shared, *package);
+        for (const ast::ValueSymbol* variable : packageVariables) {
+            if (ModuleBuilder::packageOf(*variable) != package) continue;
+            if (!builder.objectFor(*variable).has_value()) return false;
+        }
+        design->addModule(builder.take());
+    }
+    return true;
 }
 
 std::optional<std::string> Walker::translate(const ast::InstanceSymbol& instance) {
@@ -1564,6 +2445,24 @@ std::optional<std::string> Walker::translate(const ast::InstanceSymbol& instance
     }
 
     std::string name = specialisedModuleName(body);
+
+    // An instance whose names lead out of it, to objects it reaches by a path from where it is,
+    // is a definition of its own unless another instance's lead to the same places, and is named
+    // for where they lead. One whose names stay inside keeps the parameterisation's name, which
+    // every such instance can share: a name leading into the instance holding it leads there
+    // from every instance of one parameterisation.
+    const auto [past, first] = reachesPast.try_emplace(name, false);
+    if (first || past->second) {
+        ReachedNames names(body);
+        body.visit(names);
+        if (first) past->second = !names.reached.empty();
+        if (std::ranges::any_of(names.reached,
+                                [](const std::string& path) { return path.starts_with("../"); })) {
+            std::string joined;
+            for (const std::string& path : names.reached) joined += path + '\n';
+            name = std::format("{}${}", name, digestOf(joined));
+        }
+    }
 
     const auto existing = bodies.find(name);
     if (existing != bodies.end()) return existing->second.name;
@@ -1640,6 +2539,22 @@ bool slangBuffersOf(const Options& options, SourceManager& sources, DiagnosticEn
     return true;
 }
 
+/// Maps each file slang opened for an `include to a buffer of Enzan's holding the same text, so
+/// that a diagnostic or a location in one points into it as one in a source given does. The text
+/// is slang's, not read again, so that the two cannot disagree.
+void mapIncludedBuffers(const slang::SourceManager& slangSources, SourceManager& sources,
+                        std::map<slang::BufferID, BufferId>& buffers) {
+    for (const slang::BufferID buffer : slangSources.getAllBuffers()) {
+        if (buffers.contains(buffer) || !slangSources.getIncludedFrom(buffer).valid()) continue;
+
+        // slang ends a buffer's text with a null, which the file does not hold.
+        std::string_view text = slangSources.getSourceText(buffer);
+        if (!text.empty() && text.back() == '\0') text.remove_suffix(1);
+        buffers.emplace(buffer, sources.addBuffer(slangSources.getFullPath(buffer).string(),
+                                                  std::string(text)));
+    }
+}
+
 slang::parsing::PreprocessorOptions preprocessorOptionsOf(const Options& options) {
     slang::parsing::PreprocessorOptions preprocessorOptions;
     preprocessorOptions.predefines = options.defines;
@@ -1651,6 +2566,10 @@ slang::parsing::PreprocessorOptions preprocessorOptionsOf(const Options& options
 struct DeclaredModule {
     std::string_view name;
     std::vector<std::string_view> parameters;
+
+    /// The parameters, of `parameters`, that take a string: declared `string`, or with no type and
+    /// a string as their default.
+    std::vector<std::string_view> strings;
 };
 
 /// The modules `tree` declares outside any other, in order.
@@ -1660,31 +2579,40 @@ void collectModules(const slang::syntax::SyntaxTree& tree, std::vector<DeclaredM
 
     // The value parameters a declaration declares, unless they are local.
     const auto values = [](const syntax::ParameterDeclarationBaseSyntax& declaration,
-                           std::vector<std::string_view>& names) {
+                           DeclaredModule& module) {
         if (declaration.kind != syntax::SyntaxKind::ParameterDeclaration
             || declaration.keyword.kind == slang::parsing::TokenKind::LocalParamKeyword)
             return;
-        for (const syntax::DeclaratorSyntax* declarator :
-             declaration.as<syntax::ParameterDeclarationSyntax>().declarators)
-            names.push_back(declarator->name.valueText());
+        const auto& parameter = declaration.as<syntax::ParameterDeclarationSyntax>();
+        const syntax::SyntaxKind type = parameter.type->kind;
+        for (const syntax::DeclaratorSyntax* declarator : parameter.declarators) {
+            module.parameters.push_back(declarator->name.valueText());
+            const bool stringDefault = type == syntax::SyntaxKind::ImplicitType
+                                       && declarator->initializer != nullptr
+                                       && declarator->initializer->expr->kind
+                                              == syntax::SyntaxKind::StringLiteralExpression;
+            if (type == syntax::SyntaxKind::StringType || stringDefault)
+                module.strings.push_back(declarator->name.valueText());
+        }
     };
 
     for (const syntax::MemberSyntax* member :
          tree.root().as<syntax::CompilationUnitSyntax>().members) {
         if (member->kind != syntax::SyntaxKind::ModuleDeclaration) continue;
         const auto& module = member->as<syntax::ModuleDeclarationSyntax>();
-        DeclaredModule declared{.name = module.header->name.valueText(), .parameters = {}};
+        DeclaredModule declared{
+            .name = module.header->name.valueText(), .parameters = {}, .strings = {}};
 
         // With a parameter port list, a parameter of the body is local (IEEE 1800 section 6.20.1).
         if (module.header->parameters != nullptr) {
             for (const syntax::ParameterDeclarationBaseSyntax* declaration :
                  module.header->parameters->declarations)
-                values(*declaration, declared.parameters);
+                values(*declaration, declared);
         } else {
             for (const syntax::MemberSyntax* item : module.members) {
                 if (item->kind == syntax::SyntaxKind::ParameterDeclarationStatement)
                     values(*item->as<syntax::ParameterDeclarationStatementSyntax>().parameter,
-                           declared.parameters);
+                           declared);
             }
         }
         if (!declared.name.empty()) found.push_back(std::move(declared));
@@ -2013,13 +2941,20 @@ std::optional<std::string> requestText(const std::vector<eir::UnitRequest>& requ
         for (const eir::UnitRequest::Parameter& parameter : request.parameters) {
             const std::optional<std::string_view> parameterName =
                 nameMatching(module.parameters, parameter.name);
+            if (!parameterName && parameter.defaulted) continue;
             if (!parameterName) {
                 diagnostics.report(DiagCode::RequestedParameterMissing, SourceLocation(), *name,
                                    parameter.name);
                 return std::nullopt;
             }
+            // A boolean a parameter takes as a string is that string, as a model written in
+            // SystemVerilog spells one.
+            std::string value = parameter.value;
+            if (parameter.boolean
+                && std::ranges::find(module.strings, *parameterName) != module.strings.end())
+                value = parameter.value == "1'b1" ? "\"TRUE\"" : "\"FALSE\"";
             if (!values.empty()) values += ", ";
-            values += std::format(".{}({})", escapedName(*parameterName), parameter.value);
+            values += std::format(".{}({})", escapedName(*parameterName), value);
         }
         text +=
             std::format("module {};\n  {}{} u ();\nendmodule\n", requestModuleName(index),
@@ -2123,8 +3058,20 @@ std::unique_ptr<eir::Design> analyse(const Options& options, SourceManager& sour
     slang::ast::Compilation compilation(bag);
     std::vector<std::shared_ptr<slang::syntax::SyntaxTree>> trees;
     trees.reserve(slangBuffers.size() + 1);
-    for (const slang::SourceBuffer& buffer : slangBuffers)
-        trees.push_back(slang::syntax::SyntaxTree::fromBuffer(buffer, slangSources, bag));
+    // A tree whose defparams are moved onto their instances shares syntax with the one parsed,
+    // which has to outlive it (see moveDefParams).
+    std::vector<std::shared_ptr<slang::syntax::SyntaxTree>> parsed;
+    for (const slang::SourceBuffer& buffer : slangBuffers) {
+        parsed.push_back(slang::syntax::SyntaxTree::fromBuffer(buffer, slangSources, bag));
+        trees.push_back(moveDefParams(parsed.back()));
+        // slang makes no module of a library unit a top level, nor checks one nothing
+        // instantiates.
+        const auto held = buffers.find(buffer.id);
+        trees.back()->isLibraryUnit =
+            held != buffers.end()
+            && std::ranges::find(options.libraryUnits, held->second) != options.libraryUnits.end();
+    }
+    mapIncludedBuffers(slangSources, sources, buffers);
 
     slang::BufferID requestBuffer;
     if (!options.requests.empty() || !options.interfaces.empty()) {
@@ -2154,6 +3101,39 @@ std::unique_ptr<eir::Design> analyse(const Options& options, SourceManager& sour
     // Elaborated before anything is asked of the design, so that the dead code is known.
     const slang::Diagnostics& slangDiagnostics = compilation.getAllDiagnostics();
     const DeadCode deadCode(compilation.getRoot());
+    const NonStandardPaths nonStandardPaths(
+        trees, std::span(slangDiagnostics.data(), slangDiagnostics.size()));
+    const FileNameArguments fileNameArguments(trees);
+
+    // Where slang's location is in the sources, or nowhere for a buffer they do not hold.
+    const auto locationOf = [&](slang::SourceLocation where) {
+        if (!where) return SourceLocation();
+        const auto found = buffers.find(where.buffer());
+        if (found == buffers.end()) return SourceLocation();
+        const SourceLocation start = sources.lineStart(
+            found->second, static_cast<std::uint32_t>(slangSources.getLineNumber(where)));
+        if (!start.valid()) return SourceLocation();
+        const std::size_t column = slangSources.getColumnNumber(where);
+        return start.advanced(static_cast<std::uint32_t>(column > 0 ? column - 1 : 0));
+    };
+
+    // A defparam slang would read at another width than its value's is refused, by name.
+    for (const MistypedDefParam& defparam : mistypedDefParams(compilation.getRoot())) {
+        diagnostics.report(DiagCode::UnsupportedConstruct, locationOf(defparam.location),
+                           defparam.description);
+        hasError = true;
+    }
+
+    // slang skips an encrypted envelope with a warning and reads on, so a module whose body is
+    // encrypted would be translated without it and simulate. Such a file is refused, by one
+    // error naming it: what slang says about the rest of it follows from the missing text, such
+    // as an `ifndef left open or a header with no `endmodule`.
+    std::set<slang::BufferID> encrypted;
+    for (const slang::Diagnostic& diagnostic : slangDiagnostics) {
+        if (diagnostic.code == slang::diag::ProtectedEnvelope && diagnostic.location)
+            encrypted.insert(diagnostic.location.buffer());
+    }
+    std::set<slang::BufferID> encryptionReported;
 
     for (const slang::Diagnostic& diagnostic : slangDiagnostics) {
         const slang::DiagnosticSeverity severity = slang::getDefaultSeverity(diagnostic.code);
@@ -2167,17 +3147,18 @@ std::unique_ptr<eir::Design> analyse(const Options& options, SourceManager& sour
             continue;
 
         const std::string message = slangEngine.formatMessage(diagnostic);
-        const SourceLocation location = [&] {
-            if (!diagnostic.location) return SourceLocation();
-            const auto found = buffers.find(diagnostic.location.buffer());
-            if (found == buffers.end()) return SourceLocation();
-            const SourceLocation start = sources.lineStart(
-                found->second,
-                static_cast<std::uint32_t>(slangSources.getLineNumber(diagnostic.location)));
-            if (!start.valid()) return SourceLocation();
-            const std::size_t column = slangSources.getColumnNumber(diagnostic.location);
-            return start.advanced(static_cast<std::uint32_t>(column > 0 ? column - 1 : 0));
-        }();
+        const SourceLocation location = locationOf(diagnostic.location);
+
+        if (diagnostic.location && encrypted.contains(diagnostic.location.buffer())) {
+            const slang::BufferID buffer = diagnostic.location.buffer();
+            if (diagnostic.code == slang::diag::ProtectedEnvelope
+                && encryptionReported.insert(buffer).second) {
+                diagnostics.report(DiagCode::EncryptedSource, location,
+                                   slangSources.getRawFileName(buffer));
+                hasError = true;
+            }
+            continue;
+        }
 
         // A degenerate construct a constant condition rules out is never translated, so it is
         // reported and accepted rather than refused (see DeadCode).
@@ -2185,6 +3166,22 @@ std::unique_ptr<eir::Design> analyse(const Options& options, SourceManager& sour
             diagnostics.report(DiagCode::ErrorInDeadCode, location, message);
             continue;
         }
+
+        // Two module paths the standard refuses and other simulators accept (see
+        // NonStandardPaths); slang's warning of a parameter in a specify block says again what
+        // the excused error says.
+        if (nonStandardPaths.repeats(diagnostic)) continue;
+        if (severity == slang::DiagnosticSeverity::Error) {
+            if (const std::optional<DiagCode> code = nonStandardPaths.excuses(diagnostic)) {
+                diagnostics.report(*code, location, message);
+                continue;
+            }
+        }
+
+        // A file name held in a vector, which the standard allows `$fopen` and slang refuses
+        // (see FileNameArguments); the translation reads its characters.
+        if (severity == slang::DiagnosticSeverity::Error && fileNameArguments.excuses(diagnostic))
+            continue;
 
         switch (severity) {
         case slang::DiagnosticSeverity::Note:

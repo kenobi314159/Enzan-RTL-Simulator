@@ -206,10 +206,159 @@ TEST_F(SessionTest, ElaboratingPreparesAKernelAtTimeZero) {
     EXPECT_EQ(session.time(), 0U);
 }
 
+TEST_F(SessionTest, SeveralTopLevelsAreElaboratedSideBySide) {
+    ASSERT_TRUE(analyse("tops.sv", "module design_top;\n  logic a = 1'b1;\nendmodule\n"
+                                   "module glbl;\n  logic GSR = 1'b0;\nendmodule\n"))
+        << firstMessage();
+    const std::vector<std::string> tops{"design_top", "glbl"};
+    ASSERT_TRUE(session.elaborate(std::span<const std::string>(tops))) << firstMessage();
+    EXPECT_NE(session.findSignal("/design_top/a"), Session::NoSignal);
+    EXPECT_NE(session.findSignal("/glbl/GSR"), Session::NoSignal);
+}
+
 TEST_F(SessionTest, ElaboratingAnUnknownTopFails) {
     ASSERT_TRUE(analyse("counter.sv", CounterSource)) << firstMessage();
     EXPECT_FALSE(session.elaborate("nosuchmodule"));
     EXPECT_TRUE(reported(DiagCode::TopModuleNotFound));
+}
+
+// ---------------------------------------------------------------------------
+// The library search, `-y`, `-v` and `+libext+`
+// ---------------------------------------------------------------------------
+
+/// Whether `session` read a file whose name ends `name`.
+bool readFile(const Session& session, std::string_view name) {
+    return std::ranges::any_of(session.filesRead(), [name](const std::filesystem::path& file) {
+        return file.string().ends_with(name);
+    });
+}
+
+TEST_F(SessionTest, AModuleNothingDefinesIsFoundInALibraryDirectoryWithWhatItNeeds) {
+    workspace.write("cells/inner.v", "module inner (output o);\n  assign o = 1'b1;\nendmodule\n");
+    workspace.write("cells/outer.v", "module outer (output o);\n  inner u (.o(o));\nendmodule\n");
+    // Never instantiated, so never read: it would fail the analysis.
+    workspace.write("cells/unused.v", "module unused;\n  nonesuch n ();\nendmodule\n");
+    workspace.write("tb.sv", "module tb;\n  wire o;\n  outer u (.o(o));\nendmodule\n");
+
+    Session::AnalysisRequest request;
+    request.files = {workspace / "tb.sv"};
+    request.searchDirectories = {workspace / "cells"};
+    ASSERT_TRUE(session.analyse(request)) << firstMessage();
+    ASSERT_TRUE(session.elaborate("tb")) << firstMessage();
+    EXPECT_TRUE(readFile(session, "cells/outer.v"));
+    EXPECT_TRUE(readFile(session, "cells/inner.v")) << "what a found module instantiates";
+    EXPECT_FALSE(readFile(session, "cells/unused.v"));
+}
+
+TEST_F(SessionTest, ALibraryFileIsReadOnlyWhenItDeclaresWhatIsWanted) {
+    workspace.write("cells.v",
+                    "module and2 (input a, b, output y);\n  assign y = a & b;\nendmodule\n"
+                    "module or2 (input a, b, output y);\n  assign y = a | b;\nendmodule\n");
+    workspace.write("broken.v", "module unrelated;\n  nonesuch n ();\nendmodule\n");
+    workspace.write("tb.sv",
+                    "module tb;\n  wire y;\n  or2 u (.a(1'b0), .b(1'b1), .y(y));\nendmodule\n");
+
+    Session::AnalysisRequest request;
+    request.files = {workspace / "tb.sv"};
+    request.searchFiles = {workspace / "broken.v", workspace / "cells.v"};
+    ASSERT_TRUE(session.analyse(request)) << firstMessage();
+    ASSERT_TRUE(session.elaborate("tb")) << firstMessage();
+    EXPECT_TRUE(readFile(session, "/cells.v"));
+    EXPECT_FALSE(readFile(session, "/broken.v")) << "read to see what it declares, not analysed";
+}
+
+TEST_F(SessionTest, AModuleOfALibraryFileNothingInstantiatesIsNoTopLevel) {
+    // A vendor's file holds every model of a library, some of which Enzan refuses; a design that
+    // uses another is not stopped by them, from `-v` or from `-y`.
+    const std::string cells = "module used (output o);\n  assign o = 1'b1;\nendmodule\n"
+                              "module unused;\n  initial fork #1; #2; join\nendmodule\n";
+    workspace.write("cells.v", cells);
+    workspace.write("dir/used.v", cells);
+    workspace.write("tb.sv", "module tb;\n  wire o;\n  used u (.o(o));\nendmodule\n");
+
+    Session::AnalysisRequest fromFile;
+    fromFile.files = {workspace / "tb.sv"};
+    fromFile.searchFiles = {workspace / "cells.v"};
+    ASSERT_TRUE(session.analyse(fromFile)) << firstMessage();
+    ASSERT_TRUE(session.elaborate("tb")) << firstMessage();
+
+    Session fresh(sources, engine);
+    Session::AnalysisRequest fromDirectory;
+    fromDirectory.files = {workspace / "tb.sv"};
+    fromDirectory.searchDirectories = {workspace / "dir"};
+    ASSERT_TRUE(fresh.analyse(fromDirectory)) << firstMessage();
+    ASSERT_TRUE(fresh.elaborate("tb")) << firstMessage();
+}
+
+TEST_F(SessionTest, LibraryExtensionsAreTriedInTheirOrder) {
+    // `.v` alone when none is given, so the `.sv` is not found then.
+    workspace.write("cells/leaf.sv", "module leaf (output o);\n  assign o = 1'b1;\nendmodule\n");
+    workspace.write("cells/leaf.v", "module leaf (output o);\n  nonesuch n ();\nendmodule\n");
+    workspace.write("tb.sv", "module tb;\n  wire o;\n  leaf u (.o(o));\nendmodule\n");
+
+    Session::AnalysisRequest request;
+    request.files = {workspace / "tb.sv"};
+    request.searchDirectories = {workspace / "cells"};
+    request.searchExtensions = {".sv", ".v"};
+    ASSERT_TRUE(session.analyse(request)) << firstMessage();
+    EXPECT_TRUE(readFile(session, "cells/leaf.sv"));
+    EXPECT_FALSE(readFile(session, "cells/leaf.v"));
+}
+
+TEST_F(SessionTest, ASourcesOwnModuleIsNotLookedForInALibrary) {
+    workspace.write("cells/leaf.v", "module leaf (output o);\n  nonesuch n ();\nendmodule\n");
+    workspace.write("tb.sv", "module leaf (output o);\n  assign o = 1'b0;\nendmodule\n"
+                             "module tb;\n  wire o;\n  leaf u (.o(o));\nendmodule\n");
+
+    Session::AnalysisRequest request;
+    request.files = {workspace / "tb.sv"};
+    request.searchDirectories = {workspace / "cells"};
+    ASSERT_TRUE(session.analyse(request)) << firstMessage();
+    EXPECT_FALSE(readFile(session, "cells/leaf.v"));
+}
+
+TEST_F(SessionTest, AModuleFoundNowhereIsReportedAsTheAnalysisReportsIt) {
+    workspace.write("tb.sv", "module tb;\n  nonesuch u ();\nendmodule\n");
+
+    Session::AnalysisRequest request;
+    request.files = {workspace / "tb.sv"};
+    request.searchDirectories = {workspace / "empty"};
+    EXPECT_FALSE(session.analyse(request));
+    EXPECT_TRUE(reported(DiagCode::SystemVerilogError));
+}
+
+TEST_F(SessionTest, ARunSaysOnceThatTimingChecksAreNotRun) {
+    // Two definitions with timing checks, one instantiated twice: one note, at the first check in
+    // the hierarchy, rather than one per definition or instance.
+    ASSERT_TRUE(analyse("checks.sv", "module setup_cell (input clk, input d);\n"
+                                     "    specify\n"
+                                     "        $setup(d, posedge clk, 1);\n"
+                                     "    endspecify\n"
+                                     "endmodule\n"
+                                     "module hold_cell (input clk, input d);\n"
+                                     "    specify\n"
+                                     "        $hold(posedge clk, d, 1);\n"
+                                     "    endspecify\n"
+                                     "endmodule\n"
+                                     "module tb;\n"
+                                     "    logic clk = 1'b0, d = 1'b0;\n"
+                                     "    hold_cell u_hold (.clk(clk), .d(d));\n"
+                                     "    setup_cell u_first (.clk(clk), .d(d));\n"
+                                     "    setup_cell u_second (.clk(clk), .d(d));\n"
+                                     "endmodule\n"))
+        << firstMessage();
+    ASSERT_TRUE(session.elaborate("tb")) << firstMessage();
+
+    ASSERT_EQ(
+        std::ranges::count(consumer.received, DiagCode::TimingChecksNotRun, &Diagnostic::code), 1);
+    const auto note =
+        std::ranges::find(consumer.received, DiagCode::TimingChecksNotRun, &Diagnostic::code);
+    EXPECT_EQ(sources.lineNumber(note->location), 8U) << "the hold check, instantiated first";
+}
+
+TEST_F(SessionTest, ARunWithoutTimingChecksSaysNothingOfThem) {
+    loadCounter();
+    EXPECT_FALSE(reported(DiagCode::TimingChecksNotRun));
 }
 
 TEST_F(SessionTest, RunningWithNoSimulationSaysSo) {
@@ -780,6 +929,26 @@ protected:
 };
 
 #ifdef ENZAN_WITH_VHDL
+TEST_F(BothLanguagesTest, AComponentNoEntityBindsIsBoundToAModuleOfALibraryDirectory) {
+    // As a VHDL design reaches a vendor's models through a package of components.
+    workspace.write("tb.vhd", "library ieee;\nuse ieee.std_logic_1164.all;\n"
+                              "entity tb is\nend entity;\narchitecture a of tb is\n"
+                              "  component Cell is\n    port (o : out std_logic);\n"
+                              "  end component;\n  signal o : std_logic;\nbegin\n"
+                              "  u : Cell port map (o => o);\nend architecture;\n");
+    workspace.write("cells/Cell.v", "module Cell (output o);\n  Inner u (.o(o));\nendmodule\n");
+    workspace.write("cells/Inner.v", "module Inner (output o);\n  assign o = 1'b1;\nendmodule\n");
+
+    Session::AnalysisRequest request;
+    request.files = {workspace / "tb.vhd"};
+    request.searchDirectories = {workspace / "cells"};
+    request.top = "tb";
+    ASSERT_TRUE(session.analyse(request)) << firstMessage();
+    EXPECT_FALSE(reported(DiagCode::VhdlUnboundComponent)) << firstMessage();
+    ASSERT_TRUE(session.elaborate("tb")) << firstMessage();
+    EXPECT_NE(session.findSignal("/tb/u/u/o"), Session::NoSignal);
+}
+
 TEST_F(BothLanguagesTest, ADesignOfBothLanguagesIsNotStoredInALibraryYet) {
     ASSERT_TRUE(session.openOutputLibrary(workspace / "work")) << firstMessage();
     EXPECT_FALSE(analyseBoth("tb"));

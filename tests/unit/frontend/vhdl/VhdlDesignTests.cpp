@@ -1079,6 +1079,489 @@ end architecture;
     EXPECT_EQ(sources.lineNumber(refused->notes[0].location), 14U);
 }
 
+TEST_F(VhdlDesignTest, AFunctionsUnusedLineDoesNotStopItsValue) {
+    // AMD's unimacro computes its block RAMs' widths by functions that each declare a line for a
+    // message they never write.
+    const std::unique_ptr<enzan::eir::Design> design = translate(R"(
+use std.textio.all;
+
+entity tb is
+end entity;
+
+architecture test of tb is
+  function width(n : integer) return integer is
+    variable message : line;
+  begin
+    if n > 18 then
+      return 36;
+    end if;
+    return 18;
+  end function;
+begin
+  g : for i in 1 to width(20) generate
+  end generate;
+end architecture;
+)",
+                                                                 "tb");
+    EXPECT_NE(design, nullptr) << transcript();
+}
+
+TEST_F(VhdlDesignTest, AFunctionThatWritesALineStopsWhereItWrites) {
+    const std::unique_ptr<enzan::eir::Design> design = translate(R"(
+use std.textio.all;
+
+entity tb is
+end entity;
+
+architecture test of tb is
+  function width(n : integer) return integer is
+    variable message : line;
+  begin
+    write(message, string'("width"));
+    return n;
+  end function;
+begin
+  g : for i in 1 to width(2) generate
+  end generate;
+end architecture;
+)",
+                                                                 "tb");
+    EXPECT_EQ(design, nullptr);
+    const Diagnostic* refused = first(DiagCode::VhdlUnsupported);
+    ASSERT_NE(refused, nullptr) << transcript();
+    ASSERT_EQ(refused->notes.size(), 1U);
+    EXPECT_NE(refused->notes[0].message.find("'width' stopped at this procedure call"),
+              std::string::npos)
+        << refused->notes[0].message;
+    EXPECT_EQ(sources.lineNumber(refused->notes[0].location), 11U);
+}
+
+TEST_F(VhdlDesignTest, ALinesBoundsElementsAndSlicesAreReadFromTheRuntime) {
+    // As Altera's memories read an initialisation file: a line indexed from its 'LOW, sliced from
+    // it, and its 'LENGTH. A line rises from 1, after a read too, as NVC indexes one.
+    std::unique_ptr<enzan::eir::Design> design = translate(R"(
+use std.textio.all;
+
+entity tb is
+end entity;
+
+architecture test of tb is
+begin
+  process
+    variable l : line;
+    variable c : character;
+    variable i, spaces : integer := 0;
+  begin
+    write(l, string'("end of it"));
+    assert l'length = 9 report "length " & integer'image(l'length) severity failure;
+    assert l'low = 1 and l'left = 1 report "low" severity failure;
+    assert l'high = 9 and l'right = 9 report "high" severity failure;
+    assert l(l'low) = 'e' and l(l'high) = 't' report "an end" severity failure;
+    assert l(l'low to l'low + 2) = "end" report "slice" severity failure;
+    while i < l'length loop
+      if l(l'low + i) = ' ' then
+        spaces := spaces + 1;
+      end if;
+      i := i + 1;
+    end loop;
+    assert spaces = 2 report "spaces " & integer'image(spaces) severity failure;
+    read(l, c);
+    assert l'low = 1 and l'length = 8 and l(l'low) = 'n' report "after a read" severity failure;
+    report "PASS";
+    wait;
+  end process;
+end architecture;
+)",
+                                                           "tb");
+    ASSERT_NE(design, nullptr) << transcript();
+
+    Simulation simulation(std::move(*design), "tb");
+    ASSERT_TRUE(simulation.ready()) << simulation.messages().front();
+    simulation.run();
+    EXPECT_EQ(simulation.messages(), std::vector<std::string>{"PASS"});
+}
+
+TEST_F(VhdlDesignTest, AnIndexOutsideALineEndsTheRun) {
+    std::unique_ptr<enzan::eir::Design> design = translate(R"(
+use std.textio.all;
+
+entity tb is
+end entity;
+
+architecture test of tb is
+begin
+  process
+    variable l : line;
+    variable c : character;
+  begin
+    write(l, string'("abc"));
+    c := l(l'high + 1);
+    report "unreachable";
+    wait;
+  end process;
+end architecture;
+)",
+                                                           "tb");
+    ASSERT_NE(design, nullptr) << transcript();
+
+    Simulation simulation(std::move(*design), "tb");
+    ASSERT_TRUE(simulation.ready()) << simulation.messages().front();
+    EXPECT_EQ(simulation.run(), RunStatus::Error);
+    EXPECT_TRUE(simulation.reportedCode(DiagCode::AssertionFailure));
+    EXPECT_EQ(simulation.messages(),
+              std::vector<std::string>{"index 4 is outside the bounds 1 to 3 of the line"});
+}
+
+TEST_F(VhdlDesignTest, AStringIsReadFromALineWhereTheLineHoldsIt) {
+    // As Altera's memories read an Intel HEX record: strings of two and four characters, a
+    // descending one among them, and a slice; a read past the line's end leaves the string and
+    // the line as they were, as GHDL's does.
+    std::unique_ptr<enzan::eir::Design> design = translate(R"(
+use std.textio.all;
+
+entity tb is
+end entity;
+
+architecture test of tb is
+begin
+  process
+    variable l : line;
+    variable byte : string(2 downto 1);
+    variable address : string(1 to 4);
+    variable rest : string(1 to 8) := "........";
+    variable empty : string(1 to 0);
+    variable good : boolean;
+  begin
+    write(l, string'("1F0400rest"));
+    read(l, byte, good);
+    assert good and byte = "1F" report "byte " & byte severity failure;
+    read(l, address);
+    assert address = "0400" report "address " & address severity failure;
+    read(l, empty, good);
+    assert good report "a null string" severity failure;
+    read(l, rest, good);
+    assert not good and rest = "........" report "past the end" severity failure;
+    read(l, rest(3 to 6), good);
+    assert good and rest = "..rest.." report "slice " & rest severity failure;
+    assert l'length = 0 report "left " & integer'image(l'length) severity failure;
+    report "PASS";
+    wait;
+  end process;
+end architecture;
+)",
+                                                           "tb");
+    ASSERT_NE(design, nullptr) << transcript();
+
+    Simulation simulation(std::move(*design), "tb");
+    ASSERT_TRUE(simulation.ready()) << simulation.messages().front();
+    simulation.run();
+    EXPECT_EQ(simulation.messages(), std::vector<std::string>{"PASS"});
+}
+
+TEST_F(VhdlDesignTest, AStringReadPastTheLinesEndWithNoGoodEndsTheRun) {
+    std::unique_ptr<enzan::eir::Design> design = translate(R"(
+use std.textio.all;
+
+entity tb is
+end entity;
+
+architecture test of tb is
+begin
+  process
+    variable l : line;
+    variable word : string(1 to 4);
+  begin
+    write(l, string'("abc"));
+    read(l, word);
+    report "unreachable";
+    wait;
+  end process;
+end architecture;
+)",
+                                                           "tb");
+    ASSERT_NE(design, nullptr) << transcript();
+
+    Simulation simulation(std::move(*design), "tb");
+    ASSERT_TRUE(simulation.ready()) << simulation.messages().front();
+    EXPECT_EQ(simulation.run(), RunStatus::Error);
+    EXPECT_TRUE(simulation.reportedCode(DiagCode::AssertionFailure));
+    EXPECT_EQ(simulation.messages(),
+              std::vector<std::string>{"a read of 4 characters from a line holding 3"});
+}
+
+TEST_F(VhdlDesignTest, ACharacterReadFromAnEmptyLineWithNoGoodEndsTheRun) {
+    // With `good`, the read says it took nothing and the run goes on.
+    std::unique_ptr<enzan::eir::Design> design = translate(R"(
+use std.textio.all;
+
+entity tb is
+end entity;
+
+architecture test of tb is
+begin
+  process
+    variable l : line;
+    variable c : character;
+    variable good : boolean;
+  begin
+    write(l, 'a');
+    read(l, c);
+    read(l, c, good);
+    report "good " & boolean'image(good);
+    read(l, c);
+    report "unreachable";
+    wait;
+  end process;
+end architecture;
+)",
+                                                           "tb");
+    ASSERT_NE(design, nullptr) << transcript();
+
+    Simulation simulation(std::move(*design), "tb");
+    ASSERT_TRUE(simulation.ready()) << simulation.messages().front();
+    EXPECT_EQ(simulation.run(), RunStatus::Error);
+    EXPECT_TRUE(simulation.reportedCode(DiagCode::AssertionFailure));
+    EXPECT_EQ(simulation.messages(),
+              (std::vector<std::string>{"good false", "a read of a character from an empty line"}));
+}
+
+TEST_F(VhdlDesignTest, ASubprogramsStringOfRunTimeLengthIsHeldInScratch) {
+    // As Altera's SHRINK_LINE cuts a line, a string as long as a parameter the run gives, read
+    // into; and one of each direction measured, written, compared, sliced and walked.
+    std::unique_ptr<enzan::eir::Design> design = translate(R"(
+use std.textio.all;
+
+entity tb is
+end entity;
+
+architecture test of tb is
+  procedure shrink (l : inout line; pos : in integer) is
+    subtype nstring is string(1 to pos);
+    variable str : nstring;
+  begin
+    if pos >= 1 then
+      read(l, str);
+    end if;
+  end procedure;
+
+  procedure describe (n : in integer) is
+    variable s : string(1 to n) := (others => '*');
+    variable r : string(n downto 1);
+    variable l : line;
+    variable stars : integer := 0;
+  begin
+    s(1) := 'a';
+    s(n) := 'z';
+    s(2 to 3) := "xy";
+    assert s'length = n and s'left = 1 and s'right = n and s'low = 1 and s'high = n
+      report "s's bounds" severity failure;
+    assert r'left = n and r'right = 1 and r'low = 1 and r'high = n and not r'ascending
+      report "r's bounds" severity failure;
+    assert s(1 to 2) = "ax" and s /= "a" and s > "a" and s < "b" report "compared" severity failure;
+    for i in s'range loop
+      if s(i) = '*' then
+        stars := stars + 1;
+      end if;
+    end loop;
+    report s & " has " & integer'image(stars) & " stars";
+    write(l, s);
+    write(l, ' ');
+    write(l, s, right, n + 2);
+    writeline(output, l);
+  end procedure;
+begin
+  process
+    variable l : line;
+    variable i : integer := 3;
+  begin
+    write(l, string'("abc:def"));
+    shrink(l, i);
+    assert l'length = 4 and l(l'low) = ':' report "shrunk" severity failure;
+    i := 0;
+    shrink(l, i);
+    assert l'length = 4 report "shrunk by nothing" severity failure;
+    describe(5);
+    i := 6;
+    describe(i);
+    report "PASS";
+    wait;
+  end process;
+end architecture;
+)",
+                                                           "tb");
+    ASSERT_NE(design, nullptr) << transcript();
+
+    Simulation simulation(std::move(*design), "tb");
+    ASSERT_TRUE(simulation.ready()) << simulation.messages().front();
+    simulation.run();
+    EXPECT_EQ(simulation.messages(),
+              (std::vector<std::string>{"axy*z has 1 stars", "axy**z has 2 stars", "PASS"}));
+    EXPECT_EQ(simulation.transcript(), "axy*z   axy*z\naxy**z   axy**z\n");
+}
+
+TEST_F(VhdlDesignTest, AnIndexOutsideAStringOfRunTimeLengthEndsTheRun) {
+    std::unique_ptr<enzan::eir::Design> design = translate(R"(
+entity tb is
+end entity;
+
+architecture test of tb is
+  procedure poke (n : in integer) is
+    variable s : string(1 to n);
+  begin
+    s(n + 1) := 'x';
+  end procedure;
+begin
+  process
+    variable n : integer := 4;
+  begin
+    poke(n);
+    report "unreachable";
+    wait;
+  end process;
+end architecture;
+)",
+                                                           "tb");
+    ASSERT_NE(design, nullptr) << transcript();
+
+    Simulation simulation(std::move(*design), "tb");
+    ASSERT_TRUE(simulation.ready()) << simulation.messages().front();
+    EXPECT_EQ(simulation.run(), RunStatus::Error);
+    EXPECT_EQ(simulation.messages(),
+              std::vector<std::string>{"index 5 is outside the bounds 1 to 4"});
+}
+
+TEST_F(VhdlDesignTest, ASliceOfRunTimeLengthIsPassedInScratch) {
+    // As Altera's memories read a MIF's header: a slice as long as what a loop counted, read into
+    // and given to a function that takes any string, called and inlined, and to a procedure that
+    // fills it; a descending one indexes as its bounds say.
+    std::unique_ptr<enzan::eir::Design> design = translate(R"(
+use std.textio.all;
+
+entity tb is
+end entity;
+
+architecture test of tb is
+  function digits (str : in string) return integer is
+    variable len : integer := str'length;
+    variable result : integer := 0;
+  begin
+    for i in 1 to len loop
+      result := result * 10 + character'pos(str(i)) - character'pos('0');
+    end loop;
+    return result;
+  end function;
+
+  function first (s : string) return character is
+  begin
+    return s(s'left);
+  end function;
+
+  procedure fill (s : out string; c : in character) is
+  begin
+    for i in s'range loop
+      s(i) := c;
+    end loop;
+  end procedure;
+begin
+  process
+    variable l : line;
+    variable m : string(1 to 15) := (others => '.');
+    variable r : string(8 downto 1) := "abcd1234";
+    variable c : character;
+    variable i : integer := 0;
+  begin
+    write(l, string'("WIDTH=1234;"));
+    while l(l'low + i) /= '=' loop
+      i := i + 1;
+    end loop;
+    read(l, m(1 to i));
+    assert m(1 to 6) = "WIDTH." report "read " & m severity failure;
+    read(l, c);
+    i := 0;
+    while l(l'low + i) /= ';' loop
+      i := i + 1;
+    end loop;
+    read(l, m(1 to i));
+    assert digits(m(1 to i)) = 1234 report "digits" severity failure;
+    assert digits(r(i downto 1)) = 4321 report "descending" severity failure;
+    assert first(m(2 to i)) = '2' report "first" severity failure;
+    fill(m(i + 1 to 15), '-');
+    report m;
+    write(l, m(1 to i));
+    writeline(output, l);
+    report "PASS";
+    wait;
+  end process;
+end architecture;
+)",
+                                                           "tb");
+    ASSERT_NE(design, nullptr) << transcript();
+
+    Simulation simulation(std::move(*design), "tb");
+    ASSERT_TRUE(simulation.ready()) << simulation.messages().front();
+    simulation.run();
+    EXPECT_EQ(simulation.messages(), (std::vector<std::string>{"1234-----------", "PASS"}));
+    EXPECT_EQ(simulation.transcript(), ";1234\n");
+}
+
+TEST_F(VhdlDesignTest, ASliceOfRunTimeLengthOutsideItsArrayEndsTheRun) {
+    std::unique_ptr<enzan::eir::Design> design = translate(R"(
+entity tb is
+end entity;
+
+architecture test of tb is
+  function count (str : in string) return integer is
+  begin
+    return str'length;
+  end function;
+begin
+  process
+    variable m : string(1 to 15);
+    variable i : integer := 20;
+  begin
+    report integer'image(count(m(10 to i)));
+    wait;
+  end process;
+end architecture;
+)",
+                                                           "tb");
+    ASSERT_NE(design, nullptr) << transcript();
+
+    Simulation simulation(std::move(*design), "tb");
+    ASSERT_TRUE(simulation.ready()) << simulation.messages().front();
+    EXPECT_EQ(simulation.run(), RunStatus::Error);
+    EXPECT_EQ(simulation.messages(),
+              std::vector<std::string>{"10 to 20 is outside the bounds 1 to 15"});
+}
+
+TEST_F(VhdlDesignTest, ASubprogramHoldingAStringOfRunTimeLengthCannotWait) {
+    // Suspending releases the kernel's scratch, which holds the string.
+    const std::unique_ptr<enzan::eir::Design> design = translate(R"(
+entity tb is
+end entity;
+
+architecture test of tb is
+  procedure hold (n : in integer) is
+    variable s : string(1 to n);
+  begin
+    wait for 1 ns;
+  end procedure;
+begin
+  process
+    variable n : integer := 4;
+  begin
+    hold(n);
+    wait;
+  end process;
+end architecture;
+)",
+                                                                 "tb");
+    EXPECT_EQ(design, nullptr);
+    EXPECT_NE(transcript().find("a wait in a subprogram holding a string of run-time length"),
+              std::string::npos)
+        << transcript();
+}
+
 TEST_F(VhdlDesignTest, AGenericsDefaultThatCannotBeComputedSaysWhereItsCallStopped) {
     // As OFM's splitter wrapper initialises its address bases: a default computed by a function
     // that calls a procedure for random numbers.
@@ -1416,8 +1899,9 @@ end architecture;
 
 TEST_F(VhdlDesignTest, AComponentWithNoEntityIsBoundToTheModuleOfItsNameInAnyCase) {
     // The instance names a placeholder and asks for the module, its generics' values as
-    // SystemVerilog literals, the ports it connects in the order met. Two instances asking for
-    // the same are one request.
+    // SystemVerilog literals, a boolean's marked as one and one it leaves at the component's
+    // default marked so, the ports it connects in the order met. Two instances asking for the same
+    // are one request, a value in it defaulted only where both leave it.
     modules = {"other", "ClkBuf"};
     std::unique_ptr<enzan::eir::Design> design = translate(R"(
 library ieee;
@@ -1445,7 +1929,7 @@ architecture test of tb is
   signal x : std_logic_vector(5 downto 0);
 begin
   u : clkbuf generic map (w => 6) port map (i => a, o => v, io => open);
-  w : clkbuf generic map (w => 6) port map (o => x, i => a, io => open);
+  w : clkbuf generic map (w => 6, flag => true) port map (o => x, i => a, io => open);
 end architecture;
 )",
                                                            "tb");
@@ -1456,14 +1940,15 @@ end architecture;
     const enzan::eir::UnitRequest& request = exchange.asked.front();
     EXPECT_EQ(request.unit, "ClkBuf");
     using Parameter = enzan::eir::UnitRequest::Parameter;
-    EXPECT_EQ(request.parameters,
-              (std::vector<Parameter>{{.name = "w", .value = "6"},
-                                      {.name = "flag", .value = "1'b1"},
-                                      {.name = "name", .value = "\"a\\\"b\\\\c\""},
-                                      {.name = "init", .value = "4'b01zx"},
-                                      {.name = "neg", .value = "-3"},
-                                      {.name = "level", .value = "1'b1"},
-                                      {.name = "b", .value = "1'b0"}}));
+    EXPECT_EQ(
+        request.parameters,
+        (std::vector<Parameter>{{.name = "w", .value = "6"},
+                                {.name = "flag", .value = "1'b1", .boolean = true},
+                                {.name = "name", .value = "\"a\\\"b\\\\c\"", .defaulted = true},
+                                {.name = "init", .value = "4'b01zx", .defaulted = true},
+                                {.name = "neg", .value = "-3", .defaulted = true},
+                                {.name = "level", .value = "1'b1", .defaulted = true},
+                                {.name = "b", .value = "1'b0", .defaulted = true}}));
     using enzan::eir::PortDirection;
     using PortUse = enzan::eir::UnitRequest::PortUse;
     EXPECT_EQ(request.ports,
@@ -3080,6 +3565,76 @@ end architecture;
     EXPECT_EQ(simulation.run(), RunStatus::Error);
     EXPECT_TRUE(simulation.reportedCode(DiagCode::AssertionFailure));
     EXPECT_EQ(simulation.messages().front(), "index 4 is outside the bounds 3 downto 0");
+}
+
+TEST_F(VhdlDesignTest, AValueOfAnotherLengthIsNoErrorInABranchNoRunTakes) {
+    // VHDL checks that a value's length matches only as it is assigned, as a vendor's model
+    // assigns between ports whose widths differ where a test of them chose another branch: to a
+    // signal, a variable and an aggregate, and a string literal and an aggregate assigned.
+    std::unique_ptr<enzan::eir::Design> design = translate(R"(
+entity tb is
+  generic (WA : positive := 8; WB : positive := 1);
+end entity;
+
+architecture test of tb is
+  signal a : bit_vector(WA - 1 downto 0) := (others => '1');
+  signal b : bit_vector(WB - 1 downto 0);
+begin
+  process
+    variable same : boolean := false;
+    variable v : bit_vector(WB - 1 downto 0);
+    variable x, y : bit;
+  begin
+    if same then
+      b <= a;
+      v := a;
+      (x, y) := a;
+      b <= "0101";
+      v := ('1', '0');
+    end if;
+    report "PASS";
+    wait;
+  end process;
+end architecture;
+)",
+                                                           "tb");
+    ASSERT_NE(design, nullptr) << transcript();
+
+    Simulation simulation(std::move(*design), "tb");
+    ASSERT_TRUE(simulation.ready()) << simulation.messages().front();
+    simulation.run();
+    EXPECT_EQ(simulation.messages(), std::vector<std::string>{"PASS"});
+}
+
+TEST_F(VhdlDesignTest, AValueOfAnotherLengthEndsTheRunWhereItIsAssigned) {
+    std::unique_ptr<enzan::eir::Design> design = translate(R"(
+entity tb is
+  generic (WA : positive := 8; WB : positive := 1);
+end entity;
+
+architecture test of tb is
+  signal a : bit_vector(WA - 1 downto 0) := (others => '1');
+  signal b : bit_vector(WB - 1 downto 0);
+begin
+  process
+  begin
+    report "before";
+    b <= a;
+    report "unreachable";
+    wait;
+  end process;
+end architecture;
+)",
+                                                           "tb");
+    ASSERT_NE(design, nullptr) << transcript();
+
+    Simulation simulation(std::move(*design), "tb");
+    ASSERT_TRUE(simulation.ready()) << simulation.messages().front();
+    EXPECT_EQ(simulation.run(), RunStatus::Error);
+    EXPECT_TRUE(simulation.reportedCode(DiagCode::AssertionFailure));
+    EXPECT_EQ(simulation.messages(),
+              (std::vector<std::string>{
+                  "before", "a value of length 8 is assigned to the signal of length 1"}));
 }
 
 TEST_F(VhdlDesignTest, ASliceThatMovesWithAVariableIsDrivenAndRead) {
