@@ -2970,11 +2970,13 @@ ProcessTranslator::translateAssignmentPattern(const ast::Expression& expression)
         return std::nullopt;
     }
 
-    // slang expands every form — positional, by member, by default, replicated — into the
-    // elements in order, each converted to the type it initialises. In order, the first one
+    // slang expands the positional, by-member and default forms into the elements in order, each
+    // converted to the type it initialises; a replicated one keeps one copy of them and its count,
+    // and each element is evaluated once, as a replication's operand is. In order, the first one
     // highest, is how the storage lays out an array or a struct, so the pattern is the
     // concatenation of its elements.
     const ast::AssignmentPatternExpressionBase* pattern = nullptr;
+    std::int64_t copies = 1;
     switch (expression.kind) {
     case ast::ExpressionKind::SimpleAssignmentPattern:
         pattern = &expression.as<ast::SimpleAssignmentPatternExpression>();
@@ -2982,7 +2984,20 @@ ProcessTranslator::translateAssignmentPattern(const ast::Expression& expression)
     case ast::ExpressionKind::StructuredAssignmentPattern:
         pattern = &expression.as<ast::StructuredAssignmentPatternExpression>();
         break;
-    default: pattern = &expression.as<ast::ReplicatedAssignmentPatternExpression>(); break;
+    default: {
+        const auto& replicated = expression.as<ast::ReplicatedAssignmentPatternExpression>();
+        pattern = &replicated;
+        const std::optional<std::int64_t> count = constantValueOf(replicated.count());
+        if (!count.has_value() || *count < 0) {
+            module->reportUnsupported(expression.sourceRange.start(),
+                                      "a replicated assignment pattern whose count is not a "
+                                      "constant");
+            failed = true;
+            return std::nullopt;
+        }
+        copies = *count;
+        break;
+    }
     }
     const std::uint32_t zero =
         addConstant(eir::BitVector::filled(resultType->bitWidth(), eir::Logic::Zero));
@@ -2990,7 +3005,7 @@ ProcessTranslator::translateAssignmentPattern(const ast::Expression& expression)
     emit(eir::Instruction::make(eir::Opcode::LoadConstant, eir::Operand::reg(result),
                                 eir::Operand::constant(zero)));
 
-    std::uint32_t offset = resultType->bitWidth();
+    std::vector<Value> elements;
     for (const ast::Expression* element : pattern->elements()) {
         const std::optional<eir::Type> elementType = module->convertType(*element->type);
         if (!elementType.has_value()) {
@@ -3000,19 +3015,24 @@ ProcessTranslator::translateAssignmentPattern(const ast::Expression& expression)
         }
         const std::optional<Value> value = translateExpression(*element);
         if (!value.has_value()) return std::nullopt;
-        const Value stored = coerceState(coerce(*value, *elementType), *elementType);
+        elements.push_back(coerceState(coerce(*value, *elementType), *elementType));
+    }
 
-        if (elementType->bitWidth() > offset) {
-            module->reportUnsupported(expression.sourceRange.start(),
-                                      "an assignment pattern whose elements exceed its width");
-            failed = true;
-            return std::nullopt;
+    std::uint32_t offset = resultType->bitWidth();
+    for (std::int64_t copy = 0; copy < copies; ++copy) {
+        for (const Value& stored : elements) {
+            if (stored.type.bitWidth() > offset) {
+                module->reportUnsupported(expression.sourceRange.start(),
+                                          "an assignment pattern whose elements exceed its width");
+                failed = true;
+                return std::nullopt;
+            }
+            offset -= stored.type.bitWidth();
+
+            const Value at = offsetConstant(offset);
+            emit(eir::Instruction::make(eir::Opcode::SplicePart, eir::Operand::reg(result),
+                                        eir::Operand::reg(stored.reg), eir::Operand::reg(at.reg)));
         }
-        offset -= elementType->bitWidth();
-
-        const Value at = offsetConstant(offset);
-        emit(eir::Instruction::make(eir::Opcode::SplicePart, eir::Operand::reg(result),
-                                    eir::Operand::reg(stored.reg), eir::Operand::reg(at.reg)));
     }
 
     return Value{.reg = result, .type = *resultType};

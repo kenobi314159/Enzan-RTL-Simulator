@@ -59,6 +59,8 @@ module tb;
 
         grid = '{default: 2.5};
         `CHECK(grid[0][0] == 2.5 && grid[1][1] == 2.5, "a default pattern of a real")
+        b = '{3{0.5}};
+        `CHECK(b[0] == 0.5 && b[1] == 0.5 && b[2] == 0.5, "a replicated pattern of a real")
 
         p.x = 1.25;
         p.n = 7;
