@@ -1212,6 +1212,11 @@ line buffering. Enzan's own diagnostics stay out of the capture, since they reac
 diagnostics. A thread that touches no simulation state drains the capture, because one callback can
 write more than a pseudo-terminal holds. A batch run captures nothing.
 
+**A program's colours are the theme's.** The kernel passes the codes that colour its output on a
+terminal on to the window as it captured them, and the window shows them in the theme's sixteen
+terminal colours, since every colour comes from the theme (10.5): a colour a code names otherwise,
+of the 256 or by its channels, is the one of the sixteen nearest it, and a background none.
+
 **A command is one action wherever it is offered**, with one name and one key in the menu bar, the
 toolbar and a pane's own menu. A pane's keys act only while the focus is in that pane. F5 runs and
 Shift+F5 stops; F1 lists every key, read from the actions themselves, and the mouse's gestures.

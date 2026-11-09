@@ -1444,7 +1444,7 @@ TEST_F(CaptureFixture, TheKernelsOwnLinesAreNotSentTwice) {
     EXPECT_LT(first, transcript.find("and then")) << "in the order it was written";
 }
 
-TEST_F(CaptureFixture, ATerminalIsCapturedAsATerminalAndColourStaysOnIt) {
+TEST_F(CaptureFixture, ATerminalIsCapturedAsATerminalAndItsColoursReachBoth) {
     // A program writing to a pipe buffers in blocks, and its lines would reach the window long
     // after the events they describe; a terminal is captured with a terminal for that reason.
     ASSERT_EQ(::openpty(&controller, &terminal, nullptr, nullptr, nullptr), 0);
@@ -1452,9 +1452,9 @@ TEST_F(CaptureFixture, ATerminalIsCapturedAsATerminalAndColourStaysOnIt) {
     EXPECT_EQ(::isatty(STDOUT_FILENO), 1) << "what an application sees is still a terminal";
 
     writeTo(STDOUT_FILENO, "\x1b[32mpassed\x1b[0m\n");
+    // The window shows the colours, as the terminal does.
     const std::string transcript = transcriptContaining("passed");
-    EXPECT_NE(transcript.find("passed\n"), std::string::npos) << transcript;
-    EXPECT_EQ(transcript.find('\x1b'), std::string::npos) << "colour codes are stripped";
+    EXPECT_NE(transcript.find("\x1b[32mpassed\x1b[0m\n"), std::string::npos) << transcript;
 
     server.reset();
 

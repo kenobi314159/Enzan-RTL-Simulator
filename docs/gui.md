@@ -87,6 +87,9 @@ computes or records.
   built-in dark theme.
 - `themes/` holds your own themes. A theme file is a Tcl script loaded over the dark theme, so a
   file that sets three colours changes three colours. `font wave 11` sets a font size.
+- The transcript shows a program's coloured output, cocotb's log among it, in the theme's sixteen
+  terminal colours, `transcript.terminal.red` to `transcript.terminal.bright.white`. A colour the
+  program names otherwise is shown as the nearest of them, and a background colour not at all.
 - *View → Theme* chooses between the built-in themes and the files in `themes/`, *New Theme…*
   writes a copy of the theme in use, and *Reload Theme* reads it again after you edit it.
 - `layout.ini` is where the docks were when the window last closed. Delete it to start over.

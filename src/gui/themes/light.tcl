@@ -38,6 +38,25 @@ theme transcript.note              #656d76
 theme transcript.warning           #8a5a00
 theme transcript.error             #c4202b
 
+# The colours of a terminal's colour codes in a program's output. On this theme's background
+# each has to be as readable as text, so white is a grey.
+theme transcript.terminal.black          #24292f
+theme transcript.terminal.red            #c4202b
+theme transcript.terminal.green          #116329
+theme transcript.terminal.yellow         #7d4e00
+theme transcript.terminal.blue           #0550ae
+theme transcript.terminal.magenta        #6e40c9
+theme transcript.terminal.cyan           #1b7c83
+theme transcript.terminal.white          #6e7781
+theme transcript.terminal.bright.black   #424a53
+theme transcript.terminal.bright.red     #a40e26
+theme transcript.terminal.bright.green   #1a7f37
+theme transcript.terminal.bright.yellow  #633c01
+theme transcript.terminal.bright.blue    #0969da
+theme transcript.terminal.bright.magenta #8b44e6
+theme transcript.terminal.bright.cyan    #17707a
+theme transcript.terminal.bright.white   #57606a
+
 # --- Source window -----------------------------------------------------------
 
 theme source.background            #ffffff

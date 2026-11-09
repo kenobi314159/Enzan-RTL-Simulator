@@ -33,6 +33,7 @@
 #include <QElapsedTimer>
 #include <QFile>
 #include <QFileInfo>
+#include <QFont>
 #include <QFontDatabase>
 #include <QFontMetrics>
 #include <QImage>
@@ -53,6 +54,7 @@
 #include <QTest>
 #include <QTextBlock>
 #include <QTextBrowser>
+#include <QTextFragment>
 #include <QTimer>
 #include <QTreeView>
 #include <QWindow>
@@ -64,6 +66,7 @@
 #include <memory>
 #include <string>
 #include <thread>
+#include <vector>
 
 namespace {
 
@@ -664,6 +667,39 @@ TEST_F(MainWindowTest, ANewThemeRecoloursTheLinesAlreadyInTheTranscript) {
             << block.text().toStdString();
     }
     EXPECT_EQ(found, 2);
+}
+
+TEST_F(MainWindowTest, AProgramsColoursAreTheThemesTerminalColours) {
+    // A program's red is the theme's terminal red, and follows the theme; the codes are not text.
+    window->setTheme(themeWith("theme transcript.terminal.red #010203\n"));
+    auto* transcriptView = window->findChild<enzan::gui::TranscriptView*>();
+    ASSERT_NE(transcriptView, nullptr);
+    transcriptView->appendOutput(QStringLiteral("\x1b[1;31mfailed"));
+    transcriptView->appendOutput(QStringLiteral("\x1b[0m twice\n"));
+
+    const auto* text = transcriptView->findChild<QPlainTextEdit*>();
+    ASSERT_NE(text, nullptr);
+    const auto fragments = [text] {
+        std::vector<QTextFragment> found;
+        const QTextBlock line = text->document()->lastBlock();
+        for (QTextBlock::iterator at = line.begin(); !at.atEnd(); ++at)
+            found.push_back(at.fragment());
+        return found;
+    };
+    EXPECT_EQ(text->document()->lastBlock().text(), QStringLiteral("failed twice"));
+    std::vector<QTextFragment> runs = fragments();
+    ASSERT_EQ(runs.size(), 2U);
+    EXPECT_EQ(runs[0].text(), QStringLiteral("failed"));
+    EXPECT_EQ(runs[0].charFormat().foreground().color(), QColor(1, 2, 3));
+    EXPECT_EQ(runs[0].charFormat().fontWeight(), QFont::Bold);
+    EXPECT_EQ(runs[1].charFormat().foreground().color(),
+              themeWith("").color(enzan::gui::ThemeColor::TranscriptForeground));
+
+    window->setTheme(themeWith("theme transcript.terminal.red #040506\n"));
+    runs = fragments();
+    ASSERT_EQ(runs.size(), 2U);
+    EXPECT_EQ(runs[0].charFormat().foreground().color(), QColor(4, 5, 6));
+    EXPECT_EQ(runs[0].charFormat().fontWeight(), QFont::Bold) << "recolouring keeps the rest";
 }
 
 TEST_F(MainWindowTest, TheHighlightSwatchesAreTheThemesColours) {
