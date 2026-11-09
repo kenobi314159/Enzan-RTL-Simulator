@@ -85,6 +85,9 @@ ENZAN_DIAG(VhdlUnboundComponent, 2007, Warning,
 ENZAN_DIAG(VhdlVital, 2008, Error,
            "'ieee.{}' is part of VITAL, the library of gate-level timing models (IEEE 1076.4), "
            "which Enzan does not simulate")
+ENZAN_DIAG(VhdlLibraryNotGiven, 2009, Error, "library '{}' is not among the libraries given")
+ENZAN_DIAG(VhdlDependencyNotGiven, 2010, Error,
+           "{} uses '{}', which none of the libraries given holds")
 
 // --- 3000-3999: elaboration -------------------------------------------------
 

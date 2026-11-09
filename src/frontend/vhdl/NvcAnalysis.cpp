@@ -14,6 +14,9 @@
 #include <cstddef>
 #include <cstdint>
 #include <format>
+#include <functional>
+#include <optional>
+#include <set>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -27,9 +30,13 @@ namespace {
 struct Translation {
     const SourceManager& sources;
     DiagnosticSink& sink;
+    const UnitOptions& options;
 
     /// The buffer of each source NVC was given, by the file reference NVC assigned it.
     std::vector<std::pair<file_ref_t, BufferId>> files;
+
+    /// The libraries reported missing so far, as NVC names them.
+    std::set<std::string, std::less<>> missingLibraries;
 };
 
 /// Removes NVC's terminal markup from a message.
@@ -83,6 +90,80 @@ std::string missingVitalPackage(std::string_view message) {
     return unit;
 }
 
+/// The library an NVC message says it cannot find, as NVC names it, or an empty string; and
+/// whether the message is the fatal error that ends the analysis.
+///
+/// NVC reports a missing library at the clause naming it, `library X not found`, and again
+/// where a name needs it, `required library X not found`, as a fatal error. Neither carries
+/// more than its wording to tell it apart, so the wording is matched, and a unit test pins it.
+struct MissingLibrary {
+    std::string name;
+    bool fatal = false;
+};
+
+MissingLibrary missingLibrary(std::string_view message) {
+    constexpr std::string_view Suffix = " not found";
+    if (!message.ends_with(Suffix)) return {};
+    message.remove_suffix(Suffix.size());
+    for (const auto& [prefix, fatal] : {std::pair{std::string_view("library "), false},
+                                        std::pair{std::string_view("required library "), true}}) {
+        if (!message.starts_with(prefix)) continue;
+        const std::string_view name = message.substr(prefix.size());
+        if (name.empty() || name.find(' ') != std::string_view::npos) return {};
+        return {.name = std::string(name), .fatal = fatal};
+    }
+    return {};
+}
+
+/// One of NVC's hints as Enzan's user should read it, or nothing for one to leave out.
+///
+/// NVC's hints name the options of its own command line, a word starting with a dash: `-L`,
+/// `--relaxed`, `--std=2008`. Enzan spells `--std` with a space and has none of the others, so a
+/// hint naming one is left out rather than sending the user to an option that does not exist.
+/// Nor is NVC's search path shown, which is where Enzan's own installation keeps the standard
+/// libraries and says nothing of the user's.
+std::optional<std::string> enzanHint(std::string_view hint) {
+    std::string text = stripMarkup(hint);
+    if (text.starts_with("library search path contains")) return std::nullopt;
+
+    constexpr std::string_view Standard = "--std=";
+    for (std::size_t at = 0; at < text.size(); ++at) {
+        const bool wordStarts = at == 0 || text[at - 1] == ' ';
+        if (!wordStarts || text[at] != '-' || at + 1 == text.size()) continue;
+        const auto next = static_cast<unsigned char>(text[at + 1]);
+        if (next != '-' && std::isalpha(next) == 0) continue;
+        if (!std::string_view(text).substr(at).starts_with(Standard)) return std::nullopt;
+        text[at + Standard.size() - 1] = ' ';
+    }
+    return text;
+}
+
+/// Reports the library `missing` names as Enzan's user gives one, and once, though NVC reports it
+/// twice: the fatal error after a library clause's says only that the analysis stopped, which an
+/// ENZ2004 with no message tells the parent (VhdlFrontend.cpp).
+void reportMissingLibrary(Translation& translation, const MissingLibrary& missing,
+                          SourceLocation location) {
+    if (!missing.fatal || !translation.missingLibraries.contains(missing.name)) {
+        translation.missingLibraries.insert(missing.name);
+        const std::string name = sourceCase(missing.name);
+        Diagnostic diagnostic;
+        diagnostic.code = DiagCode::VhdlLibraryNotGiven;
+        diagnostic.severity = defaultSeverity(diagnostic.code);
+        diagnostic.message =
+            std::vformat(formatString(diagnostic.code), std::make_format_args(name));
+        diagnostic.location = location;
+        for (std::string& note : missingLibraryNotes(name, translation.options))
+            diagnostic.notes.push_back({.location = {}, .message = std::move(note)});
+        translation.sink.deliver(diagnostic);
+    }
+    if (missing.fatal) {
+        Diagnostic stopped;
+        stopped.code = DiagCode::VhdlAnalysisStopped;
+        stopped.severity = defaultSeverity(stopped.code);
+        translation.sink.deliver(stopped);
+    }
+}
+
 /// The buffer of the source NVC knows as `file`, or an invalid one when it is not one of the
 /// sources handed in.
 BufferId bufferOf(const Translation& translation, file_ref_t file) {
@@ -129,7 +210,7 @@ bool codeFor(diag_level_t level, DiagCode& code) {
 /// Registering a consumer stops NVC printing the diagnostic itself, and it still counts it, so
 /// error_count() goes on meaning what NVC's analysis loop relies on it meaning.
 void translate(diag_t* nvcDiagnostic, void* context) {
-    const Translation& translation = *static_cast<const Translation*>(context);
+    Translation& translation = *static_cast<Translation*>(context);
 
     DiagCode code = DiagCode::VhdlError;
     if (!codeFor(diag_level(nvcDiagnostic, nullptr), code)) return;
@@ -147,6 +228,12 @@ void translate(diag_t* nvcDiagnostic, void* context) {
 
     const loc_t* const location = diag_get_loc(nvcDiagnostic);
     diagnostic.location = locate(translation, location);
+
+    if (const MissingLibrary missing = missingLibrary(diagnostic.message); !missing.name.empty()) {
+        reportMissingLibrary(translation, missing, diagnostic.location);
+        return;
+    }
+
     if (!diagnostic.location.valid() && location != nullptr && !loc_invalid_p(location)) {
         // A position in a file that is not one of the sources: a unit of another library.
         diagnostic.notes.push_back({.location = {},
@@ -156,8 +243,8 @@ void translate(diag_t* nvcDiagnostic, void* context) {
 
     const int hints = diag_hints(nvcDiagnostic);
     for (int index = 0; index < hints; ++index) {
-        diagnostic.notes.push_back(
-            {.location = {}, .message = stripMarkup(diag_get_hint(nvcDiagnostic, index))});
+        if (std::optional<std::string> hint = enzanHint(diag_get_hint(nvcDiagnostic, index)))
+            diagnostic.notes.push_back({.location = {}, .message = std::move(*hint)});
     }
 
     translation.sink.deliver(diagnostic);
@@ -192,7 +279,11 @@ public:
     Run(const UnitOptions& unitOptions, const SourceManager& sourceManager, DiagnosticSink& sink)
         : options(unitOptions),
           sources(sourceManager),
-          translation{.sources = sourceManager, .sink = sink, .files = {}} {
+          translation{.sources = sourceManager,
+                      .sink = sink,
+                      .options = unitOptions,
+                      .files = {},
+                      .missingLibraries = {}} {
         // What NVC's own driver does before anything else (src/nvc.c), less what concerns a
         // terminal or the simulation it would go on to run.
         term_init();
@@ -286,6 +377,33 @@ private:
 };
 
 } // namespace
+
+std::vector<std::string> missingLibraryNotes(std::string_view name, const UnitOptions& options) {
+    std::vector<std::string> notes{
+        std::format("name the directory holding library '{0}' with --in-lib <dir>, or with "
+                    "--in-lib {0}=<dir> if the library was created under another name",
+                    name)};
+    if (!options.libraries.empty()) {
+        std::string given;
+        for (std::size_t index = 0; index < options.libraries.size(); ++index) {
+            if (index != 0) given += index + 1 == options.libraries.size() ? " and " : ", ";
+            given += "'" + options.libraries[index].name + "'";
+        }
+        notes.push_back(std::format("the {} given {}",
+                                    options.libraries.size() == 1 ? "library" : "libraries",
+                                    (options.libraries.size() == 1 ? "is " : "are ") + given));
+    }
+    return notes;
+}
+
+std::string sourceCase(std::string_view name) {
+    std::string written(name);
+    if (written.find('\\') != std::string::npos) return written;
+    std::ranges::transform(written, written.begin(), [](char c) {
+        return static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    });
+    return written;
+}
 
 unsigned runNvcAnalysis(const UnitOptions& options, const SourceManager& sources,
                         DiagnosticSink& sink) {
