@@ -791,9 +791,15 @@ ExecutionResult Interpreter::execute(std::uint32_t processIndex, Activation curr
             break;
         }
 
+        // A system function may end the run too, an index outside a line say, which stops the
+        // process where it is, as a system task does.
         case eir::Opcode::SysFunction:
             kernel.runSystemFunction(processIndex, current, instruction.a,
                                      reg(instruction.dst, instruction.dstWidth));
+            if (kernel.finishRequested || kernel.errorRequested) {
+                kernel.unwindCalls();
+                return ExecutionResult::Stopped;
+            }
             break;
 
         case eir::Opcode::Call: {

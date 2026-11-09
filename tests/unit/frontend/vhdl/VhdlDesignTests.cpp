@@ -1208,7 +1208,8 @@ end architecture;
     ASSERT_TRUE(simulation.ready()) << simulation.messages().front();
     EXPECT_EQ(simulation.run(), RunStatus::Error);
     EXPECT_TRUE(simulation.reportedCode(DiagCode::AssertionFailure));
-    EXPECT_EQ(simulation.messages().front(), "index 4 is outside the bounds 1 to 3 of the line");
+    EXPECT_EQ(simulation.messages(),
+              std::vector<std::string>{"index 4 is outside the bounds 1 to 3 of the line"});
 }
 
 TEST_F(VhdlDesignTest, AStringIsReadFromALineWhereTheLineHoldsIt) {
@@ -1284,7 +1285,8 @@ end architecture;
     ASSERT_TRUE(simulation.ready()) << simulation.messages().front();
     EXPECT_EQ(simulation.run(), RunStatus::Error);
     EXPECT_TRUE(simulation.reportedCode(DiagCode::AssertionFailure));
-    EXPECT_EQ(simulation.messages().front(), "a read of 4 characters from a line holding 3");
+    EXPECT_EQ(simulation.messages(),
+              std::vector<std::string>{"a read of 4 characters from a line holding 3"});
 }
 
 TEST_F(VhdlDesignTest, ASubprogramsStringOfRunTimeLengthIsHeldInScratch) {
@@ -1388,7 +1390,8 @@ end architecture;
     Simulation simulation(std::move(*design), "tb");
     ASSERT_TRUE(simulation.ready()) << simulation.messages().front();
     EXPECT_EQ(simulation.run(), RunStatus::Error);
-    EXPECT_EQ(simulation.messages().front(), "index 5 is outside the bounds 1 to 4");
+    EXPECT_EQ(simulation.messages(),
+              std::vector<std::string>{"index 5 is outside the bounds 1 to 4"});
 }
 
 TEST_F(VhdlDesignTest, ASliceOfRunTimeLengthIsPassedInScratch) {
@@ -1491,7 +1494,8 @@ end architecture;
     Simulation simulation(std::move(*design), "tb");
     ASSERT_TRUE(simulation.ready()) << simulation.messages().front();
     EXPECT_EQ(simulation.run(), RunStatus::Error);
-    EXPECT_EQ(simulation.messages().front(), "10 to 20 is outside the bounds 1 to 15");
+    EXPECT_EQ(simulation.messages(),
+              std::vector<std::string>{"10 to 20 is outside the bounds 1 to 15"});
 }
 
 TEST_F(VhdlDesignTest, ASubprogramHoldingAStringOfRunTimeLengthCannotWait) {
