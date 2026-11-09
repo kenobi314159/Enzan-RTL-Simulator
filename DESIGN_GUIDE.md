@@ -1893,6 +1893,10 @@ mistranslated:
   `fork`, `highz` strengths, resistive and bidirectional switches, the module paths 5.1 refuses, net
   aliases, and a procedural `assign` or `force` of part of an object.
 - VHDL access types beyond what `std.textio` needs, protected types and configuration declarations.
+- VHDL values whose length only the run knows, beyond a subprogram's strings (4.1): arrays of
+  anything but `character`, a function's result, a concatenation outside a message or a `write`,
+  a whole such string assigned, a function's own string sized by a parameter its call leaves to the
+  run, and one held across a `wait`.
 - A port of a real, an enumeration other than `std_ulogic`, `bit` and `boolean`, or a physical type
   across the language boundary; a VHDL port of an unconstrained type instantiated from
   SystemVerilog; storing a design of both languages in a library, and `-G` for one; a second top
