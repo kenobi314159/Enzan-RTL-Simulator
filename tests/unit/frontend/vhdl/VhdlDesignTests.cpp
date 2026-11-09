@@ -1080,8 +1080,8 @@ end architecture;
     EXPECT_EQ(refused->message.find("not static"), std::string::npos) << refused->message;
     ASSERT_EQ(refused->notes.size(), 1U);
     EXPECT_EQ(refused->notes[0].message,
-              "computing 'count' stopped at this procedure call, which the VHDL frontend does not "
-              "run there yet");
+              "computing 'count' stopped at this procedure call, which cannot be computed before "
+              "the simulation yet");
     EXPECT_EQ(sources.lineNumber(refused->notes[0].location), 14U);
 }
 
@@ -2417,8 +2417,7 @@ end architecture;
     EXPECT_EQ(design, nullptr);
     const Diagnostic* unsupported = first(DiagCode::VhdlUnsupported);
     ASSERT_NE(unsupported, nullptr) << transcript();
-    EXPECT_EQ(unsupported->message,
-              "a signal of type GRID is not supported yet");
+    EXPECT_EQ(unsupported->message, "a signal of type GRID is not supported yet");
     EXPECT_EQ(sources.lineNumber(unsupported->location), 9U);
 }
 
@@ -2488,8 +2487,7 @@ end architecture;
     EXPECT_EQ(design, nullptr);
     const Diagnostic* unsupported = first(DiagCode::VhdlUnsupported);
     ASSERT_NE(unsupported, nullptr) << transcript();
-    EXPECT_EQ(unsupported->message,
-              "a reference to a T_CONST_DECL is not supported yet");
+    EXPECT_EQ(unsupported->message, "a reference to a constant is not supported yet");
 }
 
 TEST_F(VhdlDesignTest, AnAggregateOfOneChoiceThatIsNotStaticTakesItsRange) {
@@ -2677,7 +2675,8 @@ end architecture;
     EXPECT_EQ(design, nullptr);
     const Diagnostic* unsupported = first(DiagCode::VhdlUnsupported);
     ASSERT_NE(unsupported, nullptr) << transcript();
-    EXPECT_EQ(unsupported->message, "associating a block's inout port with this is not supported yet");
+    EXPECT_EQ(unsupported->message,
+              "associating a block's inout port with this is not supported yet");
 }
 
 TEST_F(VhdlDesignTest, APortNothingDrivesIsASourceOfItsDefault) {
@@ -2901,8 +2900,7 @@ end architecture;
     EXPECT_EQ(design, nullptr);
     const Diagnostic* unsupported = first(DiagCode::VhdlUnsupported);
     ASSERT_NE(unsupported, nullptr) << transcript();
-    EXPECT_EQ(unsupported->message,
-              "the expression T_EXTERNAL_NAME is not supported yet");
+    EXPECT_EQ(unsupported->message, "this external name is not supported yet");
 }
 
 TEST_F(VhdlDesignTest, ANestedAggregateTargetTakesEachNamesPart) {
@@ -4163,8 +4161,7 @@ end architecture;
     EXPECT_EQ(design, nullptr);
     const Diagnostic* unsupported = first(DiagCode::VhdlUnsupported);
     ASSERT_NE(unsupported, nullptr) << transcript();
-    EXPECT_EQ(unsupported->message,
-              "a variable of type COUNT_PTR is not supported yet");
+    EXPECT_EQ(unsupported->message, "a variable of type COUNT_PTR is not supported yet");
     EXPECT_EQ(sources.lineNumber(unsupported->location), 9U);
 }
 
@@ -4229,7 +4226,8 @@ end architecture;
     EXPECT_EQ(design, nullptr);
     const Diagnostic* unsupported = first(DiagCode::VhdlUnsupported);
     ASSERT_NE(unsupported, nullptr) << transcript();
-    EXPECT_EQ(unsupported->message, "an actual of another length than its parameter is not supported yet");
+    EXPECT_EQ(unsupported->message,
+              "an actual of another length than its parameter is not supported yet");
     EXPECT_EQ(sources.lineNumber(unsupported->location), 14U);
 }
 

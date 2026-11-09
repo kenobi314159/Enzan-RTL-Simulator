@@ -5,6 +5,7 @@
 #include "eir/BitOps.h"
 
 #include <cctype>
+#include <cstddef>
 #include <limits>
 #include <memory>
 #include <string_view>
@@ -12,6 +13,89 @@
 #include <vector>
 
 namespace enzan::frontend::vhdl {
+
+std::string kindName(tree_kind_t kind) {
+    // Those whose parts do not spell their VHDL name.
+    switch (kind) {
+    case T_REF: return "name";
+    case T_FCALL: return "function call";
+    case T_PCALL: return "procedure call";
+    case T_PROT_FCALL: return "call of a protected type's function";
+    case T_PROT_PCALL: return "call of a protected type's procedure";
+    case T_ARRAY_REF: return "indexed name";
+    case T_ARRAY_SLICE: return "slice";
+    case T_RECORD_REF: return "record field";
+    case T_ATTR_REF: return "attribute name";
+    case T_ALL: return "dereference";
+    case T_NEW: return "allocator";
+    case T_QUALIFIED: return "qualified expression";
+    case T_TYPE_CONV: return "type conversion";
+    case T_COND_ASSIGN: return "conditional signal assignment";
+    case T_SELECT: return "selected signal assignment";
+    case T_MATCH_CASE: return "matching case statement";
+    case T_MATCH_SELECT: return "matching selected signal assignment";
+    case T_COND_EXPR: return "conditional expression";
+    case T_COND_STMT: return "conditional statement";
+    case T_FOR: return "for loop";
+    case T_WHILE: return "while loop";
+    case T_PROT_DECL: return "protected type declaration";
+    case T_PROT_BODY: return "protected type body";
+    case T_PROT_REF: return "name of a protected type's member";
+    case T_PACK_INST: return "package instantiation";
+    case T_FUNC_INST: return "function instantiation";
+    case T_PROC_INST: return "procedure instantiation";
+    case T_VIEW_DECL: return "mode view declaration";
+    case T_DISCONNECT: return "disconnection specification";
+    case T_SEQUENCE: return "sequence of statements";
+    case T_PSL_DECL:
+    case T_PSL_DIRECT:
+    case T_PSL_FCALL:
+    case T_PSL_UNION: return "PSL";
+    case T_VERILOG: return "Verilog";
+    default: break;
+    }
+
+    // The rest by their parts, NVC's abbreviations spelt out: `T_SIGNAL_ASSIGN`, signal
+    // assignment.
+    static constexpr std::pair<std::string_view, std::string_view> Words[] = {
+        {"decl", "declaration"},  {"stmt", "statement"},   {"assign", "assignment"},
+        {"const", "constant"},    {"var", "variable"},     {"func", "function"},
+        {"proc", "procedure"},    {"pack", "package"},     {"attr", "attribute"},
+        {"arch", "architecture"}, {"lit", "literal"},      {"elem", "element"},
+        {"conv", "conversion"},   {"cond", "conditional"}, {"spec", "specification"},
+        {"elt", "element"},       {"enum", "enumeration"}, {"param", "parameter"},
+    };
+    std::string_view rest = tree_kind_str(kind);
+    if (rest.starts_with("T_")) rest.remove_prefix(2);
+    std::string words;
+    while (!rest.empty()) {
+        const std::size_t end = rest.find('_');
+        std::string word(rest.substr(0, end));
+        for (char& character : word)
+            character = static_cast<char>(std::tolower(static_cast<unsigned char>(character)));
+        for (const auto& [abbreviation, spelt] : Words) {
+            if (word == abbreviation) word = spelt;
+        }
+        if (!words.empty()) words += ' ';
+        words += word;
+        rest.remove_prefix(end == std::string_view::npos ? rest.size() : end + 1);
+    }
+    return words;
+}
+
+std::string statementName(tree_kind_t kind) {
+    std::string name = kindName(kind);
+    for (const std::string_view whole : {"statement", "statements", "assignment", "loop", "call"}) {
+        if (name.ends_with(whole)) return name;
+    }
+    return name + " statement";
+}
+
+std::string withArticle(std::string_view noun) {
+    const bool vowel =
+        !noun.empty() && std::string_view("aeiou").find(noun.front()) != std::string_view::npos;
+    return std::string(vowel ? "an " : "a ") + std::string(noun);
+}
 
 std::string simpleName(ident_t identifier) {
     std::string_view text = istr(identifier);

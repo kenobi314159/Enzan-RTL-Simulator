@@ -323,7 +323,7 @@ std::optional<BodyTranslator::Value> BodyTranslator::linePart(tree_t expression,
     // 2)` is; its length then does.
     const std::optional<Folder::Range> bounds = folder().range(tree_range(expression, 0));
     if (!bounds || !bounds->ascending || bounds->length() <= 0) {
-        fail(expression, "a slice of a line other than one rising over bounds that fold");
+        fail(expression, "a slice of a line other than one rising over static bounds");
         return std::nullopt;
     }
     const std::optional<Layout> layout = arrayLayout(*bounds, type_elem(type), folder());

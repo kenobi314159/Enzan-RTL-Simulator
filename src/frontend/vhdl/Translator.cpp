@@ -583,8 +583,8 @@ public:
             }
             const std::optional<Folder::Range> bounds = driversRange(declaration, wanted.drivers);
             if (!bounds) {
-                unsupported(declaration, "a resolution function whose parameter's index does "
-                                         "not fold");
+                unsupported(declaration, "a resolution function whose parameter's index range "
+                                         "is not static");
                 continue;
             }
             const Shape shape{.bounds = {bounds}, .values = {std::nullopt}};
@@ -1089,25 +1089,25 @@ public:
             } else if (kind == T_REPORT) {
                 what = "report";
             }
-            return std::format("computing '{}' stopped at this {}, which the VHDL frontend does "
-                               "not run there yet",
+            return std::format("computing '{}' stopped at this {}, which cannot be computed "
+                               "before the simulation yet",
                                called, what);
         }
         case FoldStop::Reason::Declaration:
-            return std::format("computing '{}' stopped at this declaration, which the VHDL "
-                               "frontend does not run there yet",
+            return std::format("computing '{}' stopped at this declaration, which cannot be "
+                               "computed before the simulation yet",
                                called);
         case FoldStop::Reason::Value:
-            return std::format("computing '{}' stopped here, at a value the VHDL frontend could "
-                               "not compute",
+            return std::format("computing '{}' stopped here, at a value that could not be "
+                               "computed before the simulation",
                                called);
         case FoldStop::Reason::Assertion:
             return std::format("computing '{}' stopped at this assertion, which it could not show "
                                "to hold",
                                called);
         case FoldStop::Reason::VariableType:
-            return std::format("computing '{}' stopped at this variable, whose type the VHDL "
-                               "frontend does not hold there yet",
+            return std::format("computing '{}' stopped at this variable, whose type cannot be "
+                               "computed with before the simulation yet",
                                called);
         case FoldStop::Reason::TooLong:
             return std::format("computing '{}' ran a million statements without returning", called);
@@ -1119,8 +1119,8 @@ public:
         case FoldStop::Reason::NoBody:
             return std::format("the body of '{}' has not been analysed", called);
         case FoldStop::Reason::ParameterType:
-            return std::format("'{}' takes a parameter of a type the VHDL frontend does not hold "
-                               "there yet",
+            return std::format("'{}' takes a parameter of a type that cannot be computed with "
+                               "before the simulation yet",
                                called);
         case FoldStop::Reason::NoReturn:
             return std::format("'{}' ends without returning a value", called);
@@ -2143,10 +2143,7 @@ void ArchitectureTranslator::declarations(tree_t container) {
         case T_FUNC_BODY:
         case T_PROC_BODY: break;
 
-        default:
-            unsupported(declaration,
-                        std::format("the declaration {}", tree_kind_str(tree_kind(declaration))));
-            break;
+        default: unsupported(declaration, "this " + kindName(tree_kind(declaration))); break;
         }
     }
 }
@@ -2168,10 +2165,7 @@ void ArchitectureTranslator::statements(tree_t container) {
         case T_FOR_GENERATE: forGenerate(statement); break;
         case T_BLOCK: block(statement); break;
 
-        default:
-            unsupported(statement, std::format("the concurrent statement {}",
-                                               tree_kind_str(tree_kind(statement))));
-            break;
+        default: unsupported(statement, "this " + statementName(tree_kind(statement))); break;
         }
     }
 }
