@@ -10,9 +10,10 @@ unnoticed:
 * the header declares a timescale and ends with ``$enddefinitions``;
 * every ``$scope`` is closed by an ``$upscope``, and none is closed twice;
 * every identifier used in a value change was declared by a ``$var``;
-* every value change has the width its ``$var`` declared;
+* every change of bits has the width its ``$var`` declared;
+* a real changes by a number, ``r2.5 !``, and nothing else does;
 * two ``$var`` declarations sharing an identifier — which is how a collapsed port appears — agree
-  about the width;
+  about the width and about whether it is a real;
 * timestamps never go backwards, which a viewer's time index depends on;
 * there is a timestamp and at least one value change.
 
@@ -31,6 +32,10 @@ from pathlib import Path
 
 SCALAR_VALUES = set("01xXzZ")
 
+# The variable types whose values are numbers rather than bits. A real's declared width says
+# nothing about its changes: Enzan declares one as 64 bits, Icarus Verilog as 1.
+REAL_TYPES = {"real", "realtime"}
+
 # Sections whose contents are free text to be skipped rather than parsed.
 TEXT_SECTIONS = {"$date", "$version", "$comment", "$timescale"}
 
@@ -47,6 +52,7 @@ class Checker:
         self.position = 0
 
         self.widths: dict[str, int] = {}
+        self.reals: set[str] = set()
         self.scope_depth = 0
         self.saw_timescale = False
         self.saw_enddefinitions = False
@@ -92,12 +98,17 @@ class Checker:
         except ValueError:
             self.fail(line, f"$var width {fields[1]!r} is not a number")
         identifier = fields[2]
+        real = fields[0] in REAL_TYPES
 
         # Several $var declarations may share an identifier — a collapsed port is one piece of
-        # storage under two names — but they must agree about the width.
+        # storage under two names — but they must agree about the width and about being a real.
         if identifier in self.widths and self.widths[identifier] != width:
             self.fail(line, f"identifier {identifier!r} declared with two widths")
+        if identifier in self.widths and (identifier in self.reals) != real:
+            self.fail(line, f"identifier {identifier!r} declared both as a real and as bits")
         self.widths[identifier] = width
+        if real:
+            self.reals.add(identifier)
 
     def record_change(self, token: str, line: int) -> None:
         if token[0] in "bB":
@@ -114,6 +125,8 @@ class Checker:
 
             if identifier not in self.widths:
                 self.fail(line, f"value change for undeclared identifier {identifier!r}")
+            if identifier in self.reals:
+                self.fail(line, f"{identifier!r} is a real but was written as bits")
             if len(bits) != self.widths[identifier]:
                 self.fail(
                     line,
@@ -126,11 +139,25 @@ class Checker:
             return
 
         if token[0] in "rR":
-            # A real. Enzan does not emit these yet; accepted so that this stays a VCD checker
-            # rather than an Enzan-output checker.
-            if len(token) == 1:
-                self.next_token()
-            self.next_token()
+            number = token[1:]
+            if not number:
+                following = self.next_token()
+                if following is None:
+                    self.fail(line, "a real change with no value")
+                number = following[0]
+            identifier_token = self.next_token()
+            if identifier_token is None:
+                self.fail(line, "a real change with no identifier")
+            identifier = identifier_token[0]
+
+            if identifier not in self.widths:
+                self.fail(line, f"value change for undeclared identifier {identifier!r}")
+            if identifier not in self.reals:
+                self.fail(line, f"{identifier!r} is not a real but was written as a number")
+            try:
+                float(number)
+            except ValueError:
+                self.fail(line, f"invalid real {number!r}")
             self.changes += 1
             return
 
@@ -140,6 +167,8 @@ class Checker:
             self.fail(line, f"scalar change {token!r} has no identifier")
         if identifier not in self.widths:
             self.fail(line, f"value change for undeclared identifier {identifier!r}")
+        if identifier in self.reals:
+            self.fail(line, f"{identifier!r} is a real but was written as a bit")
         if self.widths[identifier] != 1:
             self.fail(line, f"{identifier!r} is a vector but was written as a scalar")
         self.changes += 1
