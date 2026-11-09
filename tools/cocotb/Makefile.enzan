@@ -11,6 +11,12 @@
 #   make SIM=enzan COCOTB_MAKEFILES_DIR=$PWD/build/cocotb-makefiles
 #
 # ENZAN_BIN_DIR names the directory holding `enzan` when it is not on the PATH.
+#
+# This makefile is for cocotb 2.1, which tests/conformance/cocotb/requirements.txt pins. Later
+# cocotb versions may carryry a Makefile.enzan of their own, which loads cocotb as those releases
+# do, through its bootstrap library and GPI_IMPL, where this one uses --lib-name-path and
+# GPI_EXTRA, which they removed. With one of them `make SIM=enzan` needs no copy, and makefiles.sh
+# keeps cocotb's own.
 
 TOPLEVEL_LANG ?= verilog
 
@@ -46,9 +52,16 @@ ifneq ($(strip $(VERILOG_SOURCES)),)
 endif
 endif
 
-# VHDL is analysed into the library cocotb names, `work` unless RTL_LIBRARY says otherwise.
+# VHDL is analysed into the library cocotb names, `work` unless TOPLEVEL_LIBRARY says otherwise.
+# RTL_LIBRARY, its old name, is still read, with the warning cocotb's own makefiles give for it.
+ifdef RTL_LIBRARY
+    $(warning Using RTL_LIBRARY is deprecated, please use TOPLEVEL_LIBRARY instead.)
+    TOPLEVEL_LIBRARY ?= $(RTL_LIBRARY)
+else
+    TOPLEVEL_LIBRARY ?= work
+endif
 ifneq ($(strip $(VHDL_SOURCES)),)
-    ENZAN_WORK := --work $(or $(RTL_LIBRARY),work)
+    ENZAN_WORK := --work $(TOPLEVEL_LIBRARY)
 endif
 
 # Each library VHDL_LIB_ORDER names is analysed from its VHDL_SOURCES_<library> into an Enzan
@@ -75,15 +88,26 @@ ifdef VERILOG_INCLUDE_DIRS
     COMPILE_ARGS += $(addprefix -I ,$(VERILOG_INCLUDE_DIRS))
 endif
 
+# Its own variable rather than SIM_ARGS, which a make command line giving SIM_ARGS replaces.
 ifeq ($(WAVES),1)
-    SIM_ARGS += --fst $(SIM_BUILD)/$(TOPLEVELS).fst
+    ENZAN_WAVES := --fst $(SIM_BUILD)/$(TOPLEVELS).fst
+endif
+
+# GUI=1 hands the design to Enzan's window, which runs it when asked, or at once with `--run all`
+# in SIM_ARGS. Closing the window ends the simulation with the simulation's exit status, so
+# the results are checked as after a batch run.
+ifeq ($(GUI),1)
+    ENZAN_GUI := --gui
 endif
 
 ENZAN_ARGS = $(TOPMODULE_ARG) --timescale $(ENZAN_TIMESCALE) $(ENZAN_PLI) $(ENZAN_WORK) \
-             $(ENZAN_IN_LIBS) $(COMPILE_ARGS) $(SIM_ARGS) $(EXTRA_ARGS) $(VERILOG_SOURCES) \
-             $(VHDL_SOURCES) $(call deprecate,PLUSARGS,COCOTB_PLUSARGS)
+             $(ENZAN_IN_LIBS) $(ENZAN_WAVES) $(ENZAN_GUI) $(COMPILE_ARGS) $(SIM_ARGS) \
+             $(EXTRA_ARGS) $(VERILOG_SOURCES) $(VHDL_SOURCES) \
+             $(call deprecate,PLUSARGS,COCOTB_PLUSARGS)
 
 # The libraries VHDL_LIB_ORDER names, analysed afresh, each against those analysed before it.
+# cocotb's own checks come first: each library it names has sources, and each VHDL_SOURCES_<lib>
+# is a library it names, so that none is left out unnoticed.
 ifneq ($(strip $(VHDL_LIB_ORDER)),)
 define enzan_analyse_libraries
 	$(RM) -r $(ENZAN_LIBRARIES)
@@ -95,6 +119,8 @@ endif
 # the results file is the only target.
 $(COCOTB_RESULTS_FILE): $(VERILOG_SOURCES) $(VHDL_SOURCES) $(CUSTOM_COMPILE_DEPS) $(CUSTOM_SIM_DEPS) | $(SIM_BUILD)
 	$(RM) $(COCOTB_RESULTS_FILE)
+	$(foreach LIB, $(VHDL_LIB_ORDER), $(check_vhdl_sources))
+	$(foreach SOURCES_VAR, $(filter VHDL_SOURCES_%, $(.VARIABLES)), $(check_lib_order))
 	$(enzan_analyse_libraries)
 
 	GPI_EXTRA=$(GPI_EXTRA) $(COCOTB_ENV) $(SIM_CMD_PREFIX) $(CMD) $(ENZAN_ARGS) $(SIM_CMD_SUFFIX)
@@ -103,6 +129,8 @@ $(COCOTB_RESULTS_FILE): $(VERILOG_SOURCES) $(VHDL_SOURCES) $(CUSTOM_COMPILE_DEPS
 
 debug: $(VERILOG_SOURCES) $(VHDL_SOURCES) $(CUSTOM_COMPILE_DEPS) $(CUSTOM_SIM_DEPS) | $(SIM_BUILD)
 	$(RM) $(COCOTB_RESULTS_FILE)
+	$(foreach LIB, $(VHDL_LIB_ORDER), $(check_vhdl_sources))
+	$(foreach SOURCES_VAR, $(filter VHDL_SOURCES_%, $(.VARIABLES)), $(check_lib_order))
 	$(enzan_analyse_libraries)
 
 	GPI_EXTRA=$(GPI_EXTRA) $(COCOTB_ENV) $(SIM_CMD_PREFIX) gdb --args $(CMD) $(ENZAN_ARGS) $(SIM_CMD_SUFFIX)

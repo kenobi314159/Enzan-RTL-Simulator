@@ -10,6 +10,9 @@
 # add one from outside. The copy is made of links rather than of files, so it follows the
 # cocotb it was made from, and nothing is written into that cocotb's installation.
 #
+# A cocotb with a Makefile.enzan of its own keeps it: the one beside this script is for cocotb 2.1,
+# and loads cocotb in a way later releases removed.
+#
 # The cocotb used is the one `cocotb-config` belongs to, or the one the Python named by
 # COCOTB_PYTHON has installed.
 
@@ -37,4 +40,9 @@ done
 for file in "$source"/simulators/*; do
     ln -sfn "$file" "$target/simulators/$(basename "$file")"
 done
-ln -sfn "$here/Makefile.enzan" "$target/simulators/Makefile.enzan"
+if [[ -e "$source/simulators/Makefile.enzan" ]]; then
+    printf '%s: this cocotb supports Enzan itself, so the copy keeps its Makefile.enzan; %s\n' \
+        "$(basename "$0")" '`make SIM=enzan` works without COCOTB_MAKEFILES_DIR' >&2
+else
+    ln -sfn "$here/Makefile.enzan" "$target/simulators/Makefile.enzan"
+fi
