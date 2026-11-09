@@ -46,9 +46,16 @@ ifneq ($(strip $(VERILOG_SOURCES)),)
 endif
 endif
 
-# VHDL is analysed into the library cocotb names, `work` unless RTL_LIBRARY says otherwise.
+# VHDL is analysed into the library cocotb names, `work` unless TOPLEVEL_LIBRARY says otherwise.
+# RTL_LIBRARY, its old name, is still read, with the warning cocotb's own makefiles give for it.
+ifdef RTL_LIBRARY
+    $(warning Using RTL_LIBRARY is deprecated, please use TOPLEVEL_LIBRARY instead.)
+    TOPLEVEL_LIBRARY ?= $(RTL_LIBRARY)
+else
+    TOPLEVEL_LIBRARY ?= work
+endif
 ifneq ($(strip $(VHDL_SOURCES)),)
-    ENZAN_WORK := --work $(or $(RTL_LIBRARY),work)
+    ENZAN_WORK := --work $(TOPLEVEL_LIBRARY)
 endif
 
 # Each library VHDL_LIB_ORDER names is analysed from its VHDL_SOURCES_<library> into an Enzan
