@@ -2,6 +2,7 @@
 
 #include "frontend/sv/ProcessTranslator.h"
 
+#include "eir/BitOps.h"
 #include "eir/BitVector.h"
 #include "eir/Instruction.h"
 #include "eir/Udp.h"
@@ -188,6 +189,37 @@ const ast::SubroutineSymbol* staticSubroutineOf(const ast::ValueSymbol& symbol) 
         return subroutine.returnValVar == &variable ? nullptr : &subroutine;
     }
     return nullptr;
+}
+
+std::vector<std::uint32_t> realOffsets(ModuleContext& module, const ast::Type& type) {
+    const ast::Type& canonical = type.getCanonicalType();
+    if (canonical.isFloating()) return {0};
+
+    // An array's are its element's, once for each element; a struct's its fields', the first
+    // field highest.
+    std::vector<std::uint32_t> offsets;
+    if (canonical.kind == slang::ast::SymbolKind::FixedSizeUnpackedArrayType) {
+        const auto& array = canonical.as<ast::FixedSizeUnpackedArrayType>();
+        const std::vector<std::uint32_t> inElement = realOffsets(module, array.elementType);
+        const std::optional<eir::Type> element = module.convertType(array.elementType);
+        if (inElement.empty() || !element.has_value()) return {};
+        for (std::uint32_t index = 0; index < array.range.width(); ++index) {
+            for (const std::uint32_t offset : inElement)
+                offsets.push_back(index * element->bitWidth() + offset);
+        }
+    } else if (canonical.kind == slang::ast::SymbolKind::UnpackedStructType) {
+        const std::optional<eir::Type> whole = module.convertType(canonical);
+        if (!whole.has_value()) return {};
+        std::uint32_t low = whole->bitWidth();
+        for (const ast::FieldSymbol* field : canonical.as<ast::UnpackedStructType>().fields) {
+            const std::optional<eir::Type> member = module.convertType(field->getType());
+            if (!member.has_value()) return {};
+            low -= member->bitWidth();
+            for (const std::uint32_t offset : realOffsets(module, field->getType()))
+                offsets.push_back(low + offset);
+        }
+    }
+    return offsets;
 }
 
 ProcessTranslator::ProcessTranslator(ModuleContext& owner, eir::ProcessKind kind, std::string name,
@@ -2386,6 +2418,68 @@ ProcessTranslator::Value ProcessTranslator::compare(eir::Opcode opcode, const Va
     return Value{.reg = result, .type = eir::Type::logic()};
 }
 
+ProcessTranslator::Value
+ProcessTranslator::compareAggregates(eir::Opcode opcode, const Value& left, const Value& right,
+                                     const std::vector<std::uint32_t>& reals) {
+    const bool caseEquality =
+        opcode == eir::Opcode::CaseEqual || opcode == eir::Opcode::CaseNotEqual;
+    const bool negated = opcode == eir::Opcode::NotEqual || opcode == eir::Opcode::CaseNotEqual;
+    const auto loadConstant = [this](const eir::BitVector& bits, eir::Type type) {
+        const std::uint32_t reg = newRegister(type);
+        emit(eir::Instruction::make(eir::Opcode::LoadConstant, eir::Operand::reg(reg),
+                                    eir::Operand::constant(addConstant(bits))));
+        return reg;
+    };
+    const auto both = [this](const Value& one, const Value& other) {
+        const std::uint32_t reg = newRegister(eir::Type::logic());
+        emit(eir::Instruction::make(eir::Opcode::And, eir::Operand::reg(reg),
+                                    eir::Operand::reg(one.reg), eir::Operand::reg(other.reg)));
+        return Value{.reg = reg, .type = eir::Type::logic()};
+    };
+
+    // Each real as a real.
+    const auto realsEqual = [&](std::uint32_t offset) {
+        const std::uint32_t at =
+            loadConstant(eir::BitVector::fromUInt64(offset, 32), eir::Type::intType());
+        const auto real = [&](const Value& value) {
+            const std::uint32_t reg = newRegister(eir::Type::real());
+            emit(eir::Instruction::make(eir::Opcode::PartSelect, eir::Operand::reg(reg),
+                                        eir::Operand::reg(value.reg), eir::Operand::reg(at)));
+            return Value{.reg = reg, .type = eir::Type::real()};
+        };
+        return compare(eir::Opcode::Equal, real(left), real(right));
+    };
+    Value result = realsEqual(reals.front());
+    for (std::size_t index = 1; index < reals.size(); ++index)
+        result = both(result, realsEqual(reals[index]));
+
+    // The bits that are no real's, compared as bits with the reals masked out of both.
+    const std::uint32_t width = left.type.bitWidth();
+    if (reals.size() * 64 < width) {
+        eir::BitVector mask = eir::BitVector::filled(width, eir::Logic::One);
+        for (const std::uint32_t offset : reals) {
+            eir::bitops::assignPartAt(mask.mutableRef(),
+                                      eir::BitVector::filled(64, eir::Logic::Zero).ref(), offset);
+        }
+        const std::uint32_t maskRegister = loadConstant(mask, left.type);
+        const auto masked = [&](const Value& value) {
+            const std::uint32_t reg = newRegister(left.type);
+            emit(eir::Instruction::make(eir::Opcode::And, eir::Operand::reg(reg),
+                                        eir::Operand::reg(value.reg),
+                                        eir::Operand::reg(maskRegister)));
+            return Value{.reg = reg, .type = left.type};
+        };
+        result = both(result, compare(caseEquality ? eir::Opcode::CaseEqual : eir::Opcode::Equal,
+                                      masked(left), masked(right)));
+    }
+
+    if (!negated) return result;
+    const std::uint32_t inverted = newRegister(eir::Type::logic());
+    emit(eir::Instruction::make(eir::Opcode::Not, eir::Operand::reg(inverted),
+                                eir::Operand::reg(result.reg)));
+    return Value{.reg = inverted, .type = eir::Type::logic()};
+}
+
 std::optional<ProcessTranslator::Value> ProcessTranslator::insideItem(const Value& value,
                                                                       const ast::Expression& item) {
     if (item.kind == ast::ExpressionKind::ValueRange) {
@@ -2496,6 +2590,15 @@ ProcessTranslator::translateBinary(const ast::Expression& expression) {
         return Value{.reg = result, .type = eir::Type::logic()};
     };
 
+    // Unpacked arrays and structs holding reals compare element by element.
+    const auto aggregates = [&](eir::Opcode opcode) -> std::optional<Value> {
+        const ast::Type& operand = *binary.left().type;
+        if (operand.isFloating()) return comparison(opcode, false);
+        const std::vector<std::uint32_t> reals = realOffsets(*module, operand);
+        if (reals.empty()) return comparison(opcode, false);
+        return compareAggregates(opcode, *left, *right, reals);
+    };
+
     switch (binary.op) {
     case ast::BinaryOperator::Add: return arithmetic(eir::Opcode::Add);
     case ast::BinaryOperator::Subtract: return arithmetic(eir::Opcode::Subtract);
@@ -2507,10 +2610,10 @@ ProcessTranslator::translateBinary(const ast::Expression& expression) {
     case ast::BinaryOperator::BinaryXor: return arithmetic(eir::Opcode::Xor);
     case ast::BinaryOperator::BinaryXnor: return arithmetic(eir::Opcode::Xnor);
 
-    case ast::BinaryOperator::Equality: return comparison(eir::Opcode::Equal, false);
-    case ast::BinaryOperator::Inequality: return comparison(eir::Opcode::NotEqual, false);
-    case ast::BinaryOperator::CaseEquality: return comparison(eir::Opcode::CaseEqual, false);
-    case ast::BinaryOperator::CaseInequality: return comparison(eir::Opcode::CaseNotEqual, false);
+    case ast::BinaryOperator::Equality: return aggregates(eir::Opcode::Equal);
+    case ast::BinaryOperator::Inequality: return aggregates(eir::Opcode::NotEqual);
+    case ast::BinaryOperator::CaseEquality: return aggregates(eir::Opcode::CaseEqual);
+    case ast::BinaryOperator::CaseInequality: return aggregates(eir::Opcode::CaseNotEqual);
     case ast::BinaryOperator::WildcardEquality:
         return comparison(eir::Opcode::WildcardEqual, false);
     case ast::BinaryOperator::WildcardInequality:

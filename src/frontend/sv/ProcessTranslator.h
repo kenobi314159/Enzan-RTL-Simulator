@@ -174,6 +174,12 @@ public:
     addEventValue(const slang::ast::Expression& expression) = 0;
 };
 
+/// The low bit of each real in a value of `type` as the flat vector it is stored as
+/// (DESIGN_GUIDE.md section 4.3): one at 0 for a real, one for each real element or field of an
+/// unpacked array or struct, and none for anything else.
+[[nodiscard]] std::vector<std::uint32_t> realOffsets(ModuleContext& module,
+                                                     const slang::ast::Type& type);
+
 /// Translates one procedural block or continuous assignment into an EIR process.
 ///
 /// Produces EIR-B directly rather than an intermediate tree: slang has already resolved
@@ -505,6 +511,13 @@ private:
     /// Emits a comparison of two values, each extended to the wider of the two and compared
     /// as signed only when both are, and returns its one-bit result.
     Value compare(eir::Opcode opcode, const Value& left, const Value& right);
+
+    /// Emits `==`, `!=`, `===` or `!==` of two unpacked arrays or structs with reals at
+    /// `reals` (`realOffsets`), element by element as the language compares them (IEEE 1800
+    /// section 11.4.5): each real as a real, so that 0.0 equals -0.0 and a NaN nothing, and the
+    /// rest of their bits as bits. Comparing the flat vectors would get both of those wrong.
+    Value compareAggregates(eir::Opcode opcode, const Value& left, const Value& right,
+                            const std::vector<std::uint32_t>& reals);
 
     /// Emits whether `value` matches one item of an `inside` set or a `case ... inside`: by
     /// `==?` for a value, so that an X or Z bit of the item matches anything, and by bounds for

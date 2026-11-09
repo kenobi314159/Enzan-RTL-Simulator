@@ -2117,6 +2117,47 @@ TEST_F(FrontendTest, ReportsARealPortByName) {
     EXPECT_TRUE(reported("the real port 'level'"));
 }
 
+TEST_F(FrontendTest, ReportsAPortHoldingRealsByName) {
+    EXPECT_EQ(analyse(R"(
+        module m (input real levels [2]);
+        endmodule
+    )",
+                      "m"),
+              nullptr);
+    EXPECT_TRUE(reported("the port 'levels', which holds reals,"));
+}
+
+TEST_F(FrontendTest, AnArrayOrAStructOfRealsIsStoredFlatAsTheirDoubles) {
+    // Two-state, and marked, since VPI shows no real.
+    const std::unique_ptr<Design> design = analyse(R"(
+        module m;
+            real phases [4];
+            typedef struct { real x; int n; } point_t;
+            point_t point;
+            real alone;
+            int counts [4];
+        endmodule
+    )",
+                                                   "m");
+    ASSERT_NE(design, nullptr) << consumer.messages.front();
+    const ModuleDefinition* found = design->findModule("m");
+    ASSERT_NE(found, nullptr);
+
+    const enzan::eir::Object& phases = found->objects[require(found->findObject("phases"))];
+    EXPECT_EQ(phases.type.bitWidth(), 256U);
+    EXPECT_FALSE(phases.type.isFourState());
+    EXPECT_EQ(phases.elementWidth, 64U);
+    EXPECT_TRUE(phases.holdsReals);
+
+    const enzan::eir::Object& point = found->objects[require(found->findObject("point"))];
+    EXPECT_EQ(point.type.bitWidth(), 96U);
+    EXPECT_TRUE(point.holdsReals);
+
+    EXPECT_FALSE(found->objects[require(found->findObject("alone"))].holdsReals);
+    EXPECT_FALSE(found->objects[require(found->findObject("counts"))].holdsReals);
+    EXPECT_TRUE(enzan::eir::verify(*design, engine)) << consumer.messages.front();
+}
+
 TEST_F(FrontendTest, AUserDefinedPrimitiveIsAContinuousAssignmentByItsTable) {
     // A combinational one needs nothing kept; a sequential one keeps its inputs as it last took
     // them above its state, which starts at its initial value.

@@ -177,6 +177,13 @@ enzan_add_golden_test(module_path_bits NO_DIFFERENTIAL OWN_TIME_SCALES)
 # the time in fractions of a unit, a clock whose half period is a real variable's, and formatting.
 enzan_add_golden_test(reals OWN_TIME_SCALES)
 
+# Unpacked arrays of reals, element by element, as Altera's PLL models use them.
+enzan_add_golden_test(real_arrays OWN_TIME_SCALES)
+
+# Unpacked arrays and structs of reals as wholes: initialised, copied and compared, each real as a
+# real. No free simulator runs these, so the case checks itself against the standard.
+enzan_add_golden_test(real_aggregates NO_DIFFERENTIAL OWN_TIME_SCALES)
+
 # Procedural `assign` and `force`: a flip-flop held by its reset, a force over an assign, nets
 # released back to their drivers, a variable that keeps its forced value.
 enzan_add_golden_test(overrides)

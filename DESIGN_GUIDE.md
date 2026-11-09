@@ -1921,7 +1921,7 @@ regression each run with a recorded pass rate.
 Left out of the milestones above, and refused by name where a design uses them rather than
 mistranslated:
 
-- SystemVerilog `string` variables, real and string ports, arrays and structs of reals, a real
+- SystemVerilog `string` variables, real and string ports, and ports holding reals, a real
   exponent, events as values, dynamic and associative arrays, queues, classes, unpacked unions,
   `fork`, `highz` strengths, resistive and bidirectional switches, the module paths 5.1 refuses, net
   aliases, and a procedural `assign` or `force` of part of an object.
@@ -1934,9 +1934,10 @@ mistranslated:
   across the language boundary; a VHDL port of an unconstrained type instantiated from
   SystemVerilog; storing a design of both languages in a library; a second top level of VHDL.
 - Altera's models of Cyclone V and later families, `altera_lnsim.sv`, which M7.2 holds to no
-  reference; among them `altera_pll`'s arrays of reals are refused.
-- In VPI, declared ranges (a vector reports `[width-1:0]`), integer atom types, part-select handles,
-  struct members, user system tasks, and the difference between the delay modes (9.4).
+  reference; among them `altera_pll`'s `string` arguments are refused.
+- In VPI, declared ranges (a vector reports `[width-1:0]`), integer atom types, reals and what
+  holds them, part-select handles, struct members, user system tasks, and the difference between
+  the delay modes (9.4).
 - The Processes and Source windows (10.2), and a per-bit change index (10.3).
 
 ---

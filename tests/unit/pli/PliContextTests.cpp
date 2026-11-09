@@ -100,6 +100,12 @@ Design makeDesign() {
     top.addObject(Object{.name = "ref$/config/mode",
                          .type = Type::bits(2, false, true),
                          .hierarchicalPath = "/config/mode"});
+    // `real phases [1:0]`, its doubles' bits.
+    Object phases{.name = "phases", .type = Type::bits(128, false, false)};
+    phases.unpackedDimensions.push_back(enzan::eir::ArrayDimension{.left = 1, .right = 0});
+    phases.elementWidth = 64;
+    phases.holdsReals = true;
+    top.addObject(std::move(phases));
     top.parameters.push_back(
         enzan::eir::Parameter{.name = "WIDTH", .value = literal("32'd8"), .isLocal = false});
     top.parameters.push_back(
@@ -294,6 +300,11 @@ TEST_F(Vpi, ObjectsAreTypedAsSection92Says) {
 TEST_F(Vpi, WhatAFrontendMadeUpIsNotVisible) {
     EXPECT_EQ(byName("tb.u_child$in"), nullptr);
     EXPECT_EQ(names(vpiReg, byName("tb")), (std::vector<std::string>{"tb.clk", "tb.data"}));
+}
+
+TEST_F(Vpi, AnArrayOfRealsIsNotVisible) {
+    // As a real is not: VPI would show its doubles as bits.
+    EXPECT_EQ(byName("tb.phases"), nullptr);
 }
 
 TEST_F(Vpi, IterationSelectsByKind) {
