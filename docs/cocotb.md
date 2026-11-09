@@ -15,6 +15,9 @@ make SIM=enzan COCOTB_MAKEFILES_DIR=$HOME/cocotb-makefiles
 Run the `make` in the directory of an ordinary cocotb testbench. In a source tree the script is
 `tools/cocotb/makefiles.sh`.
 
+Later cocotb versions may support Enzan themselves: with one of them, `make SIM=enzan` needs no
+copy of the makefiles, and cocotb's documentation describes the variables its makefile reads.
+
 - `TOPLEVEL_LANG=vhdl` runs a VHDL toplevel, which needs an Enzan built with the VHDL frontend.
 - `ENZAN_BIN_DIR` names the directory holding `enzan` when it is not on your `PATH`.
 - `GUI=1` runs the simulation in Enzan's window, which needs the graphical front end installed.

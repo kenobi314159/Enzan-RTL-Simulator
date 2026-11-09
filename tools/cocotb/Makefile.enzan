@@ -11,6 +11,12 @@
 #   make SIM=enzan COCOTB_MAKEFILES_DIR=$PWD/build/cocotb-makefiles
 #
 # ENZAN_BIN_DIR names the directory holding `enzan` when it is not on the PATH.
+#
+# This makefile is for cocotb 2.1, which tests/conformance/cocotb/requirements.txt pins. Later
+# cocotb versions may carryry a Makefile.enzan of their own, which loads cocotb as those releases
+# do, through its bootstrap library and GPI_IMPL, where this one uses --lib-name-path and
+# GPI_EXTRA, which they removed. With one of them `make SIM=enzan` needs no copy, and makefiles.sh
+# keeps cocotb's own.
 
 TOPLEVEL_LANG ?= verilog
 
