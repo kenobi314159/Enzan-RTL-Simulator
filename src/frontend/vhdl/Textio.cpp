@@ -520,13 +520,17 @@ std::optional<bool> BodyTranslator::nativeProcedure(tree_t call, tree_t declarat
         return assignWhole((*actuals)[1], systemFunction(std::move(native), handle));
     }
 
-    // `read(l, value)` and `read(l, value, good)` of a character.
+    // `read(l, value)` and `read(l, value, good)` of a character; with no `good` to tell, an empty
+    // line ends the run with a failure, as GHDL's textio does.
     if (procedure == "READ" && (actuals->size() == 2 || actuals->size() == 3)
         && isCharacters(tree_type((*actuals)[1])) && !type_is_array(tree_type((*actuals)[1]))) {
         const std::optional<Value> line = value(0);
         if (!line) return false;
         native.kind = eir::SysTaskKind::LineReadCharacter;
         native.arguments = {argument(*line)};
+        if (actuals->size() == 2)
+            native.arguments.push_back(
+                argument(constant(1, eir::Type::bits(1, false, false), nullptr)));
         const Value read = systemFunction(std::move(native), eir::Type::bits(16, false, false));
         const auto bits = [&](std::uint32_t low, std::uint32_t width) {
             const Value part{.reg = newRegister(eir::Type::bits(width, false, false)),

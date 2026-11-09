@@ -1811,6 +1811,9 @@ void Kernel::runSystemFunction(std::uint32_t processIndex, const Activation& act
         if (std::string* line = lineAt(argument(0)); line != nullptr && !line->empty()) {
             value = 0x100U | static_cast<unsigned char>(line->front());
             line->erase(0, 1);
+        } else if (descriptor.arguments.size() > 1 && argument(1) != 0) {
+            report(eir::SeverityFailure, descriptor.location,
+                   "a read of a character from an empty line");
         }
         break;
 

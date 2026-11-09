@@ -1289,6 +1289,42 @@ end architecture;
               std::vector<std::string>{"a read of 4 characters from a line holding 3"});
 }
 
+TEST_F(VhdlDesignTest, ACharacterReadFromAnEmptyLineWithNoGoodEndsTheRun) {
+    // With `good`, the read says it took nothing and the run goes on.
+    std::unique_ptr<enzan::eir::Design> design = translate(R"(
+use std.textio.all;
+
+entity tb is
+end entity;
+
+architecture test of tb is
+begin
+  process
+    variable l : line;
+    variable c : character;
+    variable good : boolean;
+  begin
+    write(l, 'a');
+    read(l, c);
+    read(l, c, good);
+    report "good " & boolean'image(good);
+    read(l, c);
+    report "unreachable";
+    wait;
+  end process;
+end architecture;
+)",
+                                                           "tb");
+    ASSERT_NE(design, nullptr) << transcript();
+
+    Simulation simulation(std::move(*design), "tb");
+    ASSERT_TRUE(simulation.ready()) << simulation.messages().front();
+    EXPECT_EQ(simulation.run(), RunStatus::Error);
+    EXPECT_TRUE(simulation.reportedCode(DiagCode::AssertionFailure));
+    EXPECT_EQ(simulation.messages(),
+              (std::vector<std::string>{"good false", "a read of a character from an empty line"}));
+}
+
 TEST_F(VhdlDesignTest, ASubprogramsStringOfRunTimeLengthIsHeldInScratch) {
     // As Altera's SHRINK_LINE cuts a line, a string as long as a parameter the run gives, read
     // into; and one of each direction measured, written, compared, sliced and walked.

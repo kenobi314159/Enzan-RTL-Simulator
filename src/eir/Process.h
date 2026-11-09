@@ -107,9 +107,10 @@ enum class SysTaskKind : std::uint8_t {
     /// `readline`: frees the line the second argument designates and results in the handle of a
     /// new one holding the next line of the file the first names, without its line end.
     LineReadLine,
-    /// `read` of a character: takes the first character off the line the argument designates.
-    /// The result is the character's code in its low byte, and above it a bit saying whether
-    /// there was one.
+    /// `read` of a character: takes the first character off the line the first argument
+    /// designates. The result is the character's code in its low byte, and above it a bit saying
+    /// whether there was one; with a second argument that is not 0, a `read` with no `good` to
+    /// tell, an empty line ends the run with a failure instead.
     LineReadCharacter,
     /// `read` of a string: the string the second argument holds with its characters replaced by
     /// as many taken off the line the first argument designates, the leftmost in the highest
