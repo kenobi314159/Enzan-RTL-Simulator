@@ -2087,7 +2087,8 @@ TEST_F(FrontendTest, ReportsAnAssignmentOfOneEventToAnother) {
 }
 
 TEST_F(FrontendTest, ARealIsADouble) {
-    // `real`, `realtime` and `shortreal` alike, the last without its reduced precision.
+    // `real`, `realtime` and `shortreal` alike, the last without its reduced precision, each
+    // encoded as a real so that a waveform shows the number.
     const std::unique_ptr<Design> design = analyse(R"(
         module m;
             real r = 1.5;
@@ -2103,6 +2104,7 @@ TEST_F(FrontendTest, ARealIsADouble) {
     for (const std::string_view name : {"r", "t", "s"}) {
         const std::uint32_t object = require(found->findObject(name), name);
         EXPECT_TRUE(found->objects[object].type.isReal()) << name;
+        EXPECT_EQ(found->objects[object].encoding, enzan::eir::Encoding::Real) << name;
     }
     EXPECT_TRUE(enzan::eir::verify(*design, engine)) << consumer.messages.front();
 }

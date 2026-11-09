@@ -917,6 +917,8 @@ std::optional<std::uint32_t> ModuleBuilder::objectFor(const ast::ValueSymbol& sy
     object.location = convertLocation(symbol.location);
     object.enumIndex = enumFor(symbol.getType());
     object.subroutineStatic = subroutine != nullptr;
+    // A real's 64 bits are one double, which a waveform shows as the number rather than as bits.
+    if (type->isReal()) object.encoding = eir::Encoding::Real;
     object.holdsReals = !type->isReal() && !realOffsets(*this, symbol.getType()).empty();
 
     // An array keeps its declared dimensions, outermost first, for what reads it as an array
