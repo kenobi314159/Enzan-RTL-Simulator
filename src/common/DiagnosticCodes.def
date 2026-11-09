@@ -38,20 +38,19 @@ ENZAN_DIAG(SourceFileTooLarge, 4, Error,
            "'{}' is too large; a single source file must be smaller than {} bytes")
 ENZAN_DIAG(TooManyErrors, 5, Fatal,
            "too many errors emitted ({}); no further diagnostics will be reported")
+ENZAN_DIAG(BuildWithout, 6, Error, "this build of Enzan was configured with {}, so it cannot {}")
 
 // --- 1000-1999: SystemVerilog frontend --------------------------------------
 
 ENZAN_DIAG(SystemVerilogError, 1001, Error, "{}")
 ENZAN_DIAG(SystemVerilogWarning, 1002, Warning, "{}")
 ENZAN_DIAG(SystemVerilogNote, 1003, Note, "{}")
-ENZAN_DIAG(UnsupportedConstruct, 1004, Error,
-           "{} is not supported by the SystemVerilog frontend yet")
+ENZAN_DIAG(UnsupportedConstruct, 1004, Error, "{} is not supported yet")
 ENZAN_DIAG(NoInputFiles, 1005, Error, "no source files were given")
 ENZAN_DIAG(NoTopLevelFound, 1006, Error,
            "the sources contain no module that could serve as a top level")
 ENZAN_DIAG(ErrorInDeadCode, 1008, Warning,
-           "{}; it is in code a constant condition rules out, so it is never elaborated into "
-           "the simulation.")
+           "{}; this code never runs, since a constant condition rules it out")
 ENZAN_DIAG(UnusedParameterOverride, 1007, Warning,
            "-G {} names no parameter or generic of a top level, and changes nothing")
 ENZAN_DIAG(DelayRounded, 1009, Warning,
@@ -59,8 +58,8 @@ ENZAN_DIAG(DelayRounded, 1009, Warning,
 ENZAN_DIAG(RequestedModuleMissing, 1010, Error,
            "VHDL instantiates the module '{}', which no SystemVerilog source declares")
 ENZAN_DIAG(RequestedParameterMissing, 1011, Error,
-           "module '{}' has no parameter '{}' for the VHDL instantiating it to set; a generic an "
-           "instance maps sets the module's parameter of its name")
+           "module '{}' has no parameter '{}', which a VHDL instance of it sets in its generic "
+           "map; add the parameter to the module, or leave the generic out of the map")
 ENZAN_DIAG(EncryptedSource, 1012, Error,
            "'{}' holds encrypted code (IEEE 1735), which Enzan cannot decrypt")
 ENZAN_DIAG(ParameterInPathCondition, 1013, Warning,
@@ -75,13 +74,14 @@ ENZAN_DIAG(VhdlError, 2001, Error, "{}")
 ENZAN_DIAG(VhdlWarning, 2002, Warning, "{}")
 ENZAN_DIAG(VhdlNote, 2003, Note, "{}")
 ENZAN_DIAG(VhdlAnalysisStopped, 2004, Fatal, "VHDL analysis stopped: {}")
-ENZAN_DIAG(VhdlUnsupported, 2005, Error, "{} is not supported by the VHDL frontend yet")
+ENZAN_DIAG(VhdlUnsupported, 2005, Error, "{} is not supported yet")
 ENZAN_DIAG(VhdlProcessNeverWaits, 2006, Error,
            "this process has no sensitivity list and no wait statement, so once started it would "
            "run for ever without letting simulated time advance")
 ENZAN_DIAG(VhdlUnboundComponent, 2007, Warning,
            "component '{}' has no entity of its name to be bound to, so this instance is left "
-           "unbound and does nothing (IEEE 1076 section 7.3.3)")
+           "unbound and does nothing (IEEE 1076 section 7.3.3); give the entity's source, or bind "
+           "the instance with a configuration specification")
 ENZAN_DIAG(VhdlVital, 2008, Error,
            "'ieee.{}' is part of VITAL, the library of gate-level timing models (IEEE 1076.4), "
            "which Enzan does not simulate")
@@ -94,59 +94,56 @@ ENZAN_DIAG(VhdlDependencyNotGiven, 2010, Error,
 ENZAN_DIAG(TopModuleNotFound, 3001, Error,
            "top module '{}' was not found; the design contains: {}")
 ENZAN_DIAG(NoTopModule, 3002, Error,
-           "no top module was given and the design has {} candidates: {}")
+           "no top module was given and the design has {} candidates: {}; name one with --top")
 ENZAN_DIAG(UnresolvedInstance, 3003, Error,
-           "instance '{}' refers to module '{}', which has not been analysed")
+           "instance '{}' refers to module '{}', which none of the sources or libraries given "
+           "declares")
 ENZAN_DIAG(AmbiguousSpecialisation, 3010, Error,
-           "'{}' is parameterised and the design has more than one of it ({}); name the "
-           "parameterisation meant, or instantiate it from a top level that chooses one")
+           "the design holds '{}' with more than one set of parameter values, as {}; name the one "
+           "meant, or a top level that instantiates it with the values meant")
 ENZAN_DIAG(AmbiguousModule, 3009, Error,
            "'{}' is defined by more than one library ({}); name the one meant, as "
            "<library>.{}")
 ENZAN_DIAG(RecursiveInstantiation, 3004, Error,
-           "module '{}' instantiates itself, through {}; an unbounded hierarchy cannot be "
-           "elaborated")
+           "module '{}' instantiates itself, through {}, without end")
 ENZAN_DIAG(PortWidthMismatch, 3005, Error,
-           "port '{}' of '{}' is {} bits but is connected to a {}-bit object; a port is joined "
-           "only to a signal as wide as it, and a frontend converts any other width with an "
-           "assignment")
+           "port '{}' of '{}' is {} bits wide but is connected to {} bits")
 ENZAN_DIAG(UnconvertiblePort, 3016, Error,
-           "port '{}' of '{}' crosses between SystemVerilog and VHDL, and {}; a port no "
-           "conversion covers is refused")
+           "port '{}' of '{}' connects SystemVerilog and VHDL, and {}: such a port is not "
+           "supported yet")
 ENZAN_DIAG(RequestedPortMissing, 3017, Error,
            "module '{}' has no port '{}' for the instance '{}' of another language to connect")
 ENZAN_DIAG(RequestedPortDirection, 3018, Error,
            "port '{}' of '{}' is an {}, but the instance '{}' of another language connects it as an "
            "{}")
 ENZAN_DIAG(PortEncodingMismatch, 3015, Error,
-           "port '{}' of '{}' holds {} but is connected to an object holding {}; a connection "
-           "between languages converts its values, and nothing converted this one")
+           "port '{}' of '{}' holds {} but is connected to an object holding {}")
 ENZAN_DIAG(MultipleContinuousDrivers, 3006, Error,
-           "{} '{}' has {} driven by both {} and {}; a {} may have one continuous driver for "
-           "each bit, so overlapping drivers are an error rather than something to resolve")
+           "{} '{}' has {} driven by both {} and {}; a {} takes one continuous driver for each "
+           "bit, so drive each bit once, or declare it a `wire`, whose drivers resolve")
 ENZAN_DIAG(MixedDriverKinds, 3007, Error,
            "'{}' has {} driven by the continuous assignment {} and also written by {}; a bit "
            "that is driven continuously may not be written procedurally")
 ENZAN_DIAG(UnresolvedHierarchicalReference, 3011, Error,
            "the hierarchical reference '{}' in '{}' names nothing in the elaborated design")
 ENZAN_DIAG(PackageNamedAsTop, 3012, Error,
-           "package '{}' has the name of the top-level module; its variables live at '/{}', "
-           "which is the top level's path")
+           "package '{}' has the name of the top level '{}', and the two cannot be told apart; "
+           "rename one of them")
 ENZAN_DIAG(UnresolvedSubprogram, 3013, Error,
            "{} calls '{}' of '{}', which no unit of the design declares")
 ENZAN_DIAG(SubprogramWritesDrivenSignal, 3014, Error,
            "'{}' has {} written by the subprogram '{}', called from {}, and also driven by {}; a "
-           "subprogram's writes are immediate, and a signal that is driven has to be written "
-           "through its drivers")
+           "subprogram writing a signal something else drives is not supported yet, so write it "
+           "in the process instead")
 ENZAN_DIAG(UnconnectedPort, 3008, Warning,
            "port '{}' of instance '{}' is not connected and will read as X")
 ENZAN_DIAG(UnconnectedVhdlPort, 3019, Warning,
            "port '{}' of instance '{}' is not connected and keeps its default value, as a VHDL "
            "port left open does")
 ENZAN_DIAG(StrengthsIndistinguishable, 3020, Error,
-           "{} of '{}' is driven by {} at {} strength and by {} at {}; the standard orders the "
-           "two, and Enzan, which tells strong from weak and no finer, would resolve them as "
-           "equals, to X where the standard has a winner")
+           "{} of '{}' is driven by {} at {} strength and by {} at {}; drivers of supply against "
+           "strong, or of pull against weak, are not supported yet, so give the two the same "
+           "strength")
 
 // --- 5000-5999: runtime and scheduler ---------------------------------------
 
@@ -157,8 +154,8 @@ ENZAN_DIAG(CallDepthExceeded, 5011, Error,
            "exceeded the call depth limit of {} calling '{}' from {} at time {}; the design "
            "recurses deeper than the limit, or without end")
 ENZAN_DIAG(TimeOverflow, 5002, Error,
-           "a delay at time {} would advance simulated time past the 64-bit range; time is "
-           "counted in units of {}")
+           "a delay at time {} would take simulated time past the longest a run counts in units "
+           "of {}; a coarser --timescale counts further")
 ENZAN_DIAG(UserFatal, 5003, Error, "$fatal: {}")
 ENZAN_DIAG(UserError, 5004, Error, "{}")
 ENZAN_DIAG(UserWarning, 5005, Warning, "{}")
@@ -171,8 +168,7 @@ ENZAN_DIAG(ReadMemProblem, 5010, Warning, "{} of '{}': {}")
 // --- 6000-6999: the session and its command line -----------------------------
 
 ENZAN_DIAG(FileListUnknownOption, 6005, Error,
-           "'{}' is not an option Enzan's file lists understand; ignoring it could change what "
-           "is analysed, so it is refused rather than skipped")
+           "'{}' is not an option a file list can give Enzan; take it out of the list")
 ENZAN_DIAG(FileListMissingValue, 6006, Error, "'{}' needs a value after it")
 ENZAN_DIAG(FileListEmptyOption, 6007, Error, "'{}' lists nothing")
 ENZAN_DIAG(FileListCycle, 6008, Error, "file list '{}' includes itself: {}")
@@ -183,14 +179,12 @@ ENZAN_DIAG(FileListUnterminatedQuote, 6010, Error,
 ENZAN_DIAG(FileListUnterminatedBrace, 6011, Error,
            "this ${{...}} substitution is missing its closing brace")
 ENZAN_DIAG(EnvironmentVariableNotSet, 6012, Error,
-           "the environment variable '{}' is not set; expanding it to nothing would turn a path "
-           "into one that silently does not exist")
+           "the environment variable '{}' is not set; set it, or write the path out in full")
 ENZAN_DIAG(NothingAnalysed, 6014, Error,
            "no sources have been analysed, so there is nothing to elaborate")
 ENZAN_DIAG(NoSimulation, 6015, Error, "`{}` needs an elaborated design")
 ENZAN_DIAG(WaveformScopeAfterOpen, 6017, Error,
-           "the recording scope cannot be changed once a waveform file is open; the signals a "
-           "file declares are written into its header")
+           "the recording scope cannot be changed once a waveform file is open")
 ENZAN_DIAG(LibraryNotADirectory, 6019, Error,
            "'{}' exists and is not a directory, so it cannot be an analysis library")
 ENZAN_DIAG(NotALibrary, 6022, Error,
@@ -200,8 +194,8 @@ ENZAN_DIAG(LibraryVersionMismatch, 6023, Error,
            "the analysis library '{}' was written with index version {} and this build "
            "understands {}; create it again")
 ENZAN_DIAG(LibraryBadName, 6024, Error,
-           "'{}' cannot be a library name; a name is a letter or underscore followed by "
-           "letters, digits and underscores, because a design has to be able to write it")
+           "'{}' cannot be a library name: a name is a letter or underscore followed by letters, "
+           "digits and underscores")
 ENZAN_DIAG(LibraryEntryUnreadable, 6025, Error,
            "the analysis library entry '{}' could not be read; the library was written by an "
            "incompatible build or has been damaged, so create it again")
@@ -209,9 +203,8 @@ ENZAN_DIAG(LibraryWriteFailed, 6020, Warning,
            "the analysis library entry '{}' could not be written; this run is unaffected and "
            "the next one will analyse from source again")
 ENZAN_DIAG(RestartWithVpiApplication, 6026, Error,
-           "a design cannot be restarted while a VPI application is loaded: the application "
-           "would still hold the state of the simulation being discarded, and nothing in the "
-           "standard tells it so")
+           "a design cannot be restarted while a VPI application is loaded, since the application "
+           "keeps what it knew of the run; start the run again instead")
 
 // --- 7000-7999: waveform database -------------------------------------------
 
@@ -229,13 +222,12 @@ ENZAN_DIAG(WorkLibraryNamedOtherwise, 6029, Error,
            "'{}'; leave `--work` out, or create the library with that name (`enzan lib create "
            "--name`)")
 ENZAN_DIAG(MixedAnalysisUnsettled, 6030, Error,
-           "the design's VHDL and SystemVerilog still ask each other for units after {} rounds of "
-           "analysis, the last asking for {}; a hierarchy recursing through both languages is not "
-           "followed for ever")
+           "the design's VHDL and SystemVerilog instantiate each other in turn more than {} times, "
+           "the last time for {}; a hierarchy that recurses through both languages is not "
+           "supported")
 ENZAN_DIAG(VhdlUnitUnrecorded, 6031, Error,
-           "'{}' is among the VHDL NVC analysed into library '{}', but the analysis that put it "
-           "there did not finish, so the library does not record it; analyse its sources into "
-           "the library again")
+           "'{}' in library '{}' is from an analysis that did not finish; analyse its sources "
+           "into the library again")
 ENZAN_DIAG(TimingChecksNotRun, 6032, Note,
            "timing checks are not run, so a violation of this one or of any other in the design "
            "is never reported")
@@ -258,6 +250,8 @@ ENZAN_DIAG(VpiNoStartupRoutines, 8003, Error,
 
 // --- 9000-9999: internal errors and unimplemented features -----------------
 
-ENZAN_DIAG(NotYetImplemented, 9001, Error, "{} is not yet implemented")
-ENZAN_DIAG(InvalidEir, 9003, Error, "invalid EIR: {}")
-ENZAN_DIAG(InternalError, 9002, Fatal, "internal error: {}")
+ENZAN_DIAG(NotYetImplemented, 9001, Error, "{} is not supported yet")
+ENZAN_DIAG(InvalidEir, 9003, Error,
+           "the design was translated into something invalid, which is a bug in Enzan to report: "
+           "{}")
+ENZAN_DIAG(InternalError, 9002, Fatal, "internal error, which is a bug in Enzan to report: {}")

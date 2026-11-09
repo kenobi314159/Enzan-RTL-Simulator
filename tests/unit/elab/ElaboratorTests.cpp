@@ -587,7 +587,7 @@ TEST_F(ElaboratorTest, RejectsAPortWidthMismatch) {
 
     EXPECT_EQ(elaborate("parent"), nullptr);
     EXPECT_TRUE(reportedCode(enzan::DiagCode::PortWidthMismatch));
-    EXPECT_TRUE(reported("joined only to a signal as wide as it"));
+    EXPECT_TRUE(reported("is 8 bits wide but is connected to 4 bits"));
 }
 
 TEST_F(ElaboratorTest, WarnsAboutAnUnconnectedPortButContinues) {

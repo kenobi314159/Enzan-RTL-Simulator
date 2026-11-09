@@ -1291,6 +1291,10 @@ uniform whatever the source language.
   They are allocated in ranges by the emitting component: 1–999 driver and source handling, 1000s
   SystemVerilog frontend, 2000s VHDL, 3000s elaboration, 4000s codegen, 5000s runtime, 6000s
   session, 7000s waveform database, 8000s PLI, 9000s internal errors.
+- **A diagnostic speaks of the reader's design, not of Enzan.** It says what in their code or on
+  their command line is wrong, where, and what to write instead when a change would put it right.
+  How Enzan works inside — its frontends, its translation, NVC or slang — is no reason a message
+  gives: a refusal says what is not supported, and an internal error that it is a bug to report.
 - **A diagnostic whose default severity is `Fatal` MUST NOT be downgradable or suppressible**:
   turning one into a warning converts a clean stop into wrong results (1.2).
 - **A degenerate construct in code a constant condition rules out is a warning.** A parameter can

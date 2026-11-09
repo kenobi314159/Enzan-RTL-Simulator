@@ -1572,9 +1572,9 @@ int main(int argc, char** argv) {
 #else
     // Building without the frontend is a legitimate configuration — it is what the CI build
     // matrix uses — so it must fail with the reason rather than with a link error.
-    diagnostics.report(enzan::DiagCode::NotYetImplemented, enzan::SourceLocation(),
-                       "simulation in a build configured with -DENZAN_ENABLE_SYSTEMVERILOG=OFF "
-                       "and -DENZAN_ENABLE_VHDL=OFF");
+    diagnostics.report(enzan::DiagCode::BuildWithout, enzan::SourceLocation(),
+                       "-DENZAN_ENABLE_SYSTEMVERILOG=OFF and -DENZAN_ENABLE_VHDL=OFF",
+                       "analyse a design");
     return static_cast<int>(ExitStatus::AnalysisFailed);
 #endif
 }

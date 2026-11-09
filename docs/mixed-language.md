@@ -124,8 +124,8 @@ language's library with `--vpi` or `--vhpi` and names the other in `GPI_EXTRA`.
 | Code | Meaning |
 |---|---|
 | ENZ1011 | a module has no parameter for a generic the VHDL instance maps |
-| ENZ2005 | a generic set from SystemVerilog, or a port of an unconstrained type, that the VHDL frontend cannot take |
-| ENZ3016 | a port whose type no conversion covers |
+| ENZ2005 | a generic set from SystemVerilog, or a port of an unconstrained type, that is not supported yet |
+| ENZ3016 | a port of a type that cannot cross between the languages yet |
 | ENZ3017 | a module has no port of the name the instance of the other language connects |
 | ENZ3018 | a port's direction differs from the one the instance of the other language declares |
 | ENZ3019 | a VHDL port left unconnected by SystemVerilog keeps its default |

@@ -385,8 +385,8 @@ bool Session::analyse(const AnalysisRequest& request) {
 
     return true;
 #else
-    diagnostics.report(DiagCode::NotYetImplemented, SourceLocation(),
-                       "analysis in a build configured with -DENZAN_ENABLE_SYSTEMVERILOG=OFF");
+    diagnostics.report(DiagCode::BuildWithout, SourceLocation(), "-DENZAN_ENABLE_SYSTEMVERILOG=OFF",
+                       "analyse SystemVerilog");
     return false;
 #endif
 }
@@ -467,8 +467,8 @@ bool Session::analyseVhdl(const AnalysisRequest& request) {
     return true;
 #else
     static_cast<void>(request);
-    diagnostics.report(DiagCode::NotYetImplemented, SourceLocation(),
-                       "VHDL analysis in a build configured with -DENZAN_ENABLE_VHDL=OFF");
+    diagnostics.report(DiagCode::BuildWithout, SourceLocation(), "-DENZAN_ENABLE_VHDL=OFF",
+                       "analyse VHDL");
     return false;
 #endif
 }
@@ -914,10 +914,9 @@ bool Session::analyseMixed(const AnalysisRequest& request) {
 #else
     const char* missing = "VHDL";
 #endif
-    diagnostics.report(DiagCode::NotYetImplemented, SourceLocation(),
-                       std::format("a design of both VHDL and SystemVerilog in a build configured "
-                                   "with -DENZAN_ENABLE_{}=OFF",
-                                   missing));
+    diagnostics.report(DiagCode::BuildWithout, SourceLocation(),
+                       std::format("-DENZAN_ENABLE_{}=OFF", missing),
+                       "analyse a design of both VHDL and SystemVerilog");
     return false;
 #endif
 }
@@ -1069,8 +1068,9 @@ bool Session::answerResolutions(const elab::ElaboratedDesign& tree) {
     if (asked.empty()) return true;
 #ifdef ENZAN_WITH_VHDL
     if (vhdlOptions == nullptr) {
-        diagnostics.report(DiagCode::NotYetImplemented, SourceLocation(),
-                           "a VHDL resolved signal in a design not analysed from its sources here");
+        diagnostics.report(
+            DiagCode::NotYetImplemented, SourceLocation(),
+            "a VHDL resolved signal in a design whose VHDL this run did not analyse");
         return false;
     }
     std::vector<frontend::vhdl::ResolutionRequest> requests;
@@ -1112,8 +1112,8 @@ bool Session::answerResolutions(const elab::ElaboratedDesign& tree) {
     }
     return true;
 #else
-    diagnostics.report(DiagCode::NotYetImplemented, SourceLocation(),
-                       "a VHDL resolved signal in a build without the VHDL frontend");
+    diagnostics.report(DiagCode::BuildWithout, SourceLocation(), "-DENZAN_ENABLE_VHDL=OFF",
+                       "resolve a VHDL signal");
     return false;
 #endif
 }
