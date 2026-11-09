@@ -1931,6 +1931,8 @@ mistranslated:
   across the language boundary; a VHDL port of an unconstrained type instantiated from
   SystemVerilog; storing a design of both languages in a library, and `-G` for one; a second top
   level of VHDL.
+- Altera's models of Cyclone V and later families, `altera_lnsim.sv`, which M7.2 holds to no
+  reference; among them `altera_pll`'s arrays of reals are refused.
 - In VPI, declared ranges (a vector reports `[width-1:0]`), integer atom types, part-select handles,
   struct members, user system tasks, and the difference between the delay modes (9.4).
 - The Processes and Source windows (10.2), and a per-bit change index (10.3).
