@@ -16,6 +16,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
+#include <format>
 #include <functional>
 #include <map>
 #include <optional>
@@ -39,7 +40,8 @@ namespace {
 
 /// What a record is, in its first byte.
 enum class Record : std::uint8_t {
-    /// One of NVC's diagnostics, translated.
+    /// One of NVC's diagnostics, translated. An ENZ2004 with no message is NVC stopping on an
+    /// error already reported, which says the child stopped and has nothing to show.
     Diagnostic = 1,
     /// The analysis ran to its end, followed by its error count. A stream without one is a child
     /// that NVC ended part-way.
@@ -339,6 +341,43 @@ std::string stopReason(std::string_view printed, int status) {
     return "NVC ended without finishing, and without saying why";
 }
 
+/// A unit as NVC names a library's file of it, `SHAPES.WIDTHS-body`, as its source names it.
+std::string describedUnit(std::string_view file) {
+    const std::string unit = sourceCase(file.substr(file.rfind('/') + 1));
+    if (unit.ends_with("-body"))
+        return std::format("the body of '{}'", unit.substr(0, unit.size() - 5));
+    if (const std::size_t dash = unit.find('-'); dash != std::string::npos)
+        return std::format("architecture '{}' of '{}'", unit.substr(dash + 1),
+                           unit.substr(0, dash));
+    return "'" + unit + "'";
+}
+
+/// Reports why a child stopped that reported nothing itself, from what NVC printed as it ended.
+///
+/// Of the fatal errors NVC prints without its consumer, one is the user's to put right: a unit
+/// of a library depending on one the run does not have, `<file> depends on <unit> which cannot
+/// be found`. The user gave the library and not one it was analysed against, which is said in
+/// their terms.
+void reportStop(std::string_view printed, int status, const UnitOptions& units,
+                DiagnosticEngine& diagnostics) {
+    const std::string reason = stopReason(printed, status);
+    constexpr std::string_view Depends = " depends on ";
+    constexpr std::string_view Missing = " which cannot be found";
+    const std::size_t depends = reason.find(Depends);
+    if (depends != std::string::npos && reason.ends_with(Missing)) {
+        const std::string_view text(reason);
+        const std::string user = describedUnit(text.substr(0, depends));
+        const std::string used = sourceCase(text.substr(
+            depends + Depends.size(), text.size() - depends - Depends.size() - Missing.size()));
+        DiagnosticBuilder builder =
+            diagnostics.report(DiagCode::VhdlDependencyNotGiven, SourceLocation(), user, used);
+        for (std::string& note : missingLibraryNotes(used.substr(0, used.find('.')), units))
+            builder.note(SourceLocation(), std::move(note));
+        return;
+    }
+    diagnostics.report(DiagCode::VhdlAnalysisStopped, SourceLocation(), reason);
+}
+
 /// What the child's stream said.
 struct Outcome {
     /// The error count, when the stream ends with the record saying the analysis finished.
@@ -524,8 +563,9 @@ Outcome report(std::string_view stream, DiagnosticEngine& diagnostics) {
         const std::optional<std::string> message = decoder.text();
         const std::optional<std::uint32_t> noteCount = decoder.u32();
         if (!code || !location || !message || !noteCount) return outcome;
-        outcome.stopReported =
-            outcome.stopReported || static_cast<DiagCode>(*code) == DiagCode::VhdlAnalysisStopped;
+        const bool stop = static_cast<DiagCode>(*code) == DiagCode::VhdlAnalysisStopped;
+        outcome.stopReported = outcome.stopReported || stop;
+        if (stop && message->empty() && *noteCount == 0) continue;
 
         // Formatted already, by NVC or by the child's own engine.
         DiagnosticBuilder builder = diagnostics.reportFormatted(
@@ -542,7 +582,8 @@ Outcome report(std::string_view stream, DiagnosticEngine& diagnostics) {
 
 /// Runs `job` in a child process and reports what it said, returning what its stream held, or
 /// nothing having reported why the child did not finish.
-std::optional<Outcome> inChild(const Job& job, DiagnosticEngine& diagnostics) {
+std::optional<Outcome> inChild(const Job& job, const UnitOptions& units,
+                               DiagnosticEngine& diagnostics) {
     std::array<int, 2> records{-1, -1};
     std::array<int, 2> errors{-1, -1};
     if (::pipe2(records.data(), O_CLOEXEC) != 0 || ::pipe2(errors.data(), O_CLOEXEC) != 0) {
@@ -588,10 +629,7 @@ std::optional<Outcome> inChild(const Job& job, DiagnosticEngine& diagnostics) {
         // does before it aborts; that is passed on, since the signal alone says nothing of it.
         if (WIFSIGNALED(status) && !printed.empty())
             static_cast<void>(writeAll(STDERR_FILENO, printed));
-        if (!outcome.stopReported) {
-            diagnostics.report(DiagCode::VhdlAnalysisStopped, SourceLocation(),
-                               stopReason(printed, status));
-        }
+        if (!outcome.stopReported) reportStop(printed, status, units, diagnostics);
         return std::nullopt;
     }
     return outcome;
@@ -603,7 +641,7 @@ bool analyseUnits(const UnitOptions& options, const SourceManager& sources,
                   DiagnosticEngine& diagnostics) {
     const std::optional<Outcome> outcome = inChild(
         [&options, &sources](PipeSink& sink) { return runNvcAnalysis(options, sources, sink); },
-        diagnostics);
+        options, diagnostics);
     return outcome && outcome->errors == 0U;
 }
 
@@ -664,7 +702,7 @@ std::unique_ptr<eir::Design> analyse(const DesignOptions& options, const SourceM
             }
             return errors;
         },
-        diagnostics);
+        options.units, diagnostics);
     if (analysed != nullptr) *analysed = outcome && outcome->analysed;
     if (!outcome || outcome->errors != 0U) return nullptr;
     std::optional<std::vector<eir::ModuleDefinition>> modules =
@@ -695,7 +733,7 @@ std::optional<ResolvedFunctions> resolutions(const DesignOptions& options,
             }
             return errors;
         },
-        diagnostics);
+        options.units, diagnostics);
     if (!outcome || outcome->errors != 0U) return std::nullopt;
     std::optional<std::vector<eir::ModuleDefinition>> modules =
         definitionsFrom(*outcome, options.units, sources, diagnostics);

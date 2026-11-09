@@ -18,7 +18,7 @@ namespace enzan::ipc {
 /// Bumped whenever a message's fields change in a way an older peer could misread. The handshake
 /// compares it and refuses rather than negotiating: a GUI and a kernel from different builds that
 /// half-understand each other would show wrong values, and correctness comes before convenience.
-constexpr std::uint32_t ProtocolVersion = 8;
+constexpr std::uint32_t ProtocolVersion = 9;
 
 /// What a message is.
 ///
@@ -368,7 +368,8 @@ struct ProgressMessage {
     std::uint64_t latestRecordedTime = 0;
 };
 
-/// `$display` and the severity tasks, forwarded as the kernel writes them.
+/// `$display` and the severity tasks, forwarded as the kernel writes them, and what it captured of
+/// its standard output, with the codes that colour it on a terminal.
 struct TranscriptMessage {
     std::string text;
 };

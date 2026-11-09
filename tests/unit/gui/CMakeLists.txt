@@ -17,6 +17,7 @@ add_executable(
   SignalListLoadTests.cpp
   SignalListTests.cpp
   TclSyntaxTests.cpp
+  TerminalDecoderTests.cpp
   ThemeTests.cpp
   ValueTextTests.cpp
   WaveRowTests.cpp

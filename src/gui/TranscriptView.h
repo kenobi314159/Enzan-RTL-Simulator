@@ -2,10 +2,13 @@
 
 #pragma once
 
+#include "gui/TerminalDecoder.h"
 #include "gui/Theme.h"
 
 #include <QString>
 #include <QWidget>
+
+#include <vector>
 
 class QAction;
 class QPlainTextEdit;
@@ -20,7 +23,8 @@ public:
     /// `theme` must outlive the view. When it changes, `applyTheme` shows the change.
     explicit TranscriptView(const Theme& theme, QWidget* parent = nullptr);
 
-    /// Appends kernel output exactly as it was written, without adding a line ending.
+    /// Appends kernel output as it was written, without adding a line ending, in the colours its
+    /// terminal codes give it (`TerminalDecoder`).
     void appendOutput(const QString& text);
 
     /// Appends a line of Enzan's own, in the theme's colour for notes.
@@ -31,11 +35,11 @@ public:
 
     void clearTranscript();
 
-    /// Takes the theme's font and colours again, recolouring every line already shown.
+    /// Takes the theme's font and colours again, recolouring everything already shown.
     ///
-    /// Each line remembers which of the theme's colours it is in rather than the colour itself,
-    /// so a new theme reaches what was written under the old one: a transcript half in one
-    /// theme's colours and half in another's would read as two kinds of message.
+    /// Each run of text remembers which of the theme's colours it is in rather than the colour
+    /// itself, so a new theme reaches what was written under the old one: a transcript half in
+    /// one theme's colours and half in another's would read as two kinds of message.
     void applyTheme();
 
     /// The command that clears the transcript, for the window's menu as well as the
@@ -43,9 +47,21 @@ public:
     [[nodiscard]] QAction* clearAction() const noexcept { return clear; }
 
 private:
-    /// Appends `text` on a line of its own in `colour`, scrolling to the end only when the view
-    /// was already there.
+    /// A run of a line's text, in one of the theme's colours.
+    struct Piece {
+        QString text;
+        ThemeColor colour = ThemeColor::TranscriptForeground;
+        bool bold = false;
+        bool italic = false;
+        bool underline = false;
+    };
+
+    /// Appends `text` on a line of its own in `colour`.
     void append(const QString& text, ThemeColor colour);
+
+    /// Appends `pieces` as a line of their own, scrolling to the end only when the view was
+    /// already there. A line of nothing is not shown.
+    void appendLine(const std::vector<Piece>& pieces);
 
     const Theme* theme;
     QPlainTextEdit* output = nullptr;
@@ -53,6 +69,9 @@ private:
 
     /// Whatever the kernel wrote without a trailing newline, waiting for the rest of its line.
     QString partialLine;
+
+    /// Reads the kernel's output a line at a time, keeping a colour from one to the next.
+    TerminalDecoder decoder;
 };
 
 } // namespace enzan::gui

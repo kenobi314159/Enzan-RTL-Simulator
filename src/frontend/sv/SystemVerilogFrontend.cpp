@@ -674,9 +674,11 @@ std::optional<eir::Type> ModuleBuilder::convertType(const ast::Type& type) {
 
     // A fixed-size unpacked array and an unpacked struct are stored flat, as the vector of all
     // their bits: every operation the language allows on one as a whole — assignment,
-    // equality, a port connection — is then the same operation on bits. Reals among them,
-    // strings, unions, dynamic arrays and classes are none of these, and are reported where they
-    // are used, so that the diagnostic points at the user's line.
+    // equality, a port connection — is then the same operation on bits. A real among them is its
+    // double's 64 bits, as a VHDL array of reals is, two-state, and equality compares it as a
+    // real (ProcessTranslator::compareAggregates). Strings, unions, dynamic arrays and classes are
+    // none of these, and are reported where they are used, so that the diagnostic points at the
+    // user's line.
     const ast::Type& canonical = type.getCanonicalType();
     std::uint64_t width = 0;
     bool fourState = false;
@@ -684,13 +686,13 @@ std::optional<eir::Type> ModuleBuilder::convertType(const ast::Type& type) {
     if (canonical.kind == slang::ast::SymbolKind::FixedSizeUnpackedArrayType) {
         const auto& array = canonical.as<ast::FixedSizeUnpackedArrayType>();
         const std::optional<eir::Type> element = convertType(array.elementType);
-        if (!element.has_value() || element->isReal()) return std::nullopt;
+        if (!element.has_value()) return std::nullopt;
         width = std::uint64_t{element->bitWidth()} * array.range.width();
         fourState = element->isFourState();
     } else if (canonical.kind == slang::ast::SymbolKind::UnpackedStructType) {
         for (const ast::FieldSymbol* field : canonical.as<ast::UnpackedStructType>().fields) {
             const std::optional<eir::Type> member = convertType(field->getType());
-            if (!member.has_value() || member->isReal()) return std::nullopt;
+            if (!member.has_value()) return std::nullopt;
             width += member->bitWidth();
             fourState = fourState || member->isFourState();
         }
@@ -915,6 +917,9 @@ std::optional<std::uint32_t> ModuleBuilder::objectFor(const ast::ValueSymbol& sy
     object.location = convertLocation(symbol.location);
     object.enumIndex = enumFor(symbol.getType());
     object.subroutineStatic = subroutine != nullptr;
+    // A real's 64 bits are one double, which a waveform shows as the number rather than as bits.
+    if (type->isReal()) object.encoding = eir::Encoding::Real;
+    object.holdsReals = !type->isReal() && !realOffsets(*this, symbol.getType()).empty();
 
     // An array keeps its declared dimensions, outermost first, for what reads it as an array
     // rather than as the bits it is stored as: VPI, and the waveform database. The unpacked
@@ -1501,6 +1506,11 @@ bool ModuleBuilder::collectDeclarations() {
             reportUnsupported(port.location, std::format("the real port '{}'", port.name));
             continue;
         }
+        if (definitionValue.objects[*objectIndex].holdsReals) {
+            reportUnsupported(port.location,
+                              std::format("the port '{}', which holds reals,", port.name));
+            continue;
+        }
 
         eir::PortDirection direction = eir::PortDirection::Input;
         switch (port.direction) {
@@ -1738,8 +1748,9 @@ bool ModuleBuilder::bindInterface(const ast::InstanceSymbol& instance,
         reportUnsupported(
             instance.location,
             std::format("the connection of interface port '{}' to {}", connection.port.name,
-                        connected == nullptr ? std::string_view("nothing")
-                                             : slang::ast::toString(connected->kind)));
+                        connected == nullptr
+                            ? std::string("nothing")
+                            : "a " + kindName(slang::ast::toString(connected->kind))));
         return false;
     }
     result.interfaceBindings.push_back(

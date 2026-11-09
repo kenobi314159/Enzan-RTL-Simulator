@@ -20,6 +20,8 @@
 
 #include <algorithm>
 #include <array>
+#include <bit>
+#include <cstdint>
 #include <filesystem>
 #include <format>
 #include <memory>
@@ -113,6 +115,7 @@ protected:
         options.units.work = {.name = std::move(work), .directory = {}};
         options.units.searchDirectories = {libraries()};
         options.top = std::move(top);
+        options.generics = generics;
         options.modules = modules;
         options.requests = entityRequests;
         options.described = described;
@@ -144,6 +147,9 @@ protected:
     std::vector<std::string> described;
     bool onlyRequested = false;
     enzan::frontend::vhdl::Exchange exchange;
+
+    /// The top's generics the command line sets, each `NAME=VALUE`.
+    std::vector<std::string> generics;
 };
 
 TEST_F(VhdlDesignTest, ATopAnalysedTwiceIsTheOneAnalysedLast) {
@@ -1074,8 +1080,8 @@ end architecture;
     EXPECT_EQ(refused->message.find("not static"), std::string::npos) << refused->message;
     ASSERT_EQ(refused->notes.size(), 1U);
     EXPECT_EQ(refused->notes[0].message,
-              "computing 'count' stopped at this procedure call, which the VHDL frontend does not "
-              "run there yet");
+              "computing 'count' stopped at this procedure call, which cannot be computed before "
+              "the simulation yet");
     EXPECT_EQ(sources.lineNumber(refused->notes[0].location), 14U);
 }
 
@@ -2208,6 +2214,93 @@ end architecture;
     EXPECT_NE(refused->message.find("no default"), std::string::npos) << refused->message;
 }
 
+/// A top level whose generics the tests below set from the command line.
+constexpr std::string_view GenericTop = R"(
+library ieee;
+use ieee.std_logic_1164.all;
+
+entity top is
+  generic (
+    width  : natural := 4;
+    ratio  : real := 1.0;
+    enable : boolean := false;
+    tag    : string := "xy";
+    bits   : std_logic_vector(3 downto 0) := "0000";
+    level  : std_logic := '0';
+    period : time := 1 ns;
+    needed : integer);
+end entity;
+architecture a of top is
+begin
+end architecture;
+)";
+
+TEST_F(VhdlDesignTest, TheCommandLineSetsTheTopsGenerics) {
+    // Each value as NVC's and GHDL's `-g` read one of its type, each name in any case.
+    generics = {"WIDTH=8",   "ratio=2.5", "Enable=true",  "tag=ab",
+                "bits=0101", "level='1'", "period=10 ns", "needed=-7"};
+    const std::unique_ptr<enzan::eir::Design> design = translate(GenericTop, "top");
+    ASSERT_NE(design, nullptr) << transcript();
+    EXPECT_TRUE(consumer.received.empty()) << transcript();
+
+    const auto definition = std::ranges::find(design->modules(), std::string_view("top"),
+                                              &ModuleDefinition::sourceName);
+    ASSERT_NE(definition, design->modules().end());
+    const auto valueOf = [&definition](std::string_view name) {
+        const auto parameter =
+            std::ranges::find(definition->parameters, name, &enzan::eir::Parameter::name);
+        return parameter == definition->parameters.end() ? ~std::uint64_t{0}
+                                                         : parameter->value.ref().toUInt64();
+    };
+    EXPECT_EQ(valueOf("width"), 8U);
+    EXPECT_EQ(std::bit_cast<double>(valueOf("ratio")), 2.5);
+    EXPECT_EQ(valueOf("enable"), 1U);
+    EXPECT_EQ(valueOf("tag"), 0x6162U);
+    // std_ulogic's '0' and '1' are its codes 2 and 3, a byte each.
+    EXPECT_EQ(valueOf("bits"), 0x0203'0203U);
+    EXPECT_EQ(valueOf("level"), 3U);
+    EXPECT_EQ(valueOf("period"), 10'000'000U) << "in femtoseconds";
+    EXPECT_EQ(valueOf("needed"), 0xFFFF'FFF9U) << "-7 in 32 bits";
+}
+
+TEST_F(VhdlDesignTest, ATopsGenericWithNoDefaultSaysToSetIt) {
+    EXPECT_EQ(translate(GenericTop, "top"), nullptr);
+    const Diagnostic* refused = first(DiagCode::VhdlError);
+    ASSERT_NE(refused, nullptr) << transcript();
+    EXPECT_NE(refused->message.find("give it one with -G needed=<value>"), std::string::npos)
+        << refused->message;
+}
+
+TEST_F(VhdlDesignTest, AValueTheGenericCannotTakeIsRefusedFromTheCommandLine) {
+    generics = {"needed=many"};
+    EXPECT_EQ(translate(GenericTop, "top"), nullptr);
+    const Diagnostic* notOfItsType = first(DiagCode::VhdlError);
+    ASSERT_NE(notOfItsType, nullptr) << transcript();
+    EXPECT_NE(notOfItsType->message.find("'many' is not a value of the type integer"),
+              std::string::npos)
+        << notOfItsType->message;
+    ASSERT_TRUE(notOfItsType->location.valid());
+    EXPECT_EQ(sources.lineNumber(notOfItsType->location), 14U) << "at the generic";
+
+    consumer.received.clear();
+    generics = {"needed=1", "width=-1"};
+    EXPECT_EQ(translate(GenericTop, "top"), nullptr);
+    const Diagnostic* outOfRange = first(DiagCode::VhdlError);
+    ASSERT_NE(outOfRange, nullptr) << transcript();
+    EXPECT_NE(outOfRange->message.find("-1 is outside the range of the type natural"),
+              std::string::npos)
+        << outOfRange->message;
+}
+
+TEST_F(VhdlDesignTest, ASettingNamingNoGenericOfTheTopIsReported) {
+    generics = {"needed=1", "depth=3"};
+    ASSERT_NE(translate(GenericTop, "top"), nullptr) << transcript();
+    const Diagnostic* unused = first(DiagCode::UnusedParameterOverride);
+    ASSERT_NE(unused, nullptr) << transcript();
+    EXPECT_NE(unused->message.find("-G depth=3"), std::string::npos) << unused->message;
+    EXPECT_EQ(consumer.received.size(), 1U) << transcript();
+}
+
 TEST_F(VhdlDesignTest, AnEntityWhosePortHasNoBoundsCannotBeInstantiatedFromSystemVerilog) {
     entityRequests.push_back(
         {.placeholder = "p", .unit = "open_bounds", .parameters = {}, .ports = {}});
@@ -2324,8 +2417,7 @@ end architecture;
     EXPECT_EQ(design, nullptr);
     const Diagnostic* unsupported = first(DiagCode::VhdlUnsupported);
     ASSERT_NE(unsupported, nullptr) << transcript();
-    EXPECT_EQ(unsupported->message,
-              "a signal of type GRID is not supported by the VHDL frontend yet");
+    EXPECT_EQ(unsupported->message, "a signal of type GRID is not supported yet");
     EXPECT_EQ(sources.lineNumber(unsupported->location), 9U);
 }
 
@@ -2395,8 +2487,7 @@ end architecture;
     EXPECT_EQ(design, nullptr);
     const Diagnostic* unsupported = first(DiagCode::VhdlUnsupported);
     ASSERT_NE(unsupported, nullptr) << transcript();
-    EXPECT_EQ(unsupported->message,
-              "a reference to a T_CONST_DECL is not supported by the VHDL frontend yet");
+    EXPECT_EQ(unsupported->message, "a reference to a constant is not supported yet");
 }
 
 TEST_F(VhdlDesignTest, AnAggregateOfOneChoiceThatIsNotStaticTakesItsRange) {
@@ -2584,8 +2675,8 @@ end architecture;
     EXPECT_EQ(design, nullptr);
     const Diagnostic* unsupported = first(DiagCode::VhdlUnsupported);
     ASSERT_NE(unsupported, nullptr) << transcript();
-    EXPECT_EQ(unsupported->message, "associating a block's inout port with this is not supported "
-                                    "by the VHDL frontend yet");
+    EXPECT_EQ(unsupported->message,
+              "associating a block's inout port with this is not supported yet");
 }
 
 TEST_F(VhdlDesignTest, APortNothingDrivesIsASourceOfItsDefault) {
@@ -2809,8 +2900,7 @@ end architecture;
     EXPECT_EQ(design, nullptr);
     const Diagnostic* unsupported = first(DiagCode::VhdlUnsupported);
     ASSERT_NE(unsupported, nullptr) << transcript();
-    EXPECT_EQ(unsupported->message,
-              "the expression T_EXTERNAL_NAME is not supported by the VHDL frontend yet");
+    EXPECT_EQ(unsupported->message, "this external name is not supported yet");
 }
 
 TEST_F(VhdlDesignTest, ANestedAggregateTargetTakesEachNamesPart) {
@@ -4071,8 +4161,7 @@ end architecture;
     EXPECT_EQ(design, nullptr);
     const Diagnostic* unsupported = first(DiagCode::VhdlUnsupported);
     ASSERT_NE(unsupported, nullptr) << transcript();
-    EXPECT_EQ(unsupported->message,
-              "a variable of type COUNT_PTR is not supported by the VHDL frontend yet");
+    EXPECT_EQ(unsupported->message, "a variable of type COUNT_PTR is not supported yet");
     EXPECT_EQ(sources.lineNumber(unsupported->location), 9U);
 }
 
@@ -4137,8 +4226,8 @@ end architecture;
     EXPECT_EQ(design, nullptr);
     const Diagnostic* unsupported = first(DiagCode::VhdlUnsupported);
     ASSERT_NE(unsupported, nullptr) << transcript();
-    EXPECT_EQ(unsupported->message, "an actual of another length than its parameter is not "
-                                    "supported by the VHDL frontend yet");
+    EXPECT_EQ(unsupported->message,
+              "an actual of another length than its parameter is not supported yet");
     EXPECT_EQ(sources.lineNumber(unsupported->location), 14U);
 }
 

@@ -398,7 +398,7 @@ TEST_F(TextDiagnosticTest, UnderlinesAHighlightedRange) {
     engine.report(DiagCode::NotYetImplemented, start, "that")
         .highlight(SourceRange(start, start.advanced(6)));
 
-    EXPECT_EQ(rendered(), "a.sv:1:12: error: that is not yet implemented [ENZ9001]\n"
+    EXPECT_EQ(rendered(), "a.sv:1:12: error: that is not supported yet [ENZ9001]\n"
                           "   1 | wire [7:0] result;\n"
                           "     |            ^~~~~~\n");
 }
@@ -410,7 +410,7 @@ TEST_F(TextDiagnosticTest, ExpandsTabsSoTheCaretStaysAligned) {
 
     engine.report(DiagCode::NotYetImplemented, SourceLocation(buffer, 6), "that");
 
-    EXPECT_EQ(rendered(), std::string("a.sv:1:7: error: that is not yet implemented [ENZ9001]\n")
+    EXPECT_EQ(rendered(), std::string("a.sv:1:7: error: that is not supported yet [ENZ9001]\n")
                               + "   1 | " + std::string(TextDiagnosticConsumer::TabWidth, ' ')
                               + "wire x;\n" + "     | "
                               + std::string(TextDiagnosticConsumer::TabWidth + 5, ' ') + "^\n");
@@ -419,7 +419,7 @@ TEST_F(TextDiagnosticTest, ExpandsTabsSoTheCaretStaysAligned) {
 TEST_F(TextDiagnosticTest, RendersADiagnosticWithNoLocation) {
     engine.report(DiagCode::NotYetImplemented, SourceLocation(), "VHDL analysis");
 
-    EXPECT_EQ(rendered(), "enzan: error: VHDL analysis is not yet implemented [ENZ9001]\n");
+    EXPECT_EQ(rendered(), "enzan: error: VHDL analysis is not supported yet [ENZ9001]\n");
 }
 
 TEST_F(TextDiagnosticTest, RendersNotesAfterTheDiagnostic) {
@@ -429,7 +429,7 @@ TEST_F(TextDiagnosticTest, RendersNotesAfterTheDiagnostic) {
         .note(SourceLocation(buffer, 4), "see here")
         .note(SourceLocation(), "and this");
 
-    EXPECT_EQ(rendered(), "a.sv:1:1: error: that is not yet implemented [ENZ9001]\n"
+    EXPECT_EQ(rendered(), "a.sv:1:1: error: that is not supported yet [ENZ9001]\n"
                           "   1 | abc\n"
                           "     | ^\n"
                           "a.sv:2:1: note: see here\n"
@@ -446,7 +446,7 @@ TEST_F(TextDiagnosticTest, SnippetsCanBeTurnedOff) {
     engine.report(DiagCode::NotYetImplemented, SourceLocation(buffer, 1), "that")
         .note(SourceLocation(buffer, 2), "here");
 
-    EXPECT_EQ(rendered(), "a.sv:1:2: error: that is not yet implemented [ENZ9001]\n"
+    EXPECT_EQ(rendered(), "a.sv:1:2: error: that is not supported yet [ENZ9001]\n"
                           "a.sv:1:3: note: here\n");
 }
 

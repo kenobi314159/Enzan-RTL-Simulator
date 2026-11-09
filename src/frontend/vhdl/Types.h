@@ -12,6 +12,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace enzan::frontend::vhdl {
@@ -24,6 +25,16 @@ namespace enzan::frontend::vhdl {
 /// own `report` of a path. An extended identifier, `\Mixed Case\`, is case-sensitive and kept as
 /// it is.
 [[nodiscard]] std::string simpleName(ident_t identifier);
+
+/// What NVC calls a kind of tree, `T_CONST_DECL`, in VHDL's words: `constant declaration`.
+[[nodiscard]] std::string kindName(tree_kind_t kind);
+
+/// `kindName` of a statement, followed by "statement" unless its name says what it is already:
+/// `case statement`, `signal assignment`.
+[[nodiscard]] std::string statementName(tree_kind_t kind);
+
+/// `noun` after "a" or "an", as its first letter takes.
+[[nodiscard]] std::string withArticle(std::string_view noun);
 
 /// How a value of a VHDL type is laid out in EIR (DESIGN_GUIDE.md section 3.6).
 ///

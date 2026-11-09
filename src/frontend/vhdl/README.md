@@ -7,7 +7,9 @@ configured with `-DENZAN_ENABLE_VHDL=OFF`.
 
 - Drive NVC's analysis over the sources — lexing, parsing, semantic checking, simplification
   and bounds checking — into NVC's units in a library, and translate NVC's diagnostics into
-  Enzan's diagnostic engine (ENZ2001–ENZ2004, and ENZ2008 for a design naming VITAL).
+  Enzan's diagnostic engine (ENZ2001–ENZ2004, ENZ2008 for a design naming VITAL, and ENZ2009
+  and ENZ2010 for a library the run was not given). A hint naming an option of NVC's command line
+  is left out, or respelt as Enzan's.
 - Walk NVC's analysed trees and emit EIR, one unit per entity, architecture, set of generic
   values and set of bounds its unconstrained ports take, folding generics as it goes, from the top
   down the hierarchy.
@@ -18,7 +20,8 @@ configured with `-DENZAN_ENABLE_VHDL=OFF`.
 process, and ends the process on a fatal error, a library a design names and nobody built among
 them. The child is forked, runs NVC, and writes each diagnostic back to the parent through a pipe
 as NVC reports it; the parent reports them as though NVC had run in it. A child that NVC ends
-before the analysis finishes is reported as ENZ2004 with the message NVC printed on its way out.
+before the analysis finishes is reported as ENZ2004 with the message NVC printed on its way out,
+or as ENZ2010 when that message is a unit depending on one in a library the run was not given.
 
 **From Enzan's buffers.** Each source is handed to NVC as the text the source manager already
 holds, rather than as a file for NVC to open, so a location in a diagnostic is a location in the

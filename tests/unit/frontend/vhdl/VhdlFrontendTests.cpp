@@ -222,16 +222,100 @@ TEST_F(VhdlAnalysisTest, ResolvesAnotherLibraryOnTheSearchPath) {
         << transcript();
 }
 
-TEST_F(VhdlAnalysisTest, StopsTheAnalysisNotEnzanOnAFatalError) {
-    // NVC ends its process when a library a design names cannot be found.
+TEST_F(VhdlAnalysisTest, TellsTheUserHowToGiveALibraryTheDesignNames) {
+    // NVC ends its process when a library a design names cannot be found, and suggests its own
+    // `-L`, which Enzan does not have. This also pins the NVC wording the frontend recognises.
     EXPECT_FALSE(analyse("library nonesuch;\n"
                          "use nonesuch.things.all;\n"
                          "entity e is\n"
                          "end entity;\n"));
 
-    const Diagnostic* const stopped = first(DiagCode::VhdlAnalysisStopped);
-    ASSERT_NE(stopped, nullptr) << transcript();
-    EXPECT_NE(stopped->message.find("NONESUCH"), std::string::npos) << stopped->message;
+    const Diagnostic* const missing = first(DiagCode::VhdlLibraryNotGiven);
+    ASSERT_NE(missing, nullptr) << transcript();
+    EXPECT_NE(missing->message.find("library 'nonesuch'"), std::string::npos) << missing->message;
+    ASSERT_TRUE(missing->location.valid());
+    EXPECT_EQ(sources.lineNumber(missing->location), 1U);
+    ASSERT_EQ(missing->notes.size(), 1U);
+    EXPECT_NE(missing->notes[0].message.find("--in-lib nonesuch=<dir>"), std::string::npos)
+        << missing->notes[0].message;
+    EXPECT_EQ(missing->notes[0].message.find("-L"), std::string::npos);
+}
+
+TEST_F(VhdlAnalysisTest, SaysWhichLibraryAGivenLibraryNeeds) {
+    // A library given without the one it was analysed against: NVC names a file of the library
+    // and stops, printing rather than reporting.
+    const Workspace elsewhere;
+    const auto analyseInto = [this](std::string_view text, enzan::frontend::vhdl::UnitLibrary work,
+                                    std::vector<enzan::frontend::vhdl::UnitLibrary> given) {
+        UnitOptions options;
+        options.sources = {sources.addBuffer(work.name + ".vhd", std::string(text))};
+        options.work = std::move(work);
+        options.libraries = std::move(given);
+        options.searchDirectories = {libraries()};
+        return analyseUnits(options, sources, engine);
+    };
+    ASSERT_TRUE(analyseInto("package consts is\n"
+                            "  constant word : natural := 8;\n"
+                            "end package;\n",
+                            {.name = "base", .directory = elsewhere / "base"}, {}))
+        << transcript();
+    ASSERT_TRUE(analyseInto("library base;\n"
+                            "use base.consts.all;\n"
+                            "package widths is\n"
+                            "  constant w : natural := word;\n"
+                            "end package;\n",
+                            {.name = "shapes", .directory = workspace / "shapes"},
+                            {{.name = "base", .directory = elsewhere / "base"}}))
+        << transcript();
+
+    EXPECT_FALSE(analyseInto("library shapes;\n"
+                             "use shapes.widths.all;\n"
+                             "entity e is\n"
+                             "end entity;\n",
+                             {.name = "work", .directory = workspace / "work"},
+                             {{.name = "shapes", .directory = workspace / "shapes"}}));
+
+    const Diagnostic* const missing = first(DiagCode::VhdlDependencyNotGiven);
+    ASSERT_NE(missing, nullptr) << transcript();
+    EXPECT_NE(missing->message.find("'shapes.widths' uses 'base.consts'"), std::string::npos)
+        << missing->message;
+    ASSERT_EQ(missing->notes.size(), 2U);
+    EXPECT_NE(missing->notes[0].message.find("--in-lib base=<dir>"), std::string::npos)
+        << missing->notes[0].message;
+    EXPECT_EQ(missing->notes[1].message, "the library given is 'shapes'");
+    EXPECT_EQ(first(DiagCode::VhdlAnalysisStopped), nullptr) << transcript();
+}
+
+TEST_F(VhdlAnalysisTest, NamesNoOptionOfNvcsCommandLine) {
+    // NVC's hints name its own options: `--std=2008`, which Enzan spells `--std 2008`, and
+    // `--relaxed`, which Enzan does not have.
+    EXPECT_FALSE(analyse("entity e is\n"
+                         "  port (o : out bit);\n"
+                         "end entity;\n"
+                         "architecture a of e is\n"
+                         "  signal s : bit;\n"
+                         "begin\n"
+                         "  s <= o;\n"
+                         "end architecture;\n",
+                         "work", Standard::Vhdl1993));
+    EXPECT_FALSE(analyse("package p is\n"
+                         "  function \"*\"(lhs, rhs : in bit) return bit;\n"
+                         "end package;\n"
+                         "package body p is\n"
+                         "  function \"*\"(lhs : in bit; rhs : in bit) return bit is\n"
+                         "  begin\n"
+                         "    return lhs;\n"
+                         "  end function;\n"
+                         "end package body;\n"));
+
+    std::string notes;
+    for (const Diagnostic& diagnostic : consumer.received) {
+        for (const enzan::DiagnosticNote& note : diagnostic.notes) notes += note.message + '\n';
+    }
+    EXPECT_NE(notes.find("outputs can be read with --std 2008"), std::string::npos) << notes;
+    EXPECT_NE(notes.find("RHS appears first in identifier list"), std::string::npos) << notes;
+    EXPECT_EQ(notes.find("--std="), std::string::npos) << notes;
+    EXPECT_EQ(notes.find("--relaxed"), std::string::npos) << notes;
 }
 
 /// Leaves a file behind when it is destroyed, as any of Enzan's own static objects might act on the
@@ -306,15 +390,16 @@ TEST_F(VhdlAnalysisTest, TellsADesignNamingVitalThatItIsOutOfScope) {
     EXPECT_EQ(transcript().find("not found in library"), std::string::npos) << transcript();
 }
 
-TEST_F(VhdlAnalysisTest, ReportsAFatalErrorOnce) {
+TEST_F(VhdlAnalysisTest, ReportsAMissingLibraryOnce) {
+    // NVC reports it at the library clause and again, as the fatal error that stops it, where
+    // the use clause needs it.
     EXPECT_FALSE(analyse("library nonesuch;\n"
                          "use nonesuch.things.all;\n"
                          "entity e is\n"
                          "end entity;\n"));
 
-    EXPECT_EQ(
-        std::ranges::count(consumer.received, DiagCode::VhdlAnalysisStopped, &Diagnostic::code), 1)
-        << transcript();
+    EXPECT_EQ(consumer.received.size(), 1U) << transcript();
+    EXPECT_EQ(first(DiagCode::VhdlAnalysisStopped), nullptr) << transcript();
 }
 
 TEST_F(VhdlAnalysisTest, StartsEachAnalysisAfresh) {

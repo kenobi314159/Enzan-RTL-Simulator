@@ -63,9 +63,7 @@ bool appendLeaves(const eir::ModuleDefinition& definition, std::uint32_t typeInd
     case eir::VhdlType::Kind::Physical:
         refusal = std::format("the physical type {} has no SystemVerilog counterpart", type.name);
         return false;
-    case eir::VhdlType::Kind::Floating:
-        refusal = "a real has no type in the SystemVerilog frontend yet";
-        return false;
+    case eir::VhdlType::Kind::Floating: refusal = "it holds a real"; return false;
     case eir::VhdlType::Kind::Array: {
         if (type.element >= definition.vhdlTypes.size()) {
             refusal = "its element type is not known";
@@ -90,7 +88,7 @@ bool appendLeaves(const eir::ModuleDefinition& definition, std::uint32_t typeInd
         }
         return true;
     }
-    refusal = "its VHDL type is not one Enzan knows";
+    refusal = "its VHDL type has no SystemVerilog counterpart";
     return false;
 }
 
@@ -102,7 +100,7 @@ std::optional<std::vector<Leaf>> leavesOf(const eir::ModuleDefinition& definitio
     if (object.vhdlType == eir::VhdlType::None) {
         // With no type to say otherwise, the object's encoding is what all of it holds.
         if (object.encoding == Encoding::Real) {
-            refusal = "a real has no type in the SystemVerilog frontend yet";
+            refusal = "it holds a real";
             return std::nullopt;
         }
         leaves.push_back(

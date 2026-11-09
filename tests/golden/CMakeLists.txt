@@ -23,6 +23,9 @@
 # states its own time scale, when it runs in the unit the design asks for.
 #
 # EXTRA_TOPS names top levels beside `tb`, which Icarus Verilog finds for itself.
+#
+# The options a case runs with are left in `enzan_golden_options_<name>`, so that the waveform
+# checks below run it as it runs here.
 
 # A failure line, anchored to the start of one.
 #
@@ -55,6 +58,7 @@ function(enzan_add_golden_test name)
     list(APPEND unit --top ${top})
   endforeach()
   string(JOIN " " unit_string ${unit})
+  set(enzan_golden_options_${name} "${unit}" PARENT_SCOPE)
 
   if(arg_DIR_WITH_MAKE)
     # Its libraries go into the build tree, cleaned first: beside the sources they would be left
@@ -176,6 +180,13 @@ enzan_add_golden_test(module_path_bits NO_DIFFERENTIAL OWN_TIME_SCALES)
 # Reals as AMD's clock managers compute with them: arithmetic, conversions, the bits of a double,
 # the time in fractions of a unit, a clock whose half period is a real variable's, and formatting.
 enzan_add_golden_test(reals OWN_TIME_SCALES)
+
+# Unpacked arrays of reals, element by element, as Altera's PLL models use them.
+enzan_add_golden_test(real_arrays OWN_TIME_SCALES)
+
+# Unpacked arrays and structs of reals as wholes: initialised, copied and compared, each real as a
+# real. No free simulator runs these, so the case checks itself against the standard.
+enzan_add_golden_test(real_aggregates NO_DIFFERENTIAL OWN_TIME_SCALES)
 
 # Procedural `assign` and `force`: a flip-flop held by its reset, a force over an assign, nets
 # released back to their drivers, a variable that keeps its forced value.
@@ -328,20 +339,22 @@ add_test(NAME golden.runtime_error_status
 #
 # A waveform has to open in GTKWave. A viewer needs a display and cannot run in CI, so the
 # properties a viewer relies on are checked instead — balanced scopes, declared identifiers,
-# widths that match their declaration, monotonic time. That is both automatable and stricter than
-# "it opened without complaining".
+# widths that match their declaration, reals written as numbers, monotonic time. That is both
+# automatable and stricter than "it opened without complaining".
 #
 # `router` is checked as well as counter and fifo because it is the only one with nested scopes
 # and repeated instances, which is where a writer's scope nesting and its aliasing of collapsed
-# ports actually get exercised.
+# ports actually get exercised. `reals` and `real_aggregates` hold reals, which a waveform writes
+# as numbers, the second beside structs that hold doubles among their bits.
+set(ENZAN_GOLDEN_WAVEFORM_CASES counter fifo router reals real_aggregates)
 find_package(Python3 COMPONENTS Interpreter QUIET)
 if(Python3_Interpreter_FOUND)
-  foreach(case IN ITEMS counter fifo router)
+  foreach(case IN LISTS ENZAN_GOLDEN_WAVEFORM_CASES)
     add_test(
       NAME golden.${case}.vcd
       COMMAND "${CMAKE_CURRENT_SOURCE_DIR}/run-vcd-check.sh" $<TARGET_FILE:enzan>
               "${CMAKE_CURRENT_SOURCE_DIR}/check-vcd.py"
-              "${CMAKE_CURRENT_SOURCE_DIR}/sv/${case}.sv" tb)
+              "${CMAKE_CURRENT_SOURCE_DIR}/sv/${case}.sv" tb ${enzan_golden_options_${case}})
     set_tests_properties(golden.${case}.vcd PROPERTIES TIMEOUT 60)
   endforeach()
 else()
@@ -356,12 +369,12 @@ find_program(ENZAN_FST2VCD fst2vcd)
 if(Python3_Interpreter_FOUND AND ENZAN_FST2VCD)
   message(STATUS "FST output will be checked against ${ENZAN_FST2VCD}")
 
-  foreach(case IN ITEMS counter fifo router)
+  foreach(case IN LISTS ENZAN_GOLDEN_WAVEFORM_CASES)
     add_test(
       NAME golden.${case}.fst
       COMMAND "${CMAKE_CURRENT_SOURCE_DIR}/run-fst-check.sh" $<TARGET_FILE:enzan>
               "${ENZAN_FST2VCD}" "${CMAKE_CURRENT_SOURCE_DIR}/check-vcd.py"
-              "${CMAKE_CURRENT_SOURCE_DIR}/sv/${case}.sv" tb)
+              "${CMAKE_CURRENT_SOURCE_DIR}/sv/${case}.sv" tb ${enzan_golden_options_${case}})
     set_tests_properties(golden.${case}.fst PROPERTIES TIMEOUT 60)
   endforeach()
 else()

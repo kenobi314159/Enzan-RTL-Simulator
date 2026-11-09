@@ -132,6 +132,11 @@ ThemeColor highlightColor(int slot) noexcept {
     return static_cast<ThemeColor>(static_cast<int>(ThemeColor::WaveHighlight1) + slot - 1);
 }
 
+ThemeColor terminalColor(int index) noexcept {
+    ENZAN_ASSERT(index >= 0 && index < TerminalColors, "no such terminal colour");
+    return static_cast<ThemeColor>(static_cast<int>(ThemeColor::TranscriptTerminalBlack) + index);
+}
+
 Theme::Theme() {
     colors.fill(QColor());
 }

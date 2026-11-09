@@ -2087,7 +2087,8 @@ TEST_F(FrontendTest, ReportsAnAssignmentOfOneEventToAnother) {
 }
 
 TEST_F(FrontendTest, ARealIsADouble) {
-    // `real`, `realtime` and `shortreal` alike, the last without its reduced precision.
+    // `real`, `realtime` and `shortreal` alike, the last without its reduced precision, each
+    // encoded as a real so that a waveform shows the number.
     const std::unique_ptr<Design> design = analyse(R"(
         module m;
             real r = 1.5;
@@ -2103,6 +2104,7 @@ TEST_F(FrontendTest, ARealIsADouble) {
     for (const std::string_view name : {"r", "t", "s"}) {
         const std::uint32_t object = require(found->findObject(name), name);
         EXPECT_TRUE(found->objects[object].type.isReal()) << name;
+        EXPECT_EQ(found->objects[object].encoding, enzan::eir::Encoding::Real) << name;
     }
     EXPECT_TRUE(enzan::eir::verify(*design, engine)) << consumer.messages.front();
 }
@@ -2115,6 +2117,47 @@ TEST_F(FrontendTest, ReportsARealPortByName) {
                       "m"),
               nullptr);
     EXPECT_TRUE(reported("the real port 'level'"));
+}
+
+TEST_F(FrontendTest, ReportsAPortHoldingRealsByName) {
+    EXPECT_EQ(analyse(R"(
+        module m (input real levels [2]);
+        endmodule
+    )",
+                      "m"),
+              nullptr);
+    EXPECT_TRUE(reported("the port 'levels', which holds reals,"));
+}
+
+TEST_F(FrontendTest, AnArrayOrAStructOfRealsIsStoredFlatAsTheirDoubles) {
+    // Two-state, and marked, since VPI shows no real.
+    const std::unique_ptr<Design> design = analyse(R"(
+        module m;
+            real phases [4];
+            typedef struct { real x; int n; } point_t;
+            point_t point;
+            real alone;
+            int counts [4];
+        endmodule
+    )",
+                                                   "m");
+    ASSERT_NE(design, nullptr) << consumer.messages.front();
+    const ModuleDefinition* found = design->findModule("m");
+    ASSERT_NE(found, nullptr);
+
+    const enzan::eir::Object& phases = found->objects[require(found->findObject("phases"))];
+    EXPECT_EQ(phases.type.bitWidth(), 256U);
+    EXPECT_FALSE(phases.type.isFourState());
+    EXPECT_EQ(phases.elementWidth, 64U);
+    EXPECT_TRUE(phases.holdsReals);
+
+    const enzan::eir::Object& point = found->objects[require(found->findObject("point"))];
+    EXPECT_EQ(point.type.bitWidth(), 96U);
+    EXPECT_TRUE(point.holdsReals);
+
+    EXPECT_FALSE(found->objects[require(found->findObject("alone"))].holdsReals);
+    EXPECT_FALSE(found->objects[require(found->findObject("counts"))].holdsReals);
+    EXPECT_TRUE(enzan::eir::verify(*design, engine)) << consumer.messages.front();
 }
 
 TEST_F(FrontendTest, AUserDefinedPrimitiveIsAContinuousAssignmentByItsTable) {

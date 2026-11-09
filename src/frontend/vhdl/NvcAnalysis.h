@@ -5,6 +5,7 @@
 #include "frontend/vhdl/VhdlFrontend.h"
 
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace enzan {
@@ -26,6 +27,15 @@ public:
 
     virtual void deliver(const Diagnostic& diagnostic) = 0;
 };
+
+/// The notes that tell the user how to give the library `name`, which their design uses and
+/// `options` lacks: how to name its directory, and the libraries they did give.
+[[nodiscard]] std::vector<std::string> missingLibraryNotes(std::string_view name,
+                                                           const UnitOptions& options);
+
+/// `name` as a VHDL source writes it, NVC having put it in upper case: in lower case, unless it
+/// holds an extended identifier, whose case is its own.
+[[nodiscard]] std::string sourceCase(std::string_view name);
 
 /// Runs NVC's analysis over `options.sources` in this process, and returns how many errors it
 /// reported.

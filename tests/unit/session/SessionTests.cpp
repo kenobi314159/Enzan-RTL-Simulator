@@ -738,6 +738,29 @@ TEST_F(SessionTest, AVcdIsWrittenAndFinished) {
     EXPECT_NE(text.find("#100"), std::string::npos) << text;
 }
 
+TEST_F(SessionTest, ASystemVerilogRealIsWrittenToAVcdAsTheNumberItIs) {
+    // As VCD's own `real`, not as a 64-bit wire of the double's bits.
+    ASSERT_TRUE(analyse("level.sv", R"(
+        module tb;
+            real level = 2.5;
+            initial #5 level = -0.125;
+        endmodule
+    )")) << firstMessage();
+    ASSERT_TRUE(session.elaborate("tb")) << firstMessage();
+
+    const std::filesystem::path target = workspace / "out.vcd";
+    ASSERT_TRUE(session.openVcd(target)) << firstMessage();
+    ASSERT_EQ(session.run(std::nullopt), RunStatus::Quiescent);
+    session.closeWaveforms();
+
+    std::ifstream file(target);
+    const std::string text((std::istreambuf_iterator<char>(file)),
+                           std::istreambuf_iterator<char>());
+    EXPECT_NE(text.find("$var real 64 ! level $end"), std::string::npos) << text;
+    EXPECT_NE(text.find("r2.5 !"), std::string::npos) << text;
+    EXPECT_NE(text.find("r-0.125 !"), std::string::npos) << text;
+}
+
 TEST_F(SessionTest, AWaveformFileNeedsASimulation) {
     EXPECT_FALSE(session.openVcd(workspace / "out.vcd"));
     EXPECT_TRUE(reported(DiagCode::NoSimulation));

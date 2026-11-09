@@ -137,8 +137,10 @@ Sources:
   -D, --define <NAME[=V]> Define a preprocessor macro. +define+ is also accepted.
   -I, --incdir <dir>      Add a directory to the `include search path. +incdir+
                           is also accepted.
-  -G <NAME=VALUE>         Set a parameter of the top level, overriding its
-                          default. -GNAME=VALUE is also accepted.
+  -G <NAME=VALUE>         Set a parameter or generic of the top level,
+                          overriding its default. -GNAME=VALUE is also accepted.
+                          A VHDL generic's value is a literal of its type:
+                          -GW=8, -GMODE=fast, -GBIT='1', -GT=10ns.
 
 Libraries:
       --out-lib <dir>     The library analysis is written into, created when it
@@ -193,11 +195,11 @@ Simulation:
 
 Graphical front end:
       --gui               Hand the elaborated design to a window rather than
-                          running here. Closing the window ends this kernel.
-      --gui --attach <s>  Attach to a kernel already listening on socket s.
-                          Closing that window leaves the kernel running.
-      --listen <socket>   Elaborate and wait for a front end without starting
-                          one, so the kernel outlives whatever attaches.
+                          running here. Closing the window ends the simulation.
+      --gui --attach <s>  Attach to a simulation already listening on socket s.
+                          Closing that window leaves the simulation running.
+      --listen <socket>   Elaborate and wait for a window without starting
+                          one, so the simulation outlives whatever attaches.
       --wave-list <file>  Open the wave window with this signal list in it.
                           The window's File menu saves one.
 
@@ -373,9 +375,8 @@ ParseOutcome parseCommandLine(std::span<char*> arguments, Invocation& invocation
             const std::string name(text.substr(0, equals));
             const auto [at, inserted] = overrides.emplace(name, text.substr(equals + 1));
             if (!inserted && at->second != text.substr(equals + 1)) {
-                std::cerr << "enzan: '-G' sets the parameter '" << name << "' twice, to '"
-                          << at->second << "' and to '" << text.substr(equals + 1)
-                          << "'; it takes one value\n";
+                std::cerr << "enzan: '-G' sets '" << name << "' twice, to '" << at->second
+                          << "' and to '" << text.substr(equals + 1) << "'; it takes one value\n";
                 return false;
             }
         }
@@ -622,7 +623,8 @@ ParseOutcome parseCommandLine(std::span<char*> arguments, Invocation& invocation
             invocation.vhpiApplications.emplace_back(value);
             continue;
 #else
-            std::cerr << "enzan: '--vhpi' needs the VHDL frontend, which this build leaves out\n";
+            std::cerr << "enzan: '--vhpi' needs VHDL, and this build of Enzan was configured with "
+                         "-DENZAN_ENABLE_VHDL=OFF\n";
             return ParseOutcome::BadUsage;
 #endif
         }
@@ -1084,8 +1086,8 @@ bool analyseOnly(const Invocation& invocation, enzan::session::Session& session,
     return analysed;
 }
 
-bool prepare(const Invocation& invocation, enzan::session::Session& session,
-             enzan::SourceManager& sources, enzan::DiagnosticEngine& diagnostics) {
+ExitStatus prepare(const Invocation& invocation, enzan::session::Session& session,
+                   enzan::SourceManager& sources, enzan::DiagnosticEngine& diagnostics) {
     // What only the kernel reads, set whether or not this run analyses anything: a run from
     // libraries alone skips analysis, and a seed or a delta limit given to it would otherwise be
     // dropped without a word.
@@ -1096,23 +1098,35 @@ bool prepare(const Invocation& invocation, enzan::session::Session& session,
     // A run given nothing but libraries has no sources of its own to analyse, and elaboration
     // then works from what the libraries hold.
     const bool hasSources = !invocation.files.empty() || !invocation.fileLists.empty();
-    if (hasSources && !analyseOnly(invocation, session, sources, diagnostics)) return false;
-    if (!hasSources && !openLibraries(invocation, session)) return false;
+    if (hasSources && !analyseOnly(invocation, session, sources, diagnostics))
+        return ExitStatus::AnalysisFailed;
+    if (!hasSources && !openLibraries(invocation, session)) return ExitStatus::AnalysisFailed;
+
+    // A parameter override applies while SystemVerilog is analysed, and a run from libraries
+    // alone analyses none of it.
+    if (!hasSources && !session.hasVhdlLibraries() && !invocation.parameters.empty()) {
+        std::cerr << "enzan: '-G' applies while sources are analysed, and this analyses none; "
+                     "give it to the analysis that stores the top level\n";
+        return ExitStatus::Usage;
+    }
 
     // A VHDL design is translated for the run that needs it, so a run given only libraries
-    // holding VHDL translates its top from them.
+    // holding VHDL translates its top from them, with the generics `-G` sets.
     if (!hasSources && session.hasVhdlLibraries()) {
         enzan::session::Session::AnalysisRequest request;
-        if (!collectSources(invocation, sources, diagnostics, request)) return false;
-        if (!session.analyse(request)) return false;
+        if (!collectSources(invocation, sources, diagnostics, request))
+            return ExitStatus::AnalysisFailed;
+        if (!session.analyse(request)) return ExitStatus::AnalysisFailed;
     }
 
     if (!invocation.waveformScope.empty() && !session.addWaveformScope(invocation.waveformScope))
-        return false;
+        return ExitStatus::AnalysisFailed;
     if (invocation.waveformWidthLimit.has_value())
         session.setWaveformWidthLimit(*invocation.waveformWidthLimit);
 
-    return session.elaborate(std::span<const std::string>(invocation.topModules));
+    return session.elaborate(std::span<const std::string>(invocation.topModules))
+               ? ExitStatus::Success
+               : ExitStatus::AnalysisFailed;
 }
 
 /// Serves an elaborated session to a graphical front end instead of running it here.
@@ -1241,7 +1255,9 @@ ExitStatus simulate(const Invocation& invocation, enzan::SourceManager& sources,
             return ExitStatus::AnalysisFailed;
     }
 
-    if (!prepare(invocation, session, sources, diagnostics)) return ExitStatus::AnalysisFailed;
+    if (const ExitStatus prepared = prepare(invocation, session, sources, diagnostics);
+        prepared != ExitStatus::Success)
+        return prepared;
 
     // Opened before serving as well as before running: a served session records into the live
     // database *and* into any writer that was asked for, so that someone debugging in a window
@@ -1442,8 +1458,8 @@ int main(int argc, char** argv) {
     // attach *to*, and silently ignoring it would leave a user watching a second simulation
     // start while they waited to be shown the one they meant.
     if (!invocation.attachPath.empty() && !invocation.useGui) {
-        std::cerr << "enzan: '--attach' needs '--gui'; it is a window that attaches to a "
-                     "running kernel, and a kernel has nothing to attach to\n";
+        std::cerr << "enzan: '--attach' needs '--gui'; it attaches a window to a running "
+                     "simulation\n";
         return static_cast<int>(ExitStatus::Usage);
     }
 
@@ -1470,14 +1486,14 @@ int main(int argc, char** argv) {
         return static_cast<int>(ExitStatus::Usage);
     }
 
-    // A macro, an include directory and a parameter override apply while sources are analysed. A
-    // run from libraries alone analyses nothing, so it would run what the libraries hold as if
-    // the option had been taken.
+    // A macro and an include directory apply while sources are analysed. A run from libraries
+    // alone analyses nothing, so it would run what the libraries hold as if the option had been
+    // taken. So would a parameter override, unless the libraries hold VHDL, which a run
+    // translates for its generics; `prepare` says so once the libraries are open.
     if (invocation.files.empty() && invocation.fileLists.empty()) {
         std::vector<std::string_view> analysisOptions;
         if (!invocation.defines.empty()) analysisOptions.emplace_back("'-D'");
         if (!invocation.includeDirectories.empty()) analysisOptions.emplace_back("'-I'");
-        if (!invocation.parameters.empty()) analysisOptions.emplace_back("'-G'");
         if (!invocation.depfilePath.empty()) analysisOptions.emplace_back("'--depfile'");
         if (!analysisOptions.empty()) {
             std::cerr << "enzan: ";
@@ -1508,9 +1524,8 @@ int main(int argc, char** argv) {
     }
 
     if (invocation.useGui && !invocation.listenPath.empty()) {
-        std::cerr << "enzan: '--listen' cannot be combined with '--gui'; --gui starts a window "
-                     "on a socket of its own, and --listen is for a kernel that outlives "
-                     "whatever attaches to it\n";
+        std::cerr << "enzan: '--listen' cannot be combined with '--gui'; --gui opens a window of "
+                     "its own, and --listen waits for one to attach with --gui --attach\n";
         return static_cast<int>(ExitStatus::Usage);
     }
 
@@ -1519,8 +1534,8 @@ int main(int argc, char** argv) {
     // that this combination is not the one to reach for.
     if (!invocation.listenPath.empty()) {
         if (invocation.runUntil.has_value()) {
-            std::cerr << "enzan: '--run' and '--listen' cannot be combined; a served session "
-                         "is run from the attached client\n";
+            std::cerr << "enzan: '--run' and '--listen' cannot be combined; a simulation that "
+                         "listens is run from the window that attaches to it\n";
             return static_cast<int>(ExitStatus::Usage);
         }
     }
@@ -1549,18 +1564,16 @@ int main(int argc, char** argv) {
 
     if (invocation.command == Command::Elaborate) {
         enzan::session::Session session(sources, diagnostics);
-        if (!prepare(invocation, session, sources, diagnostics))
-            return static_cast<int>(ExitStatus::AnalysisFailed);
-        return static_cast<int>(ExitStatus::Success);
+        return static_cast<int>(prepare(invocation, session, sources, diagnostics));
     }
 
     return static_cast<int>(simulate(invocation, sources, diagnostics));
 #else
     // Building without the frontend is a legitimate configuration — it is what the CI build
     // matrix uses — so it must fail with the reason rather than with a link error.
-    diagnostics.report(enzan::DiagCode::NotYetImplemented, enzan::SourceLocation(),
-                       "simulation in a build configured with -DENZAN_ENABLE_SYSTEMVERILOG=OFF "
-                       "and -DENZAN_ENABLE_VHDL=OFF");
+    diagnostics.report(enzan::DiagCode::BuildWithout, enzan::SourceLocation(),
+                       "-DENZAN_ENABLE_SYSTEMVERILOG=OFF and -DENZAN_ENABLE_VHDL=OFF",
+                       "analyse a design");
     return static_cast<int>(ExitStatus::AnalysisFailed);
 #endif
 }

@@ -371,6 +371,7 @@ void writeModule(Writer& out, NameTable& names, const ModuleDefinition& definiti
         }
         out.u32(object.elementWidth);
         out.boolean(object.elementSigned);
+        out.boolean(object.holdsReals);
         out.u32(static_cast<std::uint32_t>(object.packedDimensions.size()));
         for (const ArrayDimension& dimension : object.packedDimensions) {
             out.u32(static_cast<std::uint32_t>(dimension.left));
@@ -708,6 +709,7 @@ ModuleDefinition readModule(Reader& in, BufferResolver& buffers) {
         }
         object.elementWidth = in.u32();
         object.elementSigned = in.boolean();
+        object.holdsReals = in.boolean();
         object.packedDimensions.resize(in.count());
         for (ArrayDimension& dimension : object.packedDimensions) {
             dimension.left = static_cast<std::int32_t>(in.u32());

@@ -87,7 +87,8 @@ struct UnitOptions {
 /// does not exist is one — so running it in Enzan's own process would make a second analysis
 /// see the first one's libraries, and a user's mistake end the simulator. The child reports each
 /// of NVC's diagnostics to `diagnostics` as if it had run here, in the order NVC gave them; a
-/// fatal error stops the child and is reported as ENZ2004, carrying NVC's own message.
+/// fatal error stops the child and is reported as ENZ2004, carrying NVC's own message, unless it
+/// is a library the design uses and the run was not given (ENZ2009, ENZ2010).
 ///
 /// Returns true when every source analysed without error and the library was written.
 bool analyseUnits(const UnitOptions& options, const SourceManager& sources,
@@ -101,6 +102,11 @@ struct DesignOptions {
     /// The top entity, in any case. Empty means the one entity the sources declare that none of
     /// their architectures instantiates; with several, none is translated and they are reported.
     std::string top;
+
+    /// The top's generics `-G` sets, each `NAME=VALUE`: the name in any case, and the value as
+    /// NVC's and GHDL's `-g` read one of the generic's type. They apply where the design is
+    /// translated rather than where it is analysed, so they are no part of a library's key.
+    std::vector<std::string> generics;
 
     /// The unit EIR's delays count, as a power of ten of a second.
     std::int8_t timeUnitExponent = -15;

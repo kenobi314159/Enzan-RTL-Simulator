@@ -193,6 +193,16 @@ TEST(ThemeTests, EveryShippedThemeIsReadable) {
             EXPECT_GE(contrast(theme.color(ThemeColor::WaveHighlightText), highlight), Text)
                 << name.toStdString() << ": a name on highlight " << slot;
         }
+        // A program's colours are text, whichever of the sixteen it asks for.
+        for (int index = 0; index < enzan::gui::TerminalColors; ++index) {
+            const ThemeColor colour = enzan::gui::terminalColor(index);
+            for (const ThemeColor ground :
+                 {ThemeColor::PanelBackground, ThemeColor::TranscriptBackground}) {
+                EXPECT_GE(contrast(theme.color(colour), theme.color(ground)), Text)
+                    << name.toStdString() << ": " << enzan::gui::themeKey(colour) << " on "
+                    << enzan::gui::themeKey(ground);
+            }
+        }
     }
 }
 

@@ -37,6 +37,16 @@ constexpr int HighlightSlots = 5;
 /// requires the five to stay adjacent and in order.
 [[nodiscard]] ThemeColor highlightColor(int slot) noexcept;
 
+/// How many colours a terminal's colour codes name: eight, and eight bright ones.
+constexpr int TerminalColors = 16;
+
+/// Returns the theme's colour for terminal colour `index`, 0 through `TerminalColors` - 1 in the
+/// codes' order, black to white and then the bright ones.
+///
+/// Reached by adding to the first, which is why the catalogue requires the sixteen to stay
+/// adjacent and in order.
+[[nodiscard]] ThemeColor terminalColor(int index) noexcept;
+
 /// The parts of the window a theme may give a font size of their own.
 enum class ThemeFont : std::uint8_t {
     /// Everything not named below: the menus, the docks, the Structure and Objects windows.

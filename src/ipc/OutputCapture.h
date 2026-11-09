@@ -2,7 +2,7 @@
 
 #pragma once
 
-#include <cstdint>
+#include <cstddef>
 #include <memory>
 #include <mutex>
 #include <streambuf>
@@ -24,9 +24,8 @@ namespace enzan::ipc {
 /// **An application sees the kind of output it had.** When standard output is a terminal it is
 /// replaced by a pseudo-terminal rather than a pipe, because a program writing to a pipe buffers
 /// in large blocks — Python does — and its lines would reach the window in bursts long after the
-/// events they describe; a program that colours its output for a terminal goes on doing so.
-/// The colour codes are stripped from what the transcript is given and kept in what the
-/// terminal is.
+/// events they describe; a program that colours its output for a terminal goes on doing so, and
+/// the transcript is given the colour codes as the terminal is, to show them as it can.
 ///
 /// **Standard error is captured with standard output only when the two are the same file**, as
 /// they are on a terminal. Merging two destinations the user had kept apart would put errors in
@@ -64,13 +63,13 @@ public:
     /// Readable whenever there is captured text waiting, for a caller that polls.
     [[nodiscard]] int wakeDescriptor() const noexcept { return wakeRead; }
 
-    /// Removes and returns everything captured since the last call, without colour codes.
+    /// Removes and returns everything captured since the last call.
     std::string take();
 
 private:
     void drain();
 
-    /// Copies what one read returned to the terminal and, stripped, to `pending`.
+    /// Copies what one read returned to the terminal and to `pending`.
     void deliver(const char* bytes, std::size_t count);
 
     bool capturing = false;
@@ -93,10 +92,6 @@ private:
     std::thread reader;
     std::mutex lock;
     std::string pending;
-
-    /// Where the thread is in a colour code that may continue into the next read.
-    enum class Escape : std::uint8_t { None, Started, Sequence };
-    Escape escape = Escape::None;
 
     /// What `std::cerr` wrote to before capturing, restored by `stop`.
     std::streambuf* savedErrorBuffer = nullptr;

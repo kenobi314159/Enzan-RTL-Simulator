@@ -5,11 +5,15 @@
 # signal did (compare-ghdl.py says how).
 #
 # Usage: run-ghdl-differential.sh <enzan> <ghdl> <compare-ghdl.py> <source.vhd> <top>
+#                                 [<NAME=VALUE>...]
+#
+# Each NAME=VALUE sets a generic of the top, with -G for Enzan and -g for GHDL.
 
 set -euo pipefail
 
-if [[ $# -ne 5 ]]; then
-    printf 'usage: %s <enzan> <ghdl> <compare-ghdl.py> <source.vhd> <top>\n' "$0" >&2
+if [[ $# -lt 5 ]]; then
+    printf 'usage: %s <enzan> <ghdl> <compare-ghdl.py> <source.vhd> <top> [<NAME=VALUE>...]\n' \
+        "$0" >&2
     exit 2
 fi
 
@@ -18,6 +22,13 @@ readonly ghdl="$2"
 readonly compare="$3"
 readonly source_file="$4"
 readonly top="$5"
+shift 5
+enzan_generics=()
+ghdl_generics=()
+for generic in "$@"; do
+    enzan_generics+=("-G$generic")
+    ghdl_generics+=("-g$generic")
+done
 
 workdir="$(mktemp -d)"
 trap 'rm -rf "$workdir"' EXIT
@@ -26,8 +37,8 @@ trap 'rm -rf "$workdir"' EXIT
 # Each runs in the scratch directory, where a file the design writes lands.
 (
     cd "$workdir"
-    "$enzan" --top "$top" --vcd "$workdir/enzan.vcd" "$source_file" >"$workdir/enzan.out" \
-        2>"$workdir/enzan.err"
+    "$enzan" --top "$top" ${enzan_generics[@]+"${enzan_generics[@]}"} --vcd "$workdir/enzan.vcd" \
+        "$source_file" >"$workdir/enzan.out" 2>"$workdir/enzan.err"
 ) || true
 
 (
@@ -40,7 +51,7 @@ trap 'rm -rf "$workdir"' EXIT
 }
 (
     cd "$workdir"
-    "$ghdl" -r --std=08 "$top" --vcd=ghdl.vcd
+    "$ghdl" -r --std=08 "$top" ${ghdl_generics[@]+"${ghdl_generics[@]}"} --vcd=ghdl.vcd
 ) >"$workdir/ghdl.out" 2>&1 || true
 
 "$compare" --enzan-vcd "$workdir/enzan.vcd" --ghdl-vcd "$workdir/ghdl.vcd" \

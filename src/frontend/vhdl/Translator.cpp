@@ -13,6 +13,7 @@
 #include <bit>
 #include <cctype>
 #include <charconv>
+#include <cstdlib>
 #include <deque>
 #include <format>
 #include <limits>
@@ -21,6 +22,7 @@
 #include <optional>
 #include <ranges>
 #include <set>
+#include <span>
 #include <string>
 #include <string_view>
 #include <system_error>
@@ -186,6 +188,15 @@ bool sameName(std::string_view left, std::string_view right) {
         return std::tolower(static_cast<unsigned char>(a))
                == std::tolower(static_cast<unsigned char>(b));
     });
+}
+
+/// `text` in lower case, as a source most often writes what NVC prints in upper case.
+std::string lowered(std::string_view text) {
+    std::string lower(text);
+    std::ranges::transform(lower, lower.begin(), [](char c) {
+        return static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    });
+    return lower;
 }
 
 /// `name`, a VHDL simple name as `simpleName` gives it, as SystemVerilog names what it names: an
@@ -510,17 +521,33 @@ public:
         : request(translated), locator(locate), engine(diagnostics) {}
 
     std::vector<eir::ModuleDefinition> run() {
-        for (tree_t top : request.onlyRequested ? std::vector<tree_t>() : tops()) {
+        // A `-G` naming no generic of a top level is reported, since a misspelt one otherwise
+        // changes nothing without a word; but only once the tops' generics have all been bound.
+        std::vector<bool> used(request.generics.size(), false);
+        bool allBound = true;
+        const std::vector<tree_t> chosen = request.onlyRequested ? std::vector<tree_t>() : tops();
+        for (tree_t top : chosen) {
             tree_t architecture = architectureOf(top);
             if (architecture == nullptr) {
                 engine.report(DiagCode::VhdlError, locate(top),
                               std::format("entity '{}' has no architecture to simulate",
                                           simpleName(tree_ident(top))));
+                allBound = false;
                 continue;
             }
-            std::optional<Folder> generics = bindGenerics(top, nullptr, Folder());
-            if (!generics) continue;
+            std::optional<Folder> generics = bindTopGenerics(top, used);
+            if (!generics) {
+                allBound = false;
+                continue;
+            }
             static_cast<void>(definitionFor(top, architecture, std::move(*generics)));
+        }
+        if (!chosen.empty() && allBound) {
+            for (std::size_t index = 0; index < used.size(); ++index) {
+                if (!used[index])
+                    engine.report(DiagCode::UnusedParameterOverride, SourceLocation(),
+                                  request.generics[index]);
+            }
         }
 
         // What SystemVerilog asks of the design: an entity it instantiates for its values, and the
@@ -556,8 +583,8 @@ public:
             }
             const std::optional<Folder::Range> bounds = driversRange(declaration, wanted.drivers);
             if (!bounds) {
-                unsupported(declaration, "a resolution function whose parameter's index does "
-                                         "not fold");
+                unsupported(declaration, "a resolution function whose parameter's index range "
+                                         "is not static");
                 continue;
             }
             const Shape shape{.bounds = {bounds}, .values = {std::nullopt}};
@@ -1062,25 +1089,25 @@ public:
             } else if (kind == T_REPORT) {
                 what = "report";
             }
-            return std::format("computing '{}' stopped at this {}, which the VHDL frontend does "
-                               "not run there yet",
+            return std::format("computing '{}' stopped at this {}, which cannot be computed "
+                               "before the simulation yet",
                                called, what);
         }
         case FoldStop::Reason::Declaration:
-            return std::format("computing '{}' stopped at this declaration, which the VHDL "
-                               "frontend does not run there yet",
+            return std::format("computing '{}' stopped at this declaration, which cannot be "
+                               "computed before the simulation yet",
                                called);
         case FoldStop::Reason::Value:
-            return std::format("computing '{}' stopped here, at a value the VHDL frontend could "
-                               "not compute",
+            return std::format("computing '{}' stopped here, at a value that could not be "
+                               "computed before the simulation",
                                called);
         case FoldStop::Reason::Assertion:
             return std::format("computing '{}' stopped at this assertion, which it could not show "
                                "to hold",
                                called);
         case FoldStop::Reason::VariableType:
-            return std::format("computing '{}' stopped at this variable, whose type the VHDL "
-                               "frontend does not hold there yet",
+            return std::format("computing '{}' stopped at this variable, whose type cannot be "
+                               "computed with before the simulation yet",
                                called);
         case FoldStop::Reason::TooLong:
             return std::format("computing '{}' ran a million statements without returning", called);
@@ -1092,8 +1119,8 @@ public:
         case FoldStop::Reason::NoBody:
             return std::format("the body of '{}' has not been analysed", called);
         case FoldStop::Reason::ParameterType:
-            return std::format("'{}' takes a parameter of a type the VHDL frontend does not hold "
-                               "there yet",
+            return std::format("'{}' takes a parameter of a type that cannot be computed with "
+                               "before the simulation yet",
                                called);
         case FoldStop::Reason::NoReturn:
             return std::format("'{}' ends without returning a value", called);
@@ -1439,6 +1466,15 @@ private:
                 positions.push_back(*position);
             }
         }
+        return bindPositions(bound, generic, positions);
+    }
+
+    /// Binds `generic`, of a one-dimensional array type, to the elements at `positions` of its
+    /// element type's values, left first; false when they do not fit its subtype.
+    static bool bindPositions(Folder& bound, tree_t generic,
+                              const std::vector<std::uint64_t>& positions) {
+        type_t type = tree_type(generic);
+        type_t element = type_elem(type);
 
         // Its subtype's bounds, or for an unconstrained type the literal's, from the left of its
         // index subtype in the direction it runs, as a string literal's are (IEEE 1076 section
@@ -1470,6 +1506,87 @@ private:
         }
         bound.bindComposite(generic, std::move(bits));
         return true;
+    }
+
+    /// What became of a value the command line gives a generic.
+    enum class Override : std::uint8_t { Bound, NotOfItsType, OutOfRange };
+
+    /// Binds `generic` to `text`, read as NVC's and GHDL's `-g` read a value of its type: an
+    /// integer, a real, a physical value with its unit, an enumeration literal, or the elements of
+    /// an array of characters, a string or a bit string, quoted or not.
+    static Override bindOverride(Folder& bound, tree_t generic, const std::string& text) {
+        type_t type = tree_type(generic);
+        parsed_value_t parsed{};
+        if (!parse_value(type, text.c_str(), &parsed)) return Override::NotOfItsType;
+
+        if (type_is_array(type)) {
+            const std::span<const std::uint8_t> elements(parsed.enums->values, parsed.enums->count);
+            const std::vector<std::uint64_t> positions(elements.begin(), elements.end());
+            std::free(parsed.enums); // NOLINT(cppcoreguidelines-no-malloc): NVC allocated it.
+            return dimension_of(type) == 1 && bindPositions(bound, generic, positions)
+                       ? Override::Bound
+                       : Override::NotOfItsType;
+        }
+
+        // Folded as the bits of the double, as the folder holds a real.
+        if (type_is_real(type)) {
+            bound.bind(generic, std::bit_cast<std::int64_t>(parsed.real));
+            return Override::Bound;
+        }
+
+        // An integer, a physical value in its primary unit, or an enumeration literal's position,
+        // checked against its subtype's range, which parse_value does not know.
+        if (const std::optional<Folder::Range> range = Folder().rangeOf(type)) {
+            if (parsed.integer < std::min(range->left, range->right)
+                || parsed.integer > std::max(range->left, range->right))
+                return Override::OutOfRange;
+        }
+        bound.bind(generic, parsed.integer);
+        return Override::Bound;
+    }
+
+    /// The values of a top level's generics: each one `-G` sets, by its name in any case, and each
+    /// other's default. `used` marks which of `request.generics` named one. Nothing, having
+    /// reported why, when one cannot be bound.
+    std::optional<Folder> bindTopGenerics(tree_t top, std::vector<bool>& used) {
+        Folder bound;
+        for (unsigned index = 0; index < tree_generics(top); ++index) {
+            tree_t generic = tree_generic(top, index);
+            const std::string name = simpleName(tree_ident(generic));
+            const auto given =
+                std::ranges::find_if(request.generics, [&name](std::string_view set) {
+                    return sameName(set.substr(0, set.find('=')), name);
+                });
+            if (given != request.generics.end()) {
+                used[static_cast<std::size_t>(given - request.generics.begin())] = true;
+                const std::string value = given->substr(given->find('=') + 1);
+                const std::string typeName = lowered(type_pp(tree_type(generic)));
+                switch (bindOverride(bound, generic, value)) {
+                case Override::Bound: continue;
+                case Override::NotOfItsType:
+                    engine.report(DiagCode::VhdlError, locate(generic),
+                                  std::format("-G {}: '{}' is not a value of the type {} of the "
+                                              "generic '{}'",
+                                              *given, value, typeName, name));
+                    return std::nullopt;
+                case Override::OutOfRange:
+                    engine.report(DiagCode::VhdlError, locate(generic),
+                                  std::format("-G {}: {} is outside the range of the type {} of "
+                                              "the generic '{}'",
+                                              *given, value, typeName, name));
+                    return std::nullopt;
+                }
+            }
+            if (!tree_has_value(generic)) {
+                engine.report(DiagCode::VhdlError, locate(generic),
+                              std::format("the generic '{}' of the top level '{}' has no default "
+                                          "value; give it one with -G {}=<value>",
+                                          name, simpleName(tree_ident(top)), name));
+                return std::nullopt;
+            }
+            if (!bindGeneric(bound, generic, tree_value(generic), bound)) return std::nullopt;
+        }
+        return bound;
     }
 
     /// The interface of the entity SystemVerilog names `name`, which it is checked against as a
@@ -2026,10 +2143,7 @@ void ArchitectureTranslator::declarations(tree_t container) {
         case T_FUNC_BODY:
         case T_PROC_BODY: break;
 
-        default:
-            unsupported(declaration,
-                        std::format("the declaration {}", tree_kind_str(tree_kind(declaration))));
-            break;
+        default: unsupported(declaration, "this " + kindName(tree_kind(declaration))); break;
         }
     }
 }
@@ -2051,10 +2165,7 @@ void ArchitectureTranslator::statements(tree_t container) {
         case T_FOR_GENERATE: forGenerate(statement); break;
         case T_BLOCK: block(statement); break;
 
-        default:
-            unsupported(statement, std::format("the concurrent statement {}",
-                                               tree_kind_str(tree_kind(statement))));
-            break;
+        default: unsupported(statement, "this " + statementName(tree_kind(statement))); break;
         }
     }
 }

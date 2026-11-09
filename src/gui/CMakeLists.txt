@@ -20,6 +20,7 @@ enzan_add_component(
           SignalList.cpp
           TclLibrary.cpp
           TclSyntax.cpp
+          TerminalDecoder.cpp
           Theme.cpp
           TimeAxis.cpp
           TranscriptView.cpp
@@ -36,6 +37,7 @@ enzan_add_component(
           SignalList.h
           TclLibrary.h
           TclSyntax.h
+          TerminalDecoder.h
           Theme.h
           ThemeColors.def
           TimeAxis.h

@@ -901,9 +901,13 @@ when it is one of the names above, so a source file called `run.sv` is still a s
   package's instance sits beside the top (5.1), the first the design's own. With none named,
   several candidates are refused rather than all taken, since a module nothing instantiates is as
   often one left over as one meant.
-- **A top level's parameters are set with `-G NAME=VALUE`**, or `-GNAME=VALUE`. slang applies an
-  override while analysing, so it is in a library entry's key. One that names no parameter is
-  reported, since a misspelt override is otherwise invisible.
+- **A top level's parameters and generics are set with `-G NAME=VALUE`**, or `-GNAME=VALUE`, the
+  value read in the top's language: a SystemVerilog expression, or a VHDL value as NVC's and
+  GHDL's `-g` read one, so that a makefile written for either passes the same text. slang applies
+  an override while analysing, so it is in a library entry's key; a VHDL generic is set where the
+  design is translated, so it is in no key, and a run from a library takes it. In a design of both
+  languages `-G` goes to the top's language, which `--top` has to name. One that names no
+  parameter or generic is reported, since a misspelt override is otherwise invisible.
 - **Random numbers are drawn from `--seed N`**, 0 by default (3.8). `$random` is IEEE 1364's
   reference generator, bit for bit, so a seed draws in Enzan what it draws elsewhere. `$urandom` and
   `$urandom_range` draw from a generator per process, derived from the seed and the process's name,
@@ -1208,6 +1212,11 @@ line buffering. Enzan's own diagnostics stay out of the capture, since they reac
 diagnostics. A thread that touches no simulation state drains the capture, because one callback can
 write more than a pseudo-terminal holds. A batch run captures nothing.
 
+**A program's colours are the theme's.** The kernel passes the codes that colour its output on a
+terminal on to the window as it captured them, and the window shows them in the theme's sixteen
+terminal colours, since every colour comes from the theme (10.5): a colour a code names otherwise,
+of the 256 or by its channels, is the one of the sixteen nearest it, and a background none.
+
 **A command is one action wherever it is offered**, with one name and one key in the menu bar, the
 toolbar and a pane's own menu. A pane's keys act only while the focus is in that pane. F5 runs and
 Shift+F5 stops; F1 lists every key, read from the actions themselves, and the mouse's gestures.
@@ -1282,6 +1291,10 @@ uniform whatever the source language.
   They are allocated in ranges by the emitting component: 1–999 driver and source handling, 1000s
   SystemVerilog frontend, 2000s VHDL, 3000s elaboration, 4000s codegen, 5000s runtime, 6000s
   session, 7000s waveform database, 8000s PLI, 9000s internal errors.
+- **A diagnostic speaks of the reader's design, not of Enzan.** It says what in their code or on
+  their command line is wrong, where, and what to write instead when a change would put it right.
+  How Enzan works inside — its frontends, its translation, NVC or slang — is no reason a message
+  gives: a refusal says what is not supported, and an internal error that it is a bug to report.
 - **A diagnostic whose default severity is `Fatal` MUST NOT be downgradable or suppressible**:
   turning one into a warning converts a clean stop into wrong results (1.2).
 - **A degenerate construct in code a constant condition rules out is a warning.** A parameter can
@@ -1909,8 +1922,7 @@ solver); save and restore; multiple-clock-domain tooling; UVM.
 a general heap, with `deallocate`; protected types and shared variables of them; generic packages
 and their instantiation; configurations; external names; and VUnit's simulator interface for Enzan,
 which VUnit chooses by name as cocotb chooses a makefile. They also need values whose length only
-the run knows, beyond the scratch of 4.1, and a VHDL top level's generics set from the command line,
-as `-G` sets a SystemVerilog one's parameters. They are done when VUnit's own suite and OSVVM's
+the run knows, beyond the scratch of 4.1. They are done when VUnit's own suite and OSVVM's
 regression each run with a recorded pass rate.
 
 ### Known gaps
@@ -1918,7 +1930,7 @@ regression each run with a recorded pass rate.
 Left out of the milestones above, and refused by name where a design uses them rather than
 mistranslated:
 
-- SystemVerilog `string` variables, real and string ports, arrays and structs of reals, a real
+- SystemVerilog `string` variables, real and string ports, and ports holding reals, a real
   exponent, events as values, dynamic and associative arrays, queues, classes, unpacked unions,
   `fork`, `highz` strengths, resistive and bidirectional switches, the module paths 5.1 refuses, net
   aliases, and a procedural `assign` or `force` of part of an object.
@@ -1929,12 +1941,12 @@ mistranslated:
   run, and one held across a `wait`.
 - A port of a real, an enumeration other than `std_ulogic`, `bit` and `boolean`, or a physical type
   across the language boundary; a VHDL port of an unconstrained type instantiated from
-  SystemVerilog; storing a design of both languages in a library, and `-G` for one; a second top
-  level of VHDL.
+  SystemVerilog; storing a design of both languages in a library; a second top level of VHDL.
 - Altera's models of Cyclone V and later families, `altera_lnsim.sv`, which M7.2 holds to no
-  reference; among them `altera_pll`'s arrays of reals are refused.
-- In VPI, declared ranges (a vector reports `[width-1:0]`), integer atom types, part-select handles,
-  struct members, user system tasks, and the difference between the delay modes (9.4).
+  reference; among them `altera_pll`'s `string` arguments are refused.
+- In VPI, declared ranges (a vector reports `[width-1:0]`), integer atom types, reals and what
+  holds them, part-select handles, struct members, user system tasks, and the difference between
+  the delay modes (9.4).
 - The Processes and Source windows (10.2), and a per-bit change index (10.3).
 
 ---

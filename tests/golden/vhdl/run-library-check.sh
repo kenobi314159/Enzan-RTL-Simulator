@@ -171,6 +171,33 @@ one_shot=$("$enzan" --in-lib libs/ip --top tb tb.vhd 2>&1) \
     || fail "a one-shot run against libs/ip failed: $one_shot"
 grep -q 'PASS library' <<<"$one_shot" || fail "the one-shot run did not reach its check"
 
+# --- a run from a library sets its top's generics, which the library does not hold
+# ------------------------------------
+
+cat >gen_tb.vhd <<'EOF'
+entity gen_tb is
+    generic (CYCLES : integer);
+end entity;
+
+architecture test of gen_tb is
+begin
+    process begin
+        assert CYCLES = 3 report "CYCLES is " & integer'image(CYCLES) severity failure;
+        report "PASS generics";
+        wait;
+    end process;
+end architecture;
+EOF
+
+"$enzan" analyse --out-lib libs/tb gen_tb.vhd || fail "a testbench with a generic did not analyse"
+generics=$("$enzan" run --in-lib libs/tb -G CYCLES=3 gen_tb 2>&1) \
+    || fail "a run from a library setting its top's generic failed: $generics"
+grep -q 'PASS generics' <<<"$generics" || fail "-G did not reach the top run from a library"
+[[ $(status_of "$enzan" run --in-lib libs/tb -G CYCLES=4 gen_tb) -eq 3 ]] \
+    || fail "a second run from the library kept the first one's generic"
+[[ $(status_of "$enzan" analyse --out-lib libs/tb -G CYCLES=3 gen_tb.vhd) -eq 2 ]] \
+    || fail "-G given to an analysis that translates no top was not refused"
+
 # --- a source analysed already is not analysed again, and one edited is
 # ----------------------------
 

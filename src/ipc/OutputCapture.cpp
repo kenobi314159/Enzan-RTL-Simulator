@@ -190,7 +190,6 @@ bool OutputCapture::start(std::string& error) {
         savedErrorBuffer = std::cerr.rdbuf(errorBuffer.get());
     }
 
-    escape = Escape::None;
     capturing = true;
     reader = std::thread(&OutputCapture::drain, this);
     return true;
@@ -278,31 +277,12 @@ void OutputCapture::deliver(const char* bytes, std::size_t count) {
     // The terminal first, exactly as it was written.
     writeAll(originalOutput, bytes, count);
 
-    // Then the transcript, without the escape sequences that colour it on a terminal: a
-    // control sequence is an escape and a `[`, then parameters, then one final byte between
-    // `@` and `~`. Any other escape is dropped with the one character after it.
-    std::string text;
-    text.reserve(count);
-    for (std::size_t index = 0; index < count; ++index) {
-        const char character = bytes[index];
-        switch (escape) {
-        case Escape::None:
-            if (character == '\x1b')
-                escape = Escape::Started;
-            else
-                text.push_back(character);
-            break;
-        case Escape::Started: escape = character == '[' ? Escape::Sequence : Escape::None; break;
-        case Escape::Sequence:
-            if (character >= '@' && character <= '~') escape = Escape::None;
-            break;
-        }
-    }
-    if (text.empty()) return;
+    // Then the transcript, colour codes and all.
+    if (count == 0) return;
 
     {
         const std::scoped_lock guard(lock);
-        pending += text;
+        pending.append(bytes, count);
     }
     const char signal = 'w';
     writeAll(wakeWrite, &signal, 1);

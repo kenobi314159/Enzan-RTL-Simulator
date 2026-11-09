@@ -41,6 +41,26 @@ ENZAN_THEME_COLOR(TranscriptNote, "transcript.note")
 ENZAN_THEME_COLOR(TranscriptWarning, "transcript.warning")
 ENZAN_THEME_COLOR(TranscriptError, "transcript.error")
 
+// The sixteen colours a program's output names with a terminal's colour codes, in the codes'
+// order: 30 to 37, then the bright ones, 90 to 97. **These sixteen MUST stay adjacent and in
+// order**: `terminalColor` reaches them by adding the colour's number to the first.
+ENZAN_THEME_COLOR(TranscriptTerminalBlack, "transcript.terminal.black")
+ENZAN_THEME_COLOR(TranscriptTerminalRed, "transcript.terminal.red")
+ENZAN_THEME_COLOR(TranscriptTerminalGreen, "transcript.terminal.green")
+ENZAN_THEME_COLOR(TranscriptTerminalYellow, "transcript.terminal.yellow")
+ENZAN_THEME_COLOR(TranscriptTerminalBlue, "transcript.terminal.blue")
+ENZAN_THEME_COLOR(TranscriptTerminalMagenta, "transcript.terminal.magenta")
+ENZAN_THEME_COLOR(TranscriptTerminalCyan, "transcript.terminal.cyan")
+ENZAN_THEME_COLOR(TranscriptTerminalWhite, "transcript.terminal.white")
+ENZAN_THEME_COLOR(TranscriptTerminalBrightBlack, "transcript.terminal.bright.black")
+ENZAN_THEME_COLOR(TranscriptTerminalBrightRed, "transcript.terminal.bright.red")
+ENZAN_THEME_COLOR(TranscriptTerminalBrightGreen, "transcript.terminal.bright.green")
+ENZAN_THEME_COLOR(TranscriptTerminalBrightYellow, "transcript.terminal.bright.yellow")
+ENZAN_THEME_COLOR(TranscriptTerminalBrightBlue, "transcript.terminal.bright.blue")
+ENZAN_THEME_COLOR(TranscriptTerminalBrightMagenta, "transcript.terminal.bright.magenta")
+ENZAN_THEME_COLOR(TranscriptTerminalBrightCyan, "transcript.terminal.bright.cyan")
+ENZAN_THEME_COLOR(TranscriptTerminalBrightWhite, "transcript.terminal.bright.white")
+
 // --- Source window ---------------------------------------------------------
 
 ENZAN_THEME_COLOR(SourceBackground, "source.background")

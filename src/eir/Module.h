@@ -291,6 +291,10 @@ struct Object {
     /// is unsigned whatever its elements are, so this is the only record of it.
     bool elementSigned = false;
 
+    /// True for an unpacked array or struct with a real among its elements or fields, whose bits
+    /// are its doubles' where they lie. VPI, which shows no real, leaves it out.
+    bool holdsReals = false;
+
     /// A static variable of a function or task: one variable that every call of it shares, so
     /// that what one call leaves there the next reads (IEEE 1800 section 13.3.1), written by
     /// whichever process makes the call. A call inlined into a continuous assignment is no

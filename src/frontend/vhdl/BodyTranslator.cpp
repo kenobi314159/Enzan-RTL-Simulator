@@ -753,8 +753,7 @@ bool BodyTranslator::declare(tree_t declaration) {
     case T_PROC_BODY: return true;
 
     default:
-        return fail(declaration,
-                    std::string("a ") + tree_kind_str(tree_kind(declaration)) + " in a process");
+        return fail(declaration, withArticle(kindName(tree_kind(declaration))) + " in a process");
     }
 }
 
@@ -811,8 +810,7 @@ bool BodyTranslator::statement(tree_t statement) {
             if (!declare(tree_decl(statement, index))) return false;
         }
         return statements(statement);
-    default:
-        return fail(statement, std::string("the statement ") + tree_kind_str(tree_kind(statement)));
+    default: return fail(statement, "this " + statementName(tree_kind(statement)));
     }
 }
 
@@ -2761,15 +2759,13 @@ std::optional<BodyTranslator::Value> BodyTranslator::expression(tree_t expressio
             return constant(0, eir::Type::bits(64, false, false), type);
         fail(expression, "this literal");
         return std::nullopt;
-    default:
-        fail(expression, std::string("the expression ") + tree_kind_str(tree_kind(expression)));
-        return std::nullopt;
+    default: fail(expression, "this " + kindName(tree_kind(expression))); return std::nullopt;
     }
 }
 
 std::optional<BodyTranslator::Value> BodyTranslator::reference(tree_t expression) {
     if (!tree_has_ref(expression)) {
-        fail(expression, "a name NVC left unresolved");
+        fail(expression, "a name that names nothing here");
         return std::nullopt;
     }
     tree_t declaration = tree_ref(expression);
@@ -2819,7 +2815,10 @@ std::optional<BodyTranslator::Value> BodyTranslator::reference(tree_t expression
 
     default: break;
     }
-    fail(expression, std::string("a reference to a ") + tree_kind_str(tree_kind(declaration)));
+    // What is declared rather than its declaration: a reference to a constant.
+    std::string declared = kindName(tree_kind(declaration));
+    if (declared.ends_with(" declaration")) declared.resize(declared.size() - 12);
+    fail(expression, "a reference to " + withArticle(declared));
     return std::nullopt;
 }
 
@@ -3002,7 +3001,7 @@ std::optional<BodyTranslator::Value> BodyTranslator::attribute(tree_t expression
 
 std::optional<BodyTranslator::Value> BodyTranslator::call(tree_t expression) {
     if (!tree_has_ref(expression)) {
-        fail(expression, "a call NVC left unresolved");
+        fail(expression, "a call of a subprogram that cannot be found here");
         return std::nullopt;
     }
     tree_t declaration = tree_ref(expression);
@@ -3493,7 +3492,7 @@ std::optional<BodyTranslator::Place> BodyTranslator::place(tree_t name) {
 
     default: break;
     }
-    fail(name, std::string("the name ") + tree_kind_str(tree_kind(name)));
+    fail(name, "this " + kindName(tree_kind(name)));
     return std::nullopt;
 }
 

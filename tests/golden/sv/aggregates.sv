@@ -1,12 +1,12 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
 // Unpacked arrays and structs where Icarus Verilog cannot be the reference: whole-array copy and
-// equality, and assignment patterns, positional or `'{default: ...}`, as an initialiser, a
-// statement and a continuous assignment, none of which Icarus Verilog 12 implements; an array
-// through a port, which it leaves X; an index
-// past an inner dimension, which it lets land in the next row where IEEE 1800 section 7.4.6
-// makes the read the type's default and the write nothing; and structs, packed and unpacked,
-// alone and in an array. The case checks itself against what the standard gives.
+// equality, and assignment patterns, positional, replicated or `'{default: ...}`, as an
+// initialiser, a statement and a continuous assignment, none of which Icarus Verilog 12
+// implements; an array through a port, which it leaves X; an index past an inner dimension, which
+// it lets land in the next row where IEEE 1800 section 7.4.6 makes the read the type's default and
+// the write nothing; and structs, packed and unpacked, alone and in an array. The case checks
+// itself against what the standard gives.
 
 module reverse (
     input  logic [7:0] in  [0:3],
@@ -90,6 +90,15 @@ module tb;
         if (filled[0] !== 8'h01 || filled[3] !== 8'h04 || swapped[0] !== 8'h22
             || swapped[1] !== 8'h11 || reversed[0] !== 8'h44 || reversed[3] !== 8'h11) begin
             $display("FAIL: positional pattern, one continuously assigned, or an array port");
+            failures = failures + 1;
+        end
+
+        // A replicated pattern repeats its elements, in order.
+        filled = '{2{8'h12, preset[2]}};
+        if (filled[0] !== 8'h12 || filled[1] !== 8'h33 || filled[2] !== 8'h12
+            || filled[3] !== 8'h33) begin
+            $display("FAIL: replicated pattern gave %h %h %h %h", filled[0], filled[1], filled[2],
+                     filled[3]);
             failures = failures + 1;
         end
 

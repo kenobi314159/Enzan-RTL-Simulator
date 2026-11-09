@@ -357,8 +357,9 @@ void PliContext::buildScopes() {
 
             // Only what holds a packed value has a slot, and a name with a `$` in it is one a
             // frontend made up and kept out of the user's namespace on purpose. A VHDL signal
-            // of a null range holds no value VPI could give.
-            if (!object.type.isBits() || object.holdsNothing) continue;
+            // of a null range holds no value VPI could give, and an array or struct holding reals
+            // would show their doubles as bits.
+            if (!object.type.isBits() || object.holdsNothing || object.holdsReals) continue;
 
             const std::uint32_t owner = scopeFor(scopeIndex, object.name);
             objectScope[objectIndex] = owner;

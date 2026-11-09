@@ -2170,7 +2170,7 @@ std::uint32_t Kernel::openFile(const std::string& name, const std::string& mode,
     }
     if (!channel && !mode.starts_with('w') && !mode.starts_with('a')) {
         diagnostics.report(DiagCode::FileNotOpened, location, name, mode,
-                           "Enzan opens files for writing, or for textio to read");
+                           "reading a file with $fopen is not supported yet");
         return 0;
     }
     if (channel && nextChannel > 30) {

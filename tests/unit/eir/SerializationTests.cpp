@@ -130,6 +130,7 @@ ModuleDefinition richModule(BufferId buffer) {
                                 .packedDimensions = {ArrayDimension{.left = -2, .right = 5}},
                                 .elementWidth = 1,
                                 .elementSigned = true,
+                                .holdsReals = true,
                                 .subroutineStatic = true});
     definition.addObject(
         Object{.name = "count",
@@ -293,6 +294,8 @@ TEST_F(SerializationTest, ObjectsRoundTrip) {
     EXPECT_TRUE(definition.objects[1].packedDimensions.empty());
     EXPECT_EQ(definition.objects[0].elementWidth, 1U);
     EXPECT_TRUE(definition.objects[0].elementSigned);
+    EXPECT_TRUE(definition.objects[0].holdsReals);
+    EXPECT_FALSE(definition.objects[1].holdsReals);
     EXPECT_TRUE(definition.objects[0].subroutineStatic);
     EXPECT_FALSE(definition.objects[0].initialValue.has_value());
     EXPECT_EQ(definition.objects[0].enumIndex, Object::NoEnum);

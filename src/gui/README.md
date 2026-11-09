@@ -25,7 +25,8 @@ waveform view and the transcript.
 - **The time axis** (`TimeAxis.h`) — the mapping between simulated time and pixels, separated out
   because it is the part of the view that can be wrong without anyone noticing by eye.
 - **The waveform canvas** (`WaveformView.h`) — the custom painting, the cursors and the zoom.
-- **The transcript** (`TranscriptView.h`) and **the window** (`MainWindow.h`).
+- **The transcript** (`TranscriptView.h`), which shows a program's output in the colours its
+  terminal codes give it as `TerminalDecoder.h` reads them, and **the window** (`MainWindow.h`).
 
 ## Allowed dependencies
 
