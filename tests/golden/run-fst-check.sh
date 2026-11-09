@@ -13,12 +13,15 @@
 #   * the two writers agree about every value at every timestamp, so a bug in either shows up as a
 #     difference rather than as a plausible-looking waveform.
 #
-# Usage: run-fst-check.sh <enzan> <fst2vcd> <checker> <source.sv> <top>
+# Usage: run-fst-check.sh <enzan> <fst2vcd> <checker> <source.sv> <top> [<enzan option>...]
+#
+# The options are those the case's golden test runs it with, as run-vcd-check.sh takes them.
 
 set -euo pipefail
 
-if [[ $# -ne 5 ]]; then
-    printf 'usage: %s <enzan> <fst2vcd> <checker> <source.sv> <top>\n' "$0" >&2
+if [[ $# -lt 5 ]]; then
+    printf 'usage: %s <enzan> <fst2vcd> <checker> <source.sv> <top> [<enzan option>...]\n' \
+        "$0" >&2
     exit 2
 fi
 
@@ -27,13 +30,14 @@ readonly fst2vcd="$2"
 readonly checker="$3"
 readonly source_file="$4"
 readonly top="$5"
+shift 5
 
 workdir="$(mktemp -d)"
 trap 'rm -rf "$workdir"' EXIT
 
 # Both formats from one run, so that any difference is in the writers rather than in two
 # simulations that might legitimately differ.
-"$enzan" --top "$top" --timescale ns --vcd "$workdir/direct.vcd" --fst "$workdir/wave.fst" \
+"$enzan" --top "$top" "$@" --vcd "$workdir/direct.vcd" --fst "$workdir/wave.fst" \
     "$source_file" >/dev/null
 
 if [[ ! -s "$workdir/wave.fst" ]]; then
