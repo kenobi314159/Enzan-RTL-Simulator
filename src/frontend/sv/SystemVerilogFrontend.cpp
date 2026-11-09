@@ -1746,8 +1746,9 @@ bool ModuleBuilder::bindInterface(const ast::InstanceSymbol& instance,
         reportUnsupported(
             instance.location,
             std::format("the connection of interface port '{}' to {}", connection.port.name,
-                        connected == nullptr ? std::string_view("nothing")
-                                             : slang::ast::toString(connected->kind)));
+                        connected == nullptr
+                            ? std::string("nothing")
+                            : "a " + kindName(slang::ast::toString(connected->kind))));
         return false;
     }
     result.interfaceBindings.push_back(

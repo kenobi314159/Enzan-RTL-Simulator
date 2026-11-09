@@ -174,6 +174,10 @@ public:
     addEventValue(const slang::ast::Expression& expression) = 0;
 };
 
+/// A kind of slang's syntax tree, `ElementSelect`, in the words a reader would use for it,
+/// `element select`.
+[[nodiscard]] std::string kindName(std::string_view kind);
+
 /// The low bit of each real in a value of `type` as the flat vector it is stored as
 /// (DESIGN_GUIDE.md section 4.3): one at 0 for a real, one for each real element or field of an
 /// unpacked array or struct, and none for anything else.

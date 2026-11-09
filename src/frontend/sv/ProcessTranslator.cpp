@@ -41,12 +41,14 @@
 
 #include <algorithm>
 #include <bit>
+#include <cctype>
 #include <cmath>
 #include <cstdint>
 #include <format>
 #include <limits>
 #include <map>
 #include <string>
+#include <string_view>
 #include <tuple>
 #include <utility>
 
@@ -165,6 +167,19 @@ bool hasSideEffects(const ast::Expression& expression) {
 }
 
 } // namespace
+
+std::string kindName(std::string_view kind) {
+    std::string words;
+    for (const char character : kind) {
+        if (std::isupper(static_cast<unsigned char>(character)) != 0) {
+            if (!words.empty()) words += ' ';
+            words += static_cast<char>(std::tolower(static_cast<unsigned char>(character)));
+        } else {
+            words += character;
+        }
+    }
+    return words;
+}
 
 std::int8_t timeExponentOf(const slang::TimeScaleValue& value) noexcept {
     int exponent = -3 * static_cast<int>(value.unit);
@@ -463,7 +478,7 @@ std::optional<std::uint64_t> ProcessTranslator::constantDelay(const ast::Express
     }
     if (!ticks.has_value()) {
         module->reportUnsupported(amount.sourceRange.start(),
-                                  "a delay longer than 64 bits of the run's time unit count");
+                                  "a delay longer than a run can count in its time unit");
         failed = true;
         return std::nullopt;
     }
@@ -1413,7 +1428,7 @@ bool ProcessTranslator::translateStatement(const ast::Statement& statement) {
         [[fallthrough]];
     default:
         module->reportUnsupported(statement.sourceRange.start(),
-                                  std::string(toString(statement.kind)) + " statements");
+                                  "a " + kindName(toString(statement.kind)) + " statement");
         failed = true;
         return false;
     }
@@ -2150,7 +2165,8 @@ bool ProcessTranslator::translateTimingControl(const ast::TimingControl& timing)
         const auto add = [&](const ast::TimingControl& one) {
             if (one.kind != ast::TimingControlKind::SignalEvent) {
                 module->reportUnsupported(one.sourceRange.start(),
-                                          std::string(toString(one.kind)) + " in an event list");
+                                          "a " + kindName(toString(one.kind))
+                                              + " in an event list");
                 return false;
             }
             const auto& event = one.as<ast::SignalEventControl>();
@@ -2199,7 +2215,7 @@ bool ProcessTranslator::translateTimingControl(const ast::TimingControl& timing)
 
     default:
         module->reportUnsupported(timing.sourceRange.start(),
-                                  std::string(toString(timing.kind)) + " timing controls");
+                                  "a " + kindName(toString(timing.kind)) + " timing control");
         failed = true;
         return false;
     }
@@ -2383,9 +2399,13 @@ ProcessTranslator::translateExpression(const ast::Expression& expression) {
     default: break;
     }
 
+    // A conversion fails for its type, which says more than the kind of expression.
     if (!failed) {
-        module->reportUnsupported(expression.sourceRange.start(),
-                                  std::string(toString(expression.kind)) + " expressions");
+        module->reportUnsupported(
+            expression.sourceRange.start(),
+            expression.kind == ast::ExpressionKind::Conversion
+                ? std::format("a conversion to {}", expression.type->toString())
+                : "a " + kindName(toString(expression.kind)) + " expression");
         failed = true;
     }
     return std::nullopt;
@@ -4205,8 +4225,8 @@ bool ProcessTranslator::assignTo(const ast::Expression& target, const Value& val
     }
 
     module->reportUnsupported(target.sourceRange.start(),
-                              std::string(toString(target.kind))
-                                  + " expressions as an assignment target");
+                              "a " + kindName(toString(target.kind))
+                                  + " expression as an assignment target");
     failed = true;
     return false;
 }
