@@ -5,10 +5,74 @@
 #include "eir/BitOps.h"
 
 #include <algorithm>
+#include <array>
+#include <bit>
 #include <iterator>
 #include <utility>
 
 namespace enzan::eir {
+
+namespace {
+
+// The bytes of a plane's words are its elements' in order only on a little-endian machine.
+static_assert(std::endian::native == std::endian::little, "VHDL codes are read as bytes");
+
+/// A std_ulogic's code, a byte of its object's aval plane, as the two planes of the four-state bit
+/// it shows as: bit 0 the aval and bit 1 the bval, which is a Logic's value. The positions of its
+/// literals are U X 0 1 Z W L H -; a byte that is none of them is unknown.
+constexpr std::array<std::uint8_t, 256> LogicOfCode = [] {
+    std::array<std::uint8_t, 256> table{};
+    for (auto& entry : table) entry = static_cast<std::uint8_t>(Logic::Unknown);
+    table[2] = static_cast<std::uint8_t>(Logic::Zero);
+    table[3] = static_cast<std::uint8_t>(Logic::One);
+    table[4] = static_cast<std::uint8_t>(Logic::HighZ);
+    table[6] = static_cast<std::uint8_t>(Logic::Zero);
+    table[7] = static_cast<std::uint8_t>(Logic::One);
+    return table;
+}();
+
+/// `present` of std_ulogic codes with no unknown bit among them, which is every VHDL value and
+/// holds the codes in the bytes of its aval plane, as a loop over bytes rather than over bits:
+/// what a vector operator of numeric_std costs is mostly this and its inverse.
+void presentLogicCodes(ConstBitRef stored, BitRef shown) noexcept {
+    const std::uint32_t elements = shown.width();
+    const auto* codes = reinterpret_cast<const std::uint8_t*>(stored.aval());
+    Word* aval = shown.aval();
+    Word* bval = shown.bval();
+    for (std::uint32_t word = 0; word < shown.words(); ++word) {
+        aval[word] = 0;
+        bval[word] = 0;
+    }
+    for (std::uint32_t element = 0; element < elements; ++element) {
+        const std::uint8_t logic = LogicOfCode[codes[element]];
+        const std::uint32_t word = element / BitsPerWord;
+        const std::uint32_t bit = element % BitsPerWord;
+        aval[word] |= static_cast<Word>(logic & 1U) << bit;
+        bval[word] |= static_cast<Word>((logic >> 1U) & 1U) << bit;
+    }
+}
+
+/// `encode` of std_ulogic with `codes`, the codes of a 0, a 1, a high-impedance bit and an unknown
+/// one in that order, into bytes of the aval plane of `stored`.
+void encodeLogicCodes(ConstBitRef shown, BitRef stored,
+                      const std::array<std::uint8_t, 4>& codes) noexcept {
+    const std::uint32_t elements = shown.width();
+    Word* aval = stored.aval();
+    for (std::uint32_t word = 0; word < stored.words(); ++word) {
+        aval[word] = 0;
+        stored.bval()[word] = 0;
+    }
+    auto* bytes = reinterpret_cast<std::uint8_t*>(aval);
+    for (std::uint32_t element = 0; element < elements; ++element) {
+        const std::uint32_t word = element / BitsPerWord;
+        const std::uint32_t bit = element % BitsPerWord;
+        const auto logic = static_cast<std::uint32_t>(((shown.aval()[word] >> bit) & 1U)
+                                                      | (((shown.bval()[word] >> bit) & 1U) << 1U));
+        bytes[element] = codes[logic];
+    }
+}
+
+} // namespace
 
 std::uint32_t presentedWidth(Encoding encoding, std::uint32_t width) noexcept {
     return encoding == Encoding::Bits || encoding == Encoding::Real ? width : width / 8;
@@ -17,6 +81,10 @@ std::uint32_t presentedWidth(Encoding encoding, std::uint32_t width) noexcept {
 void present(Encoding encoding, ConstBitRef stored, BitRef shown) noexcept {
     if (encoding == Encoding::Bits || encoding == Encoding::Real) {
         bitops::copy(shown, stored);
+        return;
+    }
+    if (encoding == Encoding::VhdlLogic && stored.isTwoState()) {
+        presentLogicCodes(stored, shown);
         return;
     }
     // The positions of std_ulogic's literals: U X 0 1 Z W L H -.
@@ -68,6 +136,12 @@ void encode(Encoding encoding, ConstBitRef shown, BitRef stored, std::uint8_t we
         one = weakOne ? 7 : 3;
         highZ = 4;
         unknown = weakZero && weakOne ? 5 : 1;
+    }
+    if (encoding == Encoding::VhdlLogic) {
+        encodeLogicCodes(shown, stored,
+                         {static_cast<std::uint8_t>(zero), static_cast<std::uint8_t>(one),
+                          static_cast<std::uint8_t>(highZ), static_cast<std::uint8_t>(unknown)});
+        return;
     }
     for (std::uint32_t element = 0; element < shown.width(); ++element) {
         std::uint32_t code = 0;
