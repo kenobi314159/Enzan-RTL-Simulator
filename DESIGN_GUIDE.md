@@ -732,7 +732,16 @@ What a VHDL design becomes in EIR, in outline:
 - **Constant functions run in the adapter.** A call that does not fold where a static value is
   needed is refused, naming the call and the statement its run stopped at.
 - **The IEEE packages are translated from their own bodies.** `report` and a failed `assert` report
-  their severity, and failure, or the severity `--assert-level` names, ends the run.
+  their severity, and failure, or the severity `--assert-level` names, ends the run. **Except that a
+  call of the operators of `std_logic_1164` and `numeric_std` on vectors is computed on the numbers
+  the vectors are** when every element of its operands is a 0, a 1, an L or an H, and by the body
+  otherwise. Those bodies are loops over elements, with a table lookup or a carry in each, and
+  costing a design that computes with vectors a hundred times what it does in SystemVerilog. The body
+  is kept for what only it says: the warning a metavalue or a number that does not fit reports, and
+  the 'U' or 'X' a result then is. So the code is chosen at run time by the operands, and what it
+  returns has to be what the body returns, which `golden/vhdl/ieee_vectors.vhd` compares with GHDL
+  for every kind of operand. `resize` and the shifts copy elements and report nothing, so they have
+  no body to leave anything to.
 
 **Across the language boundary.** Both frontends analyse into one design. An instance of the other
 language's unit names a placeholder and asks the other frontend for the unit its values make, and

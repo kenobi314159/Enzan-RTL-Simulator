@@ -2327,6 +2327,11 @@ std::optional<BodyTranslator::Value> BodyTranslator::callSubprogram(tree_t call,
     const std::optional<std::vector<tree_t>> actuals = actualsOf(call, declaration);
     if (!actuals) return std::nullopt;
 
+    if (const std::optional<Native> native = nativeOf(declaration)) {
+        NativeResult taken = nativeCall(call, declaration, *actuals, *native);
+        if (taken.handled) return std::move(taken.value);
+    }
+
     // A procedure may wait and assign signals, and a subprogram may take a signal and read its
     // attributes, neither of which a body of its own can do; nor can it reach the variables of
     // the process that declares it. Those are inlined.
@@ -2399,6 +2404,15 @@ std::optional<BodyTranslator::Value> BodyTranslator::callSubprogram(tree_t call,
         values.push_back(*value);
     }
 
+    std::optional<Value> result = emitCallSite(call, declaration, *actuals, shape, values, {});
+    if (mark) releaseScratch(*mark);
+    return result;
+}
+
+std::optional<BodyTranslator::Value>
+BodyTranslator::emitCallSite(tree_t call, tree_t declaration, const std::vector<tree_t>& actuals,
+                             const Shape& shape, const std::vector<Value>& values,
+                             std::optional<std::uint32_t> resultRegister) {
     const std::optional<Callee> found = owner.callee(declaration, shape, call);
     if (!found) return std::nullopt;
     const Callee& callee = *found;
@@ -2412,7 +2426,7 @@ std::optional<BodyTranslator::Value> BodyTranslator::callSubprogram(tree_t call,
         const Layout& parameter = callee.parameters.at(index);
         if (parameter.isComposite()
             && values[index].type.bitWidth() != parameter.storage.bitWidth()) {
-            fail((*actuals)[index], "an actual of another length than its parameter");
+            fail(actuals[index], "an actual of another length than its parameter");
             return std::nullopt;
         }
         site.arguments.push_back(
@@ -2422,7 +2436,7 @@ std::optional<BodyTranslator::Value> BodyTranslator::callSubprogram(tree_t call,
     Value result{.reg = 0, .type = eir::Type::voidType(), .vhdlType = nullptr};
     if (const std::optional<Layout>& returned = callee.result) {
         const Layout layout = *returned;
-        result = Value{.reg = newRegister(layout.storage),
+        result = Value{.reg = resultRegister ? *resultRegister : newRegister(layout.storage),
                        .type = layout.storage,
                        .vhdlType = tree_has_type(call) ? tree_type(call) : nullptr,
                        .layout = layout};
@@ -2431,7 +2445,6 @@ std::optional<BodyTranslator::Value> BodyTranslator::callSubprogram(tree_t call,
     const auto index = static_cast<std::uint32_t>(body().calls.size());
     body().calls.push_back(std::move(site));
     emit(eir::Instruction::make(eir::Opcode::Call, {}, eir::Operand::call(index)));
-    if (mark) releaseScratch(*mark);
     return result;
 }
 

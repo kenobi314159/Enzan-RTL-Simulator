@@ -175,6 +175,10 @@ enzan_add_vhdl_golden_test(inout)
 # A unit instantiating itself, with ports associated with slices of its own ports.
 enzan_add_vhdl_golden_test(recursive_ports)
 
+# The operators of std_logic_1164 and numeric_std on vectors, which Enzan computes natively where
+# no element is a metavalue, applied to every pair of a set of operands that has one of each.
+enzan_add_vhdl_golden_test(ieee_vectors)
+
 # Out and inout ports that nothing drives, which are sources of their actuals all the same.
 enzan_add_vhdl_golden_test(sources)
 
