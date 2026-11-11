@@ -362,7 +362,7 @@ std::optional<BodyTranslator::Place> BodyTranslator::drivenPrefix(tree_t name) c
         }
         if (tree_kind(declaration) == T_ALIAS && tree_has_value(declaration))
             return drivenPrefix(tree_value(declaration));
-        const std::optional<std::uint32_t> object = owner.objectFor(declaration);
+        const std::optional<std::uint32_t> object = objectOf(declaration);
         if (!object) return std::nullopt;
         // A signal of a null range has no element to drive.
         const std::optional<Layout> layout = declaredLayout(declaration, folder());
@@ -466,6 +466,38 @@ bool BodyTranslator::fail(tree_t where, std::string_view what) {
     return false;
 }
 
+std::optional<std::uint32_t> BodyTranslator::objectOf(tree_t declaration) const {
+    if (formalPort != nullptr && declaration == formalPort) return formalObject;
+    return owner.objectFor(declaration);
+}
+
+/// For as long as this lives, names and static values are those of the formal end of a port
+/// association, when there is one: the formal port is `object` and its bounds fold in the
+/// instantiated unit's generics.
+class BodyTranslator::FormalEnd {
+public:
+    FormalEnd(BodyTranslator& reading, const FormalScope* scope, std::uint32_t object)
+        : translator(reading), pushed(scope != nullptr) {
+        if (!pushed) return;
+        translator.folders.push_back(*scope->folder);
+        translator.formalPort = scope->port;
+        translator.formalObject = object;
+    }
+
+    FormalEnd(const FormalEnd&) = delete;
+    FormalEnd& operator=(const FormalEnd&) = delete;
+
+    ~FormalEnd() {
+        if (!pushed) return;
+        translator.folders.pop_back();
+        translator.formalPort = nullptr;
+    }
+
+private:
+    BodyTranslator& translator;
+    bool pushed;
+};
+
 // --- the process --------------------------------------------------------------
 
 std::optional<eir::Process> BodyTranslator::translate() {
@@ -497,14 +529,18 @@ std::optional<eir::Process> BodyTranslator::translate() {
 
 std::optional<eir::Process>
 BodyTranslator::translateAssociation(tree_t target, tree_t value, std::uint32_t portObject,
-                                     const Layout& portLayout,
-                                     std::optional<eir::BitVector>* seed) {
+                                     const Layout& portLayout, std::optional<eir::BitVector>* seed,
+                                     const FormalScope* formal, bool formalIsTarget) {
     const Place port{.objectIndex = portObject, .layout = portLayout};
     // A port or a part of one, or either converted, connects the two sides directly; an
     // expression is a signal of its own, which a concurrent assignment drives a delta cycle later
     // (IEEE 1076 section 6.5.6.3).
-    process.connectsPort = value == nullptr || designatesStorage(value)
-                           || tree_kind(value) == T_TYPE_CONV || tree_kind(value) == T_CONV_FUNC;
+    process.connectsPort =
+        value == nullptr || tree_kind(value) == T_TYPE_CONV || tree_kind(value) == T_CONV_FUNC;
+    if (!process.connectsPort) {
+        const FormalEnd end(*this, formalIsTarget ? nullptr : formal, portObject);
+        process.connectsPort = designatesStorage(value);
+    }
     const std::uint32_t entry = newBlock("entry");
     selectBlock(entry);
     statementLocation = owner.locate(source);
@@ -512,7 +548,11 @@ BodyTranslator::translateAssociation(tree_t target, tree_t value, std::uint32_t 
     jump(loop);
     selectBlock(loop);
 
-    const std::optional<Place> to = target == nullptr ? std::optional(port) : place(target);
+    std::optional<Place> to = port;
+    if (target != nullptr) {
+        const FormalEnd end(*this, formalIsTarget ? formal : nullptr, portObject);
+        to = place(target);
+    }
     if (!to) return std::nullopt;
     if (to->isVariable || to->offset || to->empty) {
         fail(target, "associating a port with this");
@@ -528,6 +568,7 @@ BodyTranslator::translateAssociation(tree_t target, tree_t value, std::uint32_t 
         given = read(port, nullptr);
         noteRead(portObject);
     } else {
+        const FormalEnd end(*this, formalIsTarget ? nullptr : formal, portObject);
         start = constantBits(value, to->layout, folder());
         if (designatesStorage(value)) {
             const std::optional<Place> from = place(value);
@@ -3358,7 +3399,7 @@ bool BodyTranslator::designatesStorage(tree_t name) const {
     tree_t declaration = tree_ref(name);
     if (tree_kind(declaration) == T_ALIAS && !aliases.contains(declaration))
         return tree_has_value(declaration) && designatesStorage(tree_value(declaration));
-    return owner.objectFor(declaration).has_value() || locals.contains(declaration)
+    return objectOf(declaration).has_value() || locals.contains(declaration)
            || aliases.contains(declaration);
 }
 
@@ -3399,7 +3440,7 @@ std::optional<BodyTranslator::Place> BodyTranslator::place(tree_t name) {
                                                                  : Layout{.storage = variable.type},
                          .empty = variable.layout.isNull()};
         }
-        const std::optional<std::uint32_t> object = owner.objectFor(declaration);
+        const std::optional<std::uint32_t> object = objectOf(declaration);
         if (!object) break;
         if (const std::optional<Layout> layout = declaredLayout(declaration, folder()))
             return Place{.objectIndex = *object, .layout = *layout};

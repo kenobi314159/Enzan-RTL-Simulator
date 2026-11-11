@@ -158,6 +158,13 @@ public:
     /// The translated process, or nothing having reported why.
     std::optional<eir::Process> translate();
 
+    /// How the formal end of a port association reads: the generics it folds with, and the port it
+    /// names, which stands for the object the association's process is given.
+    struct FormalScope {
+        const Folder* folder = nullptr;
+        tree_t port = nullptr;
+    };
+
     /// A process that keeps one end of a port association equal to the other, for a port
     /// associated in parts or with something other than a whole signal: `target <= value`, then a
     /// wait on whatever that read, over and over. A null end is the whole of the port, which is
@@ -167,10 +174,16 @@ public:
     /// When `seed` holds a value, the port object's initial one, the bits the association gives the
     /// target at the start are spliced into it where they can be known statically: the actual's
     /// initial value or its static value.
-    std::optional<eir::Process> translateAssociation(tree_t target, tree_t value,
-                                                     std::uint32_t portObject,
-                                                     const Layout& portLayout,
-                                                     std::optional<eir::BitVector>* seed);
+    ///
+    /// The formal is written against the instantiated unit's declarations and the actual against
+    /// the instantiating architecture's, which for a unit that instantiates itself are the very
+    /// same declarations bound to different objects and values. So the formal, the target when
+    /// `formalIsTarget` and the value otherwise, is read in `formal`, when that is given, and the
+    /// actual in this body's scope.
+    std::optional<eir::Process>
+    translateAssociation(tree_t target, tree_t value, std::uint32_t portObject,
+                         const Layout& portLayout, std::optional<eir::BitVector>* seed,
+                         const FormalScope* formal = nullptr, bool formalIsTarget = true);
 
     /// The translated subprogram and its result's layout, or nothing having reported why.
     struct Translated {
@@ -714,6 +727,16 @@ private:
     std::optional<Layout> resultLayout;
 
     std::vector<Folder> folders;
+
+    /// The formal port of the association end being read, and its object, when one is.
+    tree_t formalPort = nullptr;
+    std::uint32_t formalObject = 0;
+
+    class FormalEnd;
+
+    /// The object holding `declaration`, a port or a signal: the formal port's where an
+    /// association's formal is being read, and the scope's otherwise.
+    [[nodiscard]] std::optional<std::uint32_t> objectOf(tree_t declaration) const;
 
     /// The scalar variables of subprograms whose values are followed while they fold, bound in
     /// the folder where translation is: a variable computed from what a specialisation binds,

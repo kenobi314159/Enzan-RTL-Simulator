@@ -172,6 +172,9 @@ enzan_add_vhdl_golden_test(actuals)
 # Inout ports associated with parts of a bus and through conversions.
 enzan_add_vhdl_golden_test(inout)
 
+# A unit instantiating itself, with ports associated with slices of its own ports.
+enzan_add_vhdl_golden_test(recursive_ports)
+
 # Out and inout ports that nothing drives, which are sources of their actuals all the same.
 enzan_add_vhdl_golden_test(sources)
 
