@@ -711,21 +711,50 @@ void shift(BitRef dst, ConstBitRef a, ConstBitRef amount, bool toLeft, Logic fil
     }
 
     const auto distance = static_cast<std::uint32_t>(count);
+    const std::uint32_t words = dst.words();
+    const std::uint32_t wholeWords = distance / BitsPerWord;
+    const std::uint32_t bitsOver = distance % BitsPerWord;
 
-    // Written as an explicit per-bit loop rather than limb shifting because the two
-    // planes must move together and clarity matters more here than the last factor
-    // of two; the two-state fast path that will matter is in codegen, which emits a
-    // native shift when it can prove the operand two-state.
-    if (toLeft) {
-        for (std::uint32_t index = width; index-- > 0;) {
-            dst.set(index, index >= distance ? a.get(index - distance) : fill);
+    // The two planes move alike, a word at a time, with the value shifted in a run of 0s or of
+    // 1s in each: the bits `[from, to)` of a plane set where the fill has a 1 in that plane.
+    const auto fillRun = [&](Word* plane, bool ones, std::uint32_t from, std::uint32_t to) {
+        if (!ones) return;
+        for (std::uint32_t word = from / BitsPerWord; word < words && word * BitsPerWord < to;
+             ++word) {
+            const std::uint32_t first = word * BitsPerWord;
+            const std::uint32_t low = std::max(from, first) - first;
+            const std::uint32_t high = std::min(to, first + BitsPerWord) - first;
+            const Word upTo = high == BitsPerWord ? ~Word{0} : (Word{1} << high) - 1;
+            plane[word] |= upTo & ~((Word{1} << low) - 1);
         }
-    } else {
-        for (std::uint32_t index = 0; index < width; ++index) {
-            const std::uint32_t source = index + distance;
-            dst.set(index, source < width ? a.get(source) : fill);
+    };
+    const bool fillAval = (static_cast<std::uint8_t>(fill) & 1U) != 0;
+    const bool fillBval = (static_cast<std::uint8_t>(fill) & 2U) != 0;
+
+    const auto move = [&](Word* out, const Word* in, bool ones) {
+        if (toLeft) {
+            for (std::uint32_t word = words; word-- > 0;) {
+                const Word high = word >= wholeWords ? in[word - wholeWords] : Word{0};
+                const Word low = bitsOver != 0 && word > wholeWords
+                                     ? in[word - wholeWords - 1] >> (BitsPerWord - bitsOver)
+                                     : Word{0};
+                out[word] = (high << bitsOver) | low;
+            }
+            fillRun(out, ones, 0, distance);
+        } else {
+            for (std::uint32_t word = 0; word < words; ++word) {
+                const std::uint32_t index = word + wholeWords;
+                const Word low = index < words ? in[index] : Word{0};
+                const Word high = bitsOver != 0 && index + 1 < words ? in[index + 1] : Word{0};
+                out[word] =
+                    bitsOver == 0 ? low : (low >> bitsOver) | (high << (BitsPerWord - bitsOver));
+            }
+            fillRun(out, ones, width - distance, width);
         }
-    }
+    };
+    move(dst.aval(), a.aval(), fillAval);
+    move(dst.bval(), a.bval(), fillBval);
+    dst.canonicalize();
 }
 
 } // namespace

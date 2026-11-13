@@ -490,6 +490,39 @@ TEST(BitOpsShift, AcrossLimbBoundaries) {
     EXPECT_EQ(result.get(0), Logic::Zero);
 }
 
+TEST(BitOpsShift, EveryDistanceOfEveryWidthMovesBitsAsOneAtATimeWould) {
+    // Widths either side of a limb boundary and past two, every distance, and values that hold
+    // all four states, which a word at a time must carry across a boundary alike.
+    for (const std::uint32_t width : {1U, 5U, 63U, 64U, 65U, 127U, 128U, 130U, 200U}) {
+        BitVector value(width);
+        for (std::uint32_t index = 0; index < width; ++index)
+            value.set(index, static_cast<Logic>((index * 7 + index / 3) % 4));
+        for (std::uint32_t distance = 0; distance < width + 2; ++distance) {
+            const BitVector amount = BitVector::fromUInt64(distance, 32);
+            BitVector left(width);
+            BitVector right(width);
+            BitVector arithmetic(width);
+            bitops::shiftLeft(left.mutableRef(), value.ref(), amount.ref());
+            bitops::shiftRightLogical(right.mutableRef(), value.ref(), amount.ref());
+            bitops::shiftRightArithmetic(arithmetic.mutableRef(), value.ref(), amount.ref());
+            const Logic sign = value.get(width - 1);
+            for (std::uint32_t index = 0; index < width; ++index) {
+                const Logic fromBelow =
+                    index >= distance ? value.get(index - distance) : Logic::Zero;
+                const Logic fromAbove =
+                    index + distance < width ? value.get(index + distance) : Logic::Zero;
+                const Logic signed_ = index + distance < width ? value.get(index + distance) : sign;
+                ASSERT_EQ(left.get(index), fromBelow)
+                    << width << " << " << distance << " @" << index;
+                ASSERT_EQ(right.get(index), fromAbove)
+                    << width << " >> " << distance << " @" << index;
+                ASSERT_EQ(arithmetic.get(index), signed_)
+                    << width << " >>> " << distance << " @" << index;
+            }
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Comparison
 // ---------------------------------------------------------------------------
