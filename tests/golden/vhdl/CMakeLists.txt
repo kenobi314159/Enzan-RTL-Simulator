@@ -179,6 +179,9 @@ enzan_add_vhdl_golden_test(recursive_ports)
 # no element is a metavalue, applied to every pair of a set of operands that has one of each.
 enzan_add_vhdl_golden_test(ieee_vectors)
 
+# Arrays of no elements as the fields of a record and as the elements of an array.
+enzan_add_vhdl_golden_test(null_components)
+
 # Out and inout ports that nothing drives, which are sources of their actuals all the same.
 enzan_add_vhdl_golden_test(sources)
 

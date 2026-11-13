@@ -123,6 +123,15 @@ nullLayout(const Folder::Range& index, type_t elementType, const Folder& folder,
 /// whose bounds, its subtype's or those `folder` binds it to, are a null range.
 [[nodiscard]] std::optional<Layout> declaredNullLayout(tree_t declaration, const Folder& folder);
 
+/// True when nothing of a value laid out as `layout` is anything but a placeholder: an array of
+/// the null range, an array whose every element is such a value, or a record whose every field is.
+[[nodiscard]] bool holdsNothing(const Layout& layout);
+
+/// `layoutOf` for a field of a record or an element of an array, which may be an array of the
+/// null range: that is the placeholder of `nullLayout`, a bit of the record or the array that
+/// holds nothing.
+[[nodiscard]] std::optional<Layout> componentLayout(type_t type, const Folder& folder);
+
 /// The layout of an array with `index` as its bounds and elements of `elementType`, and with the
 /// further dimensions `inner` when it has more than one; or, of one dimension whose element type
 /// is an unconstrained array, with `elementIndex` as each element's bounds.

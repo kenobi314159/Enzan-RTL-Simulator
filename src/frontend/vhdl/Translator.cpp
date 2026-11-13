@@ -1940,6 +1940,8 @@ bool ArchitectureTranslator::addObject(tree_t declaration) {
         unsupported(declaration, std::format("a signal of type {}", type_pp(type)));
         return false;
     }
+    // An array of vectors of no elements holds nothing either, and so does a record of such.
+    null = null || holdsNothing(*layout);
     // Left unresolved, its lone driver's value would be its value, which the function need not
     // return.
     if (resolutionNotHeld(type, folding)) {
@@ -1953,7 +1955,7 @@ bool ArchitectureTranslator::addObject(tree_t declaration) {
     // unconnected port reads; a connected one is the signal it connects.
     std::optional<eir::BitVector> initial;
     if (null) {
-        initial = eir::BitVector::filled(1, eir::Logic::Zero);
+        initial = eir::BitVector::filled(layout->storage.bitWidth(), eir::Logic::Zero);
     } else if (tree_has_value(declaration)) {
         initial = constantBits(tree_value(declaration), *layout, folding.elaborating());
         if (!initial) {

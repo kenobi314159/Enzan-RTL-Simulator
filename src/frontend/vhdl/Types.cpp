@@ -4,6 +4,7 @@
 
 #include "eir/BitOps.h"
 
+#include <algorithm>
 #include <cctype>
 #include <cstddef>
 #include <limits>
@@ -418,6 +419,22 @@ std::optional<eir::Type> scalarStorage(type_t type) {
     }
 }
 
+std::optional<Layout> componentLayout(type_t type, const Folder& folder) {
+    if (std::optional<Layout> layout = layoutOf(type, folder)) return layout;
+    if (type == nullptr || !type_is_array(type) || dimension_of(type) != 1) return std::nullopt;
+    const std::optional<Folder::Range> range = folder.rangeOf(type);
+    return range ? nullLayout(*range, type_elem(type), folder) : std::nullopt;
+}
+
+bool holdsNothing(const Layout& layout) {
+    if (layout.isRecord()) {
+        return std::ranges::all_of(layout.fields,
+                                   [](const Layout& field) { return holdsNothing(field); });
+    }
+    if (!layout.isArray()) return false;
+    return layout.isNull() || (layout.element && holdsNothing(*layout.element));
+}
+
 std::optional<Layout> arrayLayout(const Folder::Range& index, type_t elementType,
                                   const Folder& folder, const std::vector<Folder::Range>& inner,
                                   const std::optional<Folder::Range>& elementIndex) {
@@ -425,9 +442,11 @@ std::optional<Layout> arrayLayout(const Folder::Range& index, type_t elementType
     // whose type leaves its bounds to the object.
     std::optional<Layout> element;
     if (inner.empty() && elementIndex) {
-        element = arrayLayout(*elementIndex, type_elem(elementType), folder);
+        element = elementIndex->length() == 0
+                      ? nullLayout(*elementIndex, type_elem(elementType), folder)
+                      : arrayLayout(*elementIndex, type_elem(elementType), folder);
     } else if (inner.empty()) {
-        element = layoutOf(elementType, folder);
+        element = componentLayout(elementType, folder);
     } else {
         element = arrayLayout(inner.front(), elementType, folder,
                               std::vector<Folder::Range>(inner.begin() + 1, inner.end()));
@@ -512,7 +531,8 @@ std::optional<Layout> layoutOf(type_t type, const Folder& folder) {
         Layout layout{.storage = {}, .recordType = base};
         std::uint64_t total = 0;
         for (unsigned index = 0; index < type_fields(base); ++index) {
-            std::optional<Layout> field = layoutOf(tree_type(type_field(base, index)), folder);
+            std::optional<Layout> field =
+                componentLayout(tree_type(type_field(base, index)), folder);
             if (!field) return std::nullopt;
             total += field->storage.bitWidth();
             layout.fields.push_back(std::move(*field));
