@@ -818,6 +818,9 @@ vhpiPhysT PliContext::vhpiGetPhys(vhpiPhysPropertyT property, vhpiHandleT /*obje
 // ---------------------------------------------------------------------------
 
 eir::BitVector PliContext::vhpiBits(const Object& object) const {
+    // An empty array, a field of a record or an element of an array that has no elements, holds
+    // no bit; a vector has one at least, and nothing of it is read.
+    if (object.width == 0) return eir::BitVector::filled(1, eir::Logic::Zero);
     if (object.target.kind == TargetKind::Parameter) {
         const eir::Parameter& parameter =
             definitionOf(object.target.first)
@@ -996,6 +999,8 @@ int PliContext::vhpiPutValue(vhpiHandleT object, vhpiValueT* value, vhpiPutValue
         fail(vpiError, "vhpi_put_value: nothing may be written at the end of a time step");
         return -1;
     }
+    // Nothing is written to an object without a bit.
+    if (found->width == 0) return 0;
     if (mode == vhpiRelease) return vhpiWrite(*found, eir::BitVector(found->width), mode) ? 0 : -1;
     if (value == nullptr) {
         fail(vpiError, "vhpi_put_value: the value is a null pointer");
