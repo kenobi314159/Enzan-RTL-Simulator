@@ -81,13 +81,14 @@ jobs:
 
       # flex and zstd build NVC's analysis, and GHDL is the reference the VHDL golden cases
       # are compared against. Python and cocotb are for the cocotb golden test of a VHDL
-      # toplevel, through VHPI, and for cocotb's suite run with VHDL toplevels.
+      # toplevel, through VHPI, and for cocotb's suite run with VHDL toplevels. Qt 6 is for the
+      # graphical front end's windows and Tcl for its theme.
       - name: Install dependencies
         run: |
           sudo apt-get update
           sudo apt-get install --no-install-recommends -y \
             cmake ninja-build ccache clang libgtest-dev zlib1g-dev flex libzstd-dev \
-            ghdl ghdl-mcode python3 python3-venv libpython3-dev
+            ghdl ghdl-mcode python3 python3-venv libpython3-dev qt6-base-dev tcl-dev
 
       - name: Install cocotb
         run: |
@@ -101,19 +102,22 @@ jobs:
           key: ccache-${{ matrix.preset }}-${{ github.sha }}
           restore-keys: ccache-${{ matrix.preset }}-
 
-      # The defaults, but for the SystemVerilog frontend and the GUI, which would take too much
-      # time to compile repeatedly.
+      # The defaults, but for the SystemVerilog frontend, which would take too much time to
+      # compile repeatedly. The GUI is built, and its tests run, under every compiler and build
+      # type.
       - name: Configure
         run: >
           cmake --preset ${{ matrix.preset }}
           -DENZAN_WERROR=ON
           -DENZAN_ENABLE_SYSTEMVERILOG=OFF
-          -DENZAN_BUILD_GUI=OFF
           -DENZAN_COCOTB_PYTHON="$PWD/.venv/bin/python"
 
       - name: Build
         run: cmake --build --preset ${{ matrix.preset }}
 
+      # No display is needed. The GUI tests choose the offscreen platform from inside the
+      # binary rather than trusting the environment, so that they behave the same on a machine
+      # with no session as in a desktop.
       - name: Test
         run: ctest --preset ${{ matrix.preset }}
 
@@ -157,7 +161,7 @@ jobs:
           exit "$status"
 
       # cocotb's own regression suite with VHDL toplevels, through VHPI, held to its own pass
-      # list; the run with Verilog ones is in the SystemVerilog job.
+      # list; the run with Verilog ones is in the default configuration's job.
       - name: cocotb regression suite, VHDL toplevels
         if: matrix.preset == 'gcc-release'
         env:
@@ -271,56 +275,12 @@ jobs:
         if: always()
         run: ccache --show-stats
 
-  gui:
-    name: Graphical front end without the language frontends
-    runs-on: ubuntu-24.04
-    timeout-minutes: 20
-    steps:
-      - uses: actions/checkout@v7
-
-      # Qt 6 for the windows and Tcl for the theme; nothing of NVC's or slang's.
-      - name: Install dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install --no-install-recommends -y \
-            cmake ninja-build ccache libgtest-dev zlib1g-dev qt6-base-dev tcl-dev
-
-      - name: Restore compiler cache
-        uses: actions/cache@v6
-        with:
-          key: ccache-gui-${{ github.sha }}
-          path: ${{ env.CCACHE_DIR }}
-          restore-keys: ccache-gui-
-
-      # Both frontends are off, which is this job's reason to exist now that the build matrix
-      # builds the GUI too. The kernel and the front end are meant to be usable without slang
-      # or NVC, and what is compiled only without them, behind the ENZAN_WITH_SYSTEMVERILOG and
-      # ENZAN_WITH_VHDL guards of tools/enzan, src/session and src/pli, is compiled nowhere
-      # else; a helper left on the wrong side of a guard is an unused function only here. The
-      # front end's tests drive a kernel built from EIR they construct themselves, so they need
-      # neither.
-      - name: Configure
-        run: >
-          cmake --preset gcc-debug
-          -DENZAN_WERROR=ON
-          -DENZAN_ENABLE_SYSTEMVERILOG=OFF
-          -DENZAN_ENABLE_VHDL=OFF
-
-      - name: Build
-        run: cmake --build --preset gcc-debug
-
-      # No display is needed. The GUI tests choose the offscreen platform from inside the
-      # binary rather than trusting the environment, so that they behave the same on a machine
-      # with no session as in a desktop.
-      - name: Test
-        run: ctest --preset gcc-debug
-
-      - name: Report cache statistics
-        if: always()
-        run: ccache --show-stats
-
-  systemverilog:
-    name: SystemVerilog frontend and golden suite, default configuration
+  # The default configuration, with both frontends and the GUI. It is named for the
+  # configuration rather than for slang, the reason it is a job of its own, because it runs the
+  # VHDL frontend's tests as well: ctest runs every test the build has, and what needs both
+  # frontends at once, VHDL with Verilog, can run nowhere else.
+  default:
+    name: Default configuration, both frontends
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:

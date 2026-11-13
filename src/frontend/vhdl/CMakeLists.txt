@@ -2,7 +2,7 @@
 
 enzan_add_component(
   frontend_vhdl
-  SOURCES BodyTranslator.cpp Folder.cpp NvcAnalysis.cpp SourceOrder.cpp Strings.cpp Textio.cpp
+  SOURCES BodyTranslator.cpp Folder.cpp Intrinsics.cpp NvcAnalysis.cpp SourceOrder.cpp Strings.cpp Textio.cpp
           Translator.cpp Types.cpp VhdlFrontend.cpp
   HEADERS BodyTranslator.h Folder.h NvcAnalysis.h NvcApi.h SourceOrder.h Translator.h Types.h
           VhdlFrontend.h

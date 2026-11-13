@@ -12,6 +12,7 @@
 #include "frontend/vhdl/NvcApi.h"
 #include "frontend/vhdl/Types.h"
 
+#include <array>
 #include <cstdint>
 #include <map>
 #include <optional>
@@ -158,6 +159,13 @@ public:
     /// The translated process, or nothing having reported why.
     std::optional<eir::Process> translate();
 
+    /// How the formal end of a port association reads: the generics it folds with, and the port it
+    /// names, which stands for the object the association's process is given.
+    struct FormalScope {
+        const Folder* folder = nullptr;
+        tree_t port = nullptr;
+    };
+
     /// A process that keeps one end of a port association equal to the other, for a port
     /// associated in parts or with something other than a whole signal: `target <= value`, then a
     /// wait on whatever that read, over and over. A null end is the whole of the port, which is
@@ -167,10 +175,16 @@ public:
     /// When `seed` holds a value, the port object's initial one, the bits the association gives the
     /// target at the start are spliced into it where they can be known statically: the actual's
     /// initial value or its static value.
-    std::optional<eir::Process> translateAssociation(tree_t target, tree_t value,
-                                                     std::uint32_t portObject,
-                                                     const Layout& portLayout,
-                                                     std::optional<eir::BitVector>* seed);
+    ///
+    /// The formal is written against the instantiated unit's declarations and the actual against
+    /// the instantiating architecture's, which for a unit that instantiates itself are the very
+    /// same declarations bound to different objects and values. So the formal, the target when
+    /// `formalIsTarget` and the value otherwise, is read in `formal`, when that is given, and the
+    /// actual in this body's scope.
+    std::optional<eir::Process>
+    translateAssociation(tree_t target, tree_t value, std::uint32_t portObject,
+                         const Layout& portLayout, std::optional<eir::BitVector>* seed,
+                         const FormalScope* formal = nullptr, bool formalIsTarget = true);
 
     /// The translated subprogram and its result's layout, or nothing having reported why.
     struct Translated {
@@ -179,6 +193,50 @@ public:
     };
 
     std::optional<Translated> translateSubprogram();
+
+    // --- operators of std_logic_1164 and numeric_std, run natively --------------------------
+
+    /// What one parameter of such an operator is: a vector of std_ulogic that is only a vector,
+    /// one that is a number, unsigned or signed, or an integer.
+    enum class NativeParameter : std::uint8_t { Other, Logic, Unsigned, Signed, Integer };
+
+    enum class NativeOp : std::uint8_t {
+        And,
+        Or,
+        Nand,
+        Nor,
+        Xor,
+        Xnor,
+        Not,
+        Add,
+        Subtract,
+        Multiply,
+        Negate,
+        Equal,
+        NotEqual,
+        Less,
+        LessEqual,
+        Greater,
+        GreaterEqual,
+        ToInteger,
+        ToUnsigned,
+        ToSigned,
+        Resize,
+        ShiftLeft,
+        ShiftRight,
+    };
+
+    /// An operator of the IEEE packages that a call computes in a few instructions instead of
+    /// running its body, which is a loop over its operands' elements.
+    struct Native {
+        NativeOp op = NativeOp::And;
+        std::array<NativeParameter, 2> parameters = {NativeParameter::Other,
+                                                     NativeParameter::Other};
+        unsigned count = 0;
+
+        /// True of the operators on `signed`, whose extensions and comparisons are signed.
+        bool isSigned = false;
+    };
 
 private:
     /// A translated value: the register holding it, and its type in EIR and in VHDL.
@@ -528,6 +586,43 @@ private:
     /// one when it must be, which is when it waits or assigns a signal or takes one as a
     /// parameter. Returns a function's result; a procedure's is a placeholder.
     std::optional<Value> callSubprogram(tree_t call, tree_t declaration);
+
+    /// The call of `declaration`, a subprogram translated once for a shape, as a call of its body
+    /// with the arguments `values`, which are `actuals` evaluated. A function's result goes into
+    /// `resultRegister` when there is one, and into a register of its own otherwise.
+    std::optional<Value> emitCallSite(tree_t call, tree_t declaration,
+                                      const std::vector<tree_t>& actuals, const Shape& shape,
+                                      const std::vector<Value>& values,
+                                      std::optional<std::uint32_t> resultRegister);
+
+    /// The operation `declaration` is, when it is one of those the call computes natively.
+    [[nodiscard]] static std::optional<Native> nativeOf(tree_t declaration);
+
+    /// What `nativeCall` made of a call: a call it took, and what it returned, which is nothing
+    /// when it reported why it could not.
+    struct NativeResult {
+        bool handled = false;
+        std::optional<Value> value;
+    };
+
+    /// A call of the operator `native` is, as the code it runs when every element of its operands
+    /// is a 0, a 1, an L or an H, and as a call of the operator's own body otherwise, which
+    /// reports what a metavalue or a number out of range makes of it and keeps whichever of the
+    /// 'U' and 'X' of the standard the result is. The operands are evaluated once, and the
+    /// result is the same wherever it is computed.
+    ///
+    /// Not handled when a vector actual is a string of run-time length, or when what a size
+    /// parameter holds is not known here: the call then takes the way any call does.
+    NativeResult nativeCall(tree_t call, tree_t declaration, const std::vector<tree_t>& actuals,
+                            const Native& native);
+
+    /// `resize` of `vector`, a number of elements the call's `size`: nothing to leave to a body,
+    /// since it copies elements and reports nothing.
+    NativeResult resizeNative(tree_t call, const Value& vector, std::int64_t size, bool isSigned);
+
+    /// `shift_left` or `shift_right` of `vector` by `count` elements, likewise.
+    NativeResult shiftNative(tree_t call, const Value& vector, const Value& count, bool left,
+                             bool isSigned);
     std::optional<Value> inlineCall(tree_t call, tree_t declaration, tree_t calleeBody,
                                     const std::vector<tree_t>& actuals);
 
@@ -714,6 +809,21 @@ private:
     std::optional<Layout> resultLayout;
 
     std::vector<Folder> folders;
+
+    /// Set by an `if` whose branch was chosen by a condition that folded and leaves the sequence
+    /// it is in, with a `return`, an `exit` or a `next`: what follows it in that sequence cannot
+    /// run. Read, and cleared, by the loop over the sequence's statements.
+    bool unreachableAfter = false;
+
+    /// The formal port of the association end being read, and its object, when one is.
+    tree_t formalPort = nullptr;
+    std::uint32_t formalObject = 0;
+
+    class FormalEnd;
+
+    /// The object holding `declaration`, a port or a signal: the formal port's where an
+    /// association's formal is being read, and the scope's otherwise.
+    [[nodiscard]] std::optional<std::uint32_t> objectOf(tree_t declaration) const;
 
     /// The scalar variables of subprograms whose values are followed while they fold, bound in
     /// the folder where translation is: a variable computed from what a specialisation binds,

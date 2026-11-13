@@ -1870,9 +1870,9 @@ std::uint32_t ArchitectureTranslator::vhdlTypeFor(type_t type, const Layout& lay
     eir::VhdlType described;
     // A named subtype is known by its own name, `NATURAL`; an anonymous one by its base type's.
     described.name = upperName(type_has_ident(type) ? type_ident(type) : type_ident(base));
-    // A null array's placeholder bit is no part of it.
-    described.width =
-        layout.isArray() && layout.index.length() == 0 ? 0 : layout.storage.bitWidth();
+    // The placeholder bits of an array with no elements, or of elements that have none, are no
+    // part of it.
+    described.width = holdsNothing(layout) && !layout.isRecord() ? 0 : layout.storage.bitWidth();
     const auto rangeOf = [](const Folder::Range& range) {
         return eir::VhdlType::Range{
             .left = range.left, .right = range.right, .ascending = range.ascending};
@@ -1892,7 +1892,12 @@ std::uint32_t ArchitectureTranslator::vhdlTypeFor(type_t type, const Layout& lay
         described.kind = eir::VhdlType::Kind::Array;
         described.ranges.push_back(rangeOf(layout.index));
         for (const Folder::Range& inner : layout.inner) described.ranges.push_back(rangeOf(inner));
-        const std::optional<Layout> element = layoutOf(layout.elementType, folding);
+        // The element is the scalar or the record or vector it is, whatever the dimensions.
+        std::optional<Layout> element;
+        if (layout.inner.empty() && layout.element)
+            element = *layout.element;
+        else
+            element = componentLayout(layout.elementType, folding);
         if (!element) return eir::VhdlType::None;
         described.element = vhdlTypeFor(layout.elementType, *element);
         if (described.element == eir::VhdlType::None) return eir::VhdlType::None;
@@ -1940,6 +1945,8 @@ bool ArchitectureTranslator::addObject(tree_t declaration) {
         unsupported(declaration, std::format("a signal of type {}", type_pp(type)));
         return false;
     }
+    // An array of vectors of no elements holds nothing either, and so does a record of such.
+    null = null || holdsNothing(*layout);
     // Left unresolved, its lone driver's value would be its value, which the function need not
     // return.
     if (resolutionNotHeld(type, folding)) {
@@ -1953,7 +1960,7 @@ bool ArchitectureTranslator::addObject(tree_t declaration) {
     // unconnected port reads; a connected one is the signal it connects.
     std::optional<eir::BitVector> initial;
     if (null) {
-        initial = eir::BitVector::filled(1, eir::Logic::Zero);
+        initial = eir::BitVector::filled(layout->storage.bitWidth(), eir::Logic::Zero);
     } else if (tree_has_value(declaration)) {
         initial = constantBits(tree_value(declaration), *layout, folding.elaborating());
         if (!initial) {
@@ -2786,10 +2793,11 @@ ArchitectureTranslator::connectThrough(std::string objectName, tree_t port, tree
     };
 
     // A formal names the port, which is that object here, and its bounds fold with the instance's
-    // generics.
-    const Folder outer = folding;
-    folding.absorb(childGenerics);
-    objects.insert_or_assign(formalPort, throughIndex);
+    // generics. An actual is read in this architecture, whose generics and ports a unit
+    // instantiating itself declares again, so the two ends are kept apart.
+    Folder formalFolding = folding;
+    formalFolding.absorb(childGenerics);
+    const BodyTranslator::FormalScope formalScope{.folder = &formalFolding, .port = formalPort};
     std::optional<eir::BitVector> start = result.objects[throughIndex].initialValue;
     for (std::size_t index = 0; index < associations.size(); ++index) {
         tree_t association = associations[index];
@@ -2807,16 +2815,14 @@ ArchitectureTranslator::connectThrough(std::string objectName, tree_t port, tree
             tree_t formalPart = unconverted(formal);
             if (formalPart != nullptr && tree_kind(formalPart) == T_REF) formalPart = nullptr;
             BodyTranslator in(*this, association, name + "$in");
-            std::optional<eir::Process> inward =
-                in.translateAssociation(formalPart, actual, throughIndex, *layout, &start);
+            std::optional<eir::Process> inward = in.translateAssociation(
+                formalPart, actual, throughIndex, *layout, &start, &formalScope, true);
             if (inward) result.processes.push_back(std::move(*inward));
 
-            objects.insert_or_assign(formalPort, drivenIndex);
             BodyTranslator out(*this, association, name + "$out");
             std::optional<eir::Process> outward = out.translateAssociation(
-                unconverted(actual), formal, drivenIndex, *layout, nullptr);
+                unconverted(actual), formal, drivenIndex, *layout, nullptr, &formalScope, false);
             if (outward) result.processes.push_back(std::move(*outward));
-            objects.insert_or_assign(formalPort, throughIndex);
             continue;
         }
 
@@ -2831,13 +2837,13 @@ ArchitectureTranslator::connectThrough(std::string objectName, tree_t port, tree
 
         BodyTranslator translator(*this, association, std::move(name));
         std::optional<eir::Process> process =
-            input ? translator.translateAssociation(formal, actual, throughIndex, *layout, &start)
-                  : translator.translateAssociation(actual, formal, throughIndex, *layout, nullptr);
+            input ? translator.translateAssociation(formal, actual, throughIndex, *layout, &start,
+                                                    &formalScope, true)
+                  : translator.translateAssociation(actual, formal, throughIndex, *layout, nullptr,
+                                                    &formalScope, false);
         if (process) result.processes.push_back(std::move(*process));
     }
     result.objects[throughIndex].initialValue = std::move(start);
-    objects.erase(formalPort);
-    folding = outer;
     return Through{.object = throughIndex, .driven = drivenIndex};
 }
 

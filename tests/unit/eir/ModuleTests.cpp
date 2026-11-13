@@ -7,6 +7,8 @@
 #include <gtest/gtest.h>
 
 #include <cstdint>
+#include <string>
+#include <string_view>
 #include <vector>
 
 namespace {
@@ -110,6 +112,50 @@ TEST(Encoding, EncodingGivesAnUnknownBitOfABitOrABooleanItsZero) {
     BitVector logic = BitVector::filled(32, Logic::Zero);
     enzan::eir::encode(Encoding::VhdlLogic, shown.ref(), logic.mutableRef());
     EXPECT_EQ(logic.ref().toUInt64(), 0x03020401U) << "as storeShown stores them";
+}
+
+TEST(Encoding, VhdlLogicCodesOfSeveralWordsShowAndStoreAsTheyDoInOne) {
+    // Seventy elements run through every code, and past them: a byte that is none of the nine
+    // is unknown. The codes are read a byte at a time, which a word boundary must not disturb.
+    constexpr std::uint32_t Elements = 70;
+    const std::string_view expected = "xx01zx01x";
+    BitVector codes = BitVector::filled(Elements * 8, Logic::Zero);
+    std::string shownText;
+    for (std::uint32_t element = 0; element < Elements; ++element) {
+        const std::uint32_t code = element % 10;
+        for (std::uint32_t bit = 0; bit < 8; ++bit) {
+            if (((code >> bit) & 1U) != 0) codes.set((element * 8) + bit, Logic::One);
+        }
+        shownText += code < 9 ? expected[code] : 'x';
+    }
+    BitVector shown(Elements);
+    enzan::eir::present(Encoding::VhdlLogic, codes.ref(), shown.mutableRef());
+    // The text writes the highest bit first, and the highest element is the last made.
+    EXPECT_EQ(enzan::eir::toString(shown.ref(), enzan::eir::Radix::Binary),
+              std::string(shownText.rbegin(), shownText.rend()));
+
+    // Shown as they are, and stored again, the codes that are a bit's value come back as they
+    // were, and any other as the 'X' or 'Z' it is: 0, 1, L and H as 0, 1, 0 and 1.
+    BitVector stored = BitVector::filled(Elements * 8, Logic::One);
+    enzan::eir::encode(Encoding::VhdlLogic, shown.ref(), stored.mutableRef());
+    for (std::uint32_t element = 0; element < Elements; ++element) {
+        std::uint32_t code = 0;
+        for (std::uint32_t bit = 0; bit < 8; ++bit) {
+            if (stored.ref().get((element * 8) + bit) == Logic::One) code |= 1U << bit;
+        }
+        constexpr std::uint32_t Stored[] = {1, 1, 2, 3, 4, 1, 2, 3, 1, 1};
+        EXPECT_EQ(code, Stored[element % 10]) << "element " << element;
+    }
+}
+
+TEST(Encoding, ACodeWithAnUnknownBitShowsAsUnknown) {
+    // A byte holding an X is no code, which the loop over bits reads as unknown.
+    BitVector codes = BitVector::filled(16, Logic::Zero);
+    codes.set(1, Logic::One);
+    codes.set(9, Logic::Unknown);
+    BitVector shown(2);
+    enzan::eir::present(Encoding::VhdlLogic, codes.ref(), shown.mutableRef());
+    EXPECT_EQ(enzan::eir::toString(shown.ref(), enzan::eir::Radix::Binary), "x0");
 }
 
 TEST(Encoding, IsNamedByWhatItHolds) {

@@ -77,7 +77,8 @@ unrolled for slices that move with their parameter and variable slices of run-ti
 concatenation, the predefined operators on scalars and arrays, `'event`, `'active` and
 `'last_value` of whole signals; aliases of objects and of their parts, of constants, subprograms and
 types; functions and procedures of packages and architectures, std_logic_1164's and numeric_std's
-among them. std.textio's `write` of strings, characters and integers to a line, `writeline`,
+among them, whose operators on vectors are computed on the numbers they are, when no element is a
+metavalue (`Intrinsics.cpp`). std.textio's `write` of strings, characters and integers to a line, `writeline`,
 `readline` and `read` of characters and strings from a line, the predefined `write` and `read` of
 files of text and of other types, and `endfile`, run natively by the runtime. A subprogram's
 strings whose lengths only the run knows are held in the runtime's scratch: their bounds, elements

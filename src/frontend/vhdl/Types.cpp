@@ -4,6 +4,7 @@
 
 #include "eir/BitOps.h"
 
+#include <algorithm>
 #include <cctype>
 #include <cstddef>
 #include <limits>
@@ -418,6 +419,20 @@ std::optional<eir::Type> scalarStorage(type_t type) {
     }
 }
 
+std::optional<Layout> componentLayout(type_t type, const Folder& folder) {
+    if (std::optional<Layout> layout = layoutOf(type, folder)) return layout;
+    return nullLayoutOfType(type, folder);
+}
+
+bool holdsNothing(const Layout& layout) {
+    if (layout.isRecord()) {
+        return std::ranges::all_of(layout.fields,
+                                   [](const Layout& field) { return holdsNothing(field); });
+    }
+    if (!layout.isArray()) return false;
+    return layout.isNull() || (layout.element && holdsNothing(*layout.element));
+}
+
 std::optional<Layout> arrayLayout(const Folder::Range& index, type_t elementType,
                                   const Folder& folder, const std::vector<Folder::Range>& inner,
                                   const std::optional<Folder::Range>& elementIndex) {
@@ -425,9 +440,11 @@ std::optional<Layout> arrayLayout(const Folder::Range& index, type_t elementType
     // whose type leaves its bounds to the object.
     std::optional<Layout> element;
     if (inner.empty() && elementIndex) {
-        element = arrayLayout(*elementIndex, type_elem(elementType), folder);
+        element = elementIndex->length() == 0
+                      ? nullLayout(*elementIndex, type_elem(elementType), folder)
+                      : arrayLayout(*elementIndex, type_elem(elementType), folder);
     } else if (inner.empty()) {
-        element = layoutOf(elementType, folder);
+        element = componentLayout(elementType, folder);
     } else {
         element = arrayLayout(inner.front(), elementType, folder,
                               std::vector<Folder::Range>(inner.begin() + 1, inner.end()));
@@ -446,8 +463,13 @@ std::optional<Layout> arrayLayout(const Folder::Range& index, type_t elementType
 
 std::optional<Layout> nullLayout(const Folder::Range& index, type_t elementType,
                                  const Folder& folder,
-                                 const std::optional<Folder::Range>& elementIndex) {
-    if (index.length() != 0) return std::nullopt;
+                                 const std::optional<Folder::Range>& elementIndex,
+                                 const std::vector<Folder::Range>& inner) {
+    const bool null =
+        index.length() == 0 || std::ranges::any_of(inner, [](const Folder::Range& range) {
+            return range.length() == 0;
+        });
+    if (!null) return std::nullopt;
     const std::optional<Layout> element =
         elementIndex ? arrayLayout(*elementIndex, type_elem(elementType), folder)
                      : layoutOf(elementType, folder);
@@ -457,7 +479,8 @@ std::optional<Layout> nullLayout(const Folder::Range& index, type_t elementType,
                   .index = index,
                   .elementBits = element->storage.bitWidth(),
                   .elementType = elementType,
-                  .element = std::make_shared<const Layout>(*element)};
+                  .element = inner.empty() ? std::make_shared<const Layout>(*element) : nullptr,
+                  .inner = inner};
 }
 
 Layout runTimeStringLayout(type_t type, bool ascending) {
@@ -489,9 +512,23 @@ bool isDereferencedLine(tree_t name) {
     return type_kind(type_base_recur(access)) == T_ACCESS && scalarStorage(access).has_value();
 }
 
+std::optional<Layout> nullLayoutOfType(type_t type, const Folder& folder) {
+    if (type == nullptr || !type_is_array(type)) return std::nullopt;
+    std::vector<Folder::Range> ranges;
+    for (unsigned dimension = 0; dimension < dimension_of(type); ++dimension) {
+        const std::optional<Folder::Range> range = folder.rangeOf(type, dimension);
+        if (!range) return std::nullopt;
+        ranges.push_back(*range);
+    }
+    if (ranges.empty()) return std::nullopt;
+    return nullLayout(ranges.front(), type_elem(type), folder, std::nullopt,
+                      std::vector<Folder::Range>(ranges.begin() + 1, ranges.end()));
+}
+
 std::optional<Layout> declaredNullLayout(tree_t declaration, const Folder& folder) {
     type_t type = tree_type(declaration);
-    if (!type_is_array(type) || dimension_of(type) != 1) return std::nullopt;
+    if (!type_is_array(type)) return std::nullopt;
+    if (dimension_of(type) != 1) return nullLayoutOfType(type, folder);
     std::optional<Folder::Range> bounds = folder.boundOf(declaration);
     if (!bounds) bounds = folder.rangeOf(type);
     if (!bounds) return std::nullopt;
@@ -512,7 +549,8 @@ std::optional<Layout> layoutOf(type_t type, const Folder& folder) {
         Layout layout{.storage = {}, .recordType = base};
         std::uint64_t total = 0;
         for (unsigned index = 0; index < type_fields(base); ++index) {
-            std::optional<Layout> field = layoutOf(tree_type(type_field(base, index)), folder);
+            std::optional<Layout> field =
+                componentLayout(tree_type(type_field(base, index)), folder);
             if (!field) return std::nullopt;
             total += field->storage.bitWidth();
             layout.fields.push_back(std::move(*field));

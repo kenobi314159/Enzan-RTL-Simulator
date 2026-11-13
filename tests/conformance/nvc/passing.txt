@@ -135,6 +135,7 @@ elab29
 elab30
 elab32
 elab37
+elab38
 elab4
 elab40
 elab41
@@ -174,6 +175,8 @@ genpack14
 genpack7
 grlib1
 ieee1
+ieee11
+ieee14
 ieee15
 ieee17
 ieee19
@@ -191,6 +194,7 @@ issue1094
 issue110
 issue111
 issue112
+issue1137
 issue1143
 issue115
 issue116
@@ -248,6 +252,7 @@ issue367
 issue369
 issue371
 issue376
+issue405
 issue407
 issue412
 issue414
@@ -265,6 +270,7 @@ issue484
 issue502
 issue508
 issue53
+issue539
 issue540
 issue542
 issue547

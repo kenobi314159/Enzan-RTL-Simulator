@@ -362,7 +362,7 @@ std::optional<BodyTranslator::Place> BodyTranslator::drivenPrefix(tree_t name) c
         }
         if (tree_kind(declaration) == T_ALIAS && tree_has_value(declaration))
             return drivenPrefix(tree_value(declaration));
-        const std::optional<std::uint32_t> object = owner.objectFor(declaration);
+        const std::optional<std::uint32_t> object = objectOf(declaration);
         if (!object) return std::nullopt;
         // A signal of a null range has no element to drive.
         const std::optional<Layout> layout = declaredLayout(declaration, folder());
@@ -466,6 +466,38 @@ bool BodyTranslator::fail(tree_t where, std::string_view what) {
     return false;
 }
 
+std::optional<std::uint32_t> BodyTranslator::objectOf(tree_t declaration) const {
+    if (formalPort != nullptr && declaration == formalPort) return formalObject;
+    return owner.objectFor(declaration);
+}
+
+/// For as long as this lives, names and static values are those of the formal end of a port
+/// association, when there is one: the formal port is `object` and its bounds fold in the
+/// instantiated unit's generics.
+class BodyTranslator::FormalEnd {
+public:
+    FormalEnd(BodyTranslator& reading, const FormalScope* scope, std::uint32_t object)
+        : translator(reading), pushed(scope != nullptr) {
+        if (!pushed) return;
+        translator.folders.push_back(*scope->folder);
+        translator.formalPort = scope->port;
+        translator.formalObject = object;
+    }
+
+    FormalEnd(const FormalEnd&) = delete;
+    FormalEnd& operator=(const FormalEnd&) = delete;
+
+    ~FormalEnd() {
+        if (!pushed) return;
+        translator.folders.pop_back();
+        translator.formalPort = nullptr;
+    }
+
+private:
+    BodyTranslator& translator;
+    bool pushed;
+};
+
 // --- the process --------------------------------------------------------------
 
 std::optional<eir::Process> BodyTranslator::translate() {
@@ -497,14 +529,18 @@ std::optional<eir::Process> BodyTranslator::translate() {
 
 std::optional<eir::Process>
 BodyTranslator::translateAssociation(tree_t target, tree_t value, std::uint32_t portObject,
-                                     const Layout& portLayout,
-                                     std::optional<eir::BitVector>* seed) {
+                                     const Layout& portLayout, std::optional<eir::BitVector>* seed,
+                                     const FormalScope* formal, bool formalIsTarget) {
     const Place port{.objectIndex = portObject, .layout = portLayout};
     // A port or a part of one, or either converted, connects the two sides directly; an
     // expression is a signal of its own, which a concurrent assignment drives a delta cycle later
     // (IEEE 1076 section 6.5.6.3).
-    process.connectsPort = value == nullptr || designatesStorage(value)
-                           || tree_kind(value) == T_TYPE_CONV || tree_kind(value) == T_CONV_FUNC;
+    process.connectsPort =
+        value == nullptr || tree_kind(value) == T_TYPE_CONV || tree_kind(value) == T_CONV_FUNC;
+    if (!process.connectsPort) {
+        const FormalEnd end(*this, formalIsTarget ? nullptr : formal, portObject);
+        process.connectsPort = designatesStorage(value);
+    }
     const std::uint32_t entry = newBlock("entry");
     selectBlock(entry);
     statementLocation = owner.locate(source);
@@ -512,7 +548,11 @@ BodyTranslator::translateAssociation(tree_t target, tree_t value, std::uint32_t 
     jump(loop);
     selectBlock(loop);
 
-    const std::optional<Place> to = target == nullptr ? std::optional(port) : place(target);
+    std::optional<Place> to = port;
+    if (target != nullptr) {
+        const FormalEnd end(*this, formalIsTarget ? formal : nullptr, portObject);
+        to = place(target);
+    }
     if (!to) return std::nullopt;
     if (to->isVariable || to->offset || to->empty) {
         fail(target, "associating a port with this");
@@ -528,6 +568,7 @@ BodyTranslator::translateAssociation(tree_t target, tree_t value, std::uint32_t 
         given = read(port, nullptr);
         noteRead(portObject);
     } else {
+        const FormalEnd end(*this, formalIsTarget ? nullptr : formal, portObject);
         start = constantBits(value, to->layout, folder());
         if (designatesStorage(value)) {
             const std::optional<Place> from = place(value);
@@ -763,7 +804,17 @@ bool BodyTranslator::statements(tree_t container) {
         // What follows an `exit` or a `next` cannot run, but it is still translated, into a block
         // nothing reaches, so that it is checked as everything else is.
         if (terminated()) selectBlock(newBlock("unreachable"));
+        unreachableAfter = false;
         if (!statement(tree_stmt(container, index))) return false;
+        // What follows an `if` whose condition folded and whose branch leaves is left out, as
+        // the branches a folded condition rules out are: a guard for a case that cannot arise
+        // is followed by code written for the others, a null array's `L(L'left)`.
+        if (unreachableAfter) {
+            unreachableAfter = false;
+            for (unsigned later = index + 1; later < count; ++later)
+                noteDriversIn(tree_stmt(container, later));
+            break;
+        }
     }
     return true;
 }
@@ -1149,11 +1200,17 @@ bool BodyTranslator::ifStatement(tree_t statement) {
     };
     bool fallsThrough = true;
 
+    // Whether any branch is chosen at run time. When none is, the branch chosen here is the only
+    // way on, and if it leaves the sequence the statements after the `if` cannot run.
+    bool chosenAtRunTime = false;
+    const auto leavesSequence = [&] { return !chosenAtRunTime && terminated(); };
+
     const unsigned count = tree_conds(statement);
     for (unsigned index = 0; index < count; ++index) {
         tree_t branch = tree_cond(statement, index);
         if (!tree_has_value(branch)) {
             if (!statements(branch)) return false;
+            unreachableAfter = leavesSequence();
             arrive();
             jump(join);
             fallsThrough = false;
@@ -1171,6 +1228,7 @@ bool BodyTranslator::ifStatement(tree_t statement) {
                 continue;
             }
             if (!statements(branch)) return false;
+            unreachableAfter = leavesSequence();
             arrive();
             jump(join);
             fallsThrough = false;
@@ -1180,6 +1238,7 @@ bool BodyTranslator::ifStatement(tree_t statement) {
             break;
         }
 
+        chosenAtRunTime = true;
         const std::optional<Value> condition = expression(tree_value(branch));
         if (!condition) return false;
         const std::uint32_t taken = newBlock("if-then");
@@ -2286,6 +2345,11 @@ std::optional<BodyTranslator::Value> BodyTranslator::callSubprogram(tree_t call,
     const std::optional<std::vector<tree_t>> actuals = actualsOf(call, declaration);
     if (!actuals) return std::nullopt;
 
+    if (const std::optional<Native> native = nativeOf(declaration)) {
+        NativeResult taken = nativeCall(call, declaration, *actuals, *native);
+        if (taken.handled) return std::move(taken.value);
+    }
+
     // A procedure may wait and assign signals, and a subprogram may take a signal and read its
     // attributes, neither of which a body of its own can do; nor can it reach the variables of
     // the process that declares it. Those are inlined.
@@ -2358,6 +2422,15 @@ std::optional<BodyTranslator::Value> BodyTranslator::callSubprogram(tree_t call,
         values.push_back(*value);
     }
 
+    std::optional<Value> result = emitCallSite(call, declaration, *actuals, shape, values, {});
+    if (mark) releaseScratch(*mark);
+    return result;
+}
+
+std::optional<BodyTranslator::Value>
+BodyTranslator::emitCallSite(tree_t call, tree_t declaration, const std::vector<tree_t>& actuals,
+                             const Shape& shape, const std::vector<Value>& values,
+                             std::optional<std::uint32_t> resultRegister) {
     const std::optional<Callee> found = owner.callee(declaration, shape, call);
     if (!found) return std::nullopt;
     const Callee& callee = *found;
@@ -2371,7 +2444,7 @@ std::optional<BodyTranslator::Value> BodyTranslator::callSubprogram(tree_t call,
         const Layout& parameter = callee.parameters.at(index);
         if (parameter.isComposite()
             && values[index].type.bitWidth() != parameter.storage.bitWidth()) {
-            fail((*actuals)[index], "an actual of another length than its parameter");
+            fail(actuals[index], "an actual of another length than its parameter");
             return std::nullopt;
         }
         site.arguments.push_back(
@@ -2381,7 +2454,7 @@ std::optional<BodyTranslator::Value> BodyTranslator::callSubprogram(tree_t call,
     Value result{.reg = 0, .type = eir::Type::voidType(), .vhdlType = nullptr};
     if (const std::optional<Layout>& returned = callee.result) {
         const Layout layout = *returned;
-        result = Value{.reg = newRegister(layout.storage),
+        result = Value{.reg = resultRegister ? *resultRegister : newRegister(layout.storage),
                        .type = layout.storage,
                        .vhdlType = tree_has_type(call) ? tree_type(call) : nullptr,
                        .layout = layout};
@@ -2390,7 +2463,6 @@ std::optional<BodyTranslator::Value> BodyTranslator::callSubprogram(tree_t call,
     const auto index = static_cast<std::uint32_t>(body().calls.size());
     body().calls.push_back(std::move(site));
     emit(eir::Instruction::make(eir::Opcode::Call, {}, eir::Operand::call(index)));
-    if (mark) releaseScratch(*mark);
     return result;
 }
 
@@ -3358,7 +3430,7 @@ bool BodyTranslator::designatesStorage(tree_t name) const {
     tree_t declaration = tree_ref(name);
     if (tree_kind(declaration) == T_ALIAS && !aliases.contains(declaration))
         return tree_has_value(declaration) && designatesStorage(tree_value(declaration));
-    return owner.objectFor(declaration).has_value() || locals.contains(declaration)
+    return objectOf(declaration).has_value() || locals.contains(declaration)
            || aliases.contains(declaration);
 }
 
@@ -3399,7 +3471,7 @@ std::optional<BodyTranslator::Place> BodyTranslator::place(tree_t name) {
                                                                  : Layout{.storage = variable.type},
                          .empty = variable.layout.isNull()};
         }
-        const std::optional<std::uint32_t> object = owner.objectFor(declaration);
+        const std::optional<std::uint32_t> object = objectOf(declaration);
         if (!object) break;
         if (const std::optional<Layout> layout = declaredLayout(declaration, folder()))
             return Place{.objectIndex = *object, .layout = *layout};

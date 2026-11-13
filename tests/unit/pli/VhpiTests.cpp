@@ -17,6 +17,7 @@
 
 #include <gtest/gtest.h>
 
+#include <array>
 #include <string>
 #include <utility>
 #include <vector>
@@ -69,6 +70,23 @@ Design makeDesign() {
     top.parameters.push_back(enzan::eir::Parameter{
         .name = "limit", .value = literal("32'd7"), .isLocal = true, .vhdlType = 1});
 
+    // `pair`: a record of `tag`, an array of no elements held as a placeholder bit that is no
+    // part of it, and `count`, an integer. 33 bits: the placeholder over the integer.
+    top.vhdlTypes.push_back(VhdlType{.kind = VhdlType::Kind::Array,
+                                     .name = "NONE_T",
+                                     .width = 0,
+                                     .ranges = {{.left = 0, .right = 1, .ascending = false}},
+                                     .element = 0});
+    top.vhdlTypes.push_back(VhdlType{.kind = VhdlType::Kind::Record,
+                                     .name = "PAIR_T",
+                                     .width = 33,
+                                     .fields = {{.name = "TAG", .type = 2, .offset = 32},
+                                                {.name = "COUNT", .type = 1, .offset = 0}}});
+    top.addObject(Object{.name = "pair",
+                         .type = Type::bits(33, false, false),
+                         .initialValue = literal("33'd7"),
+                         .vhdlType = 3});
+
     Design design;
     design.addModule(std::move(top));
     return design;
@@ -106,6 +124,33 @@ protected:
     enzan::DiagnosticEngine engine;
     PliContext context;
 };
+
+TEST_F(Vhpi, AFieldWithNoBitsIsReadAsEmptyAndWrittenAsNothing) {
+    // `tag`, a field of no elements, lies at the top of `pair` as a placeholder bit that is no part
+    // of it: reading it gives the empty string, and writing it changes none of the field below.
+    vhpiHandleT pair = vhpi_handle_by_name("tb.pair", nullptr);
+    ASSERT_NE(pair, nullptr) << lastError();
+    vhpiHandleT fields = vhpi_iterator(vhpiSelectedNames, pair);
+    ASSERT_NE(fields, nullptr) << lastError();
+    vhpiHandleT tag = vhpi_scan(fields);
+    vhpiHandleT count = vhpi_scan(fields);
+    ASSERT_NE(tag, nullptr);
+    ASSERT_NE(count, nullptr);
+
+    EXPECT_EQ(vhpi_get(vhpiSizeP, tag), 0);
+    std::array<vhpiCharT, 8> text{'x'};
+    vhpiValueT string{
+        .format = vhpiBinStrVal, .bufSize = text.size(), .numElems = 0, .unit = {}, .value = {}};
+    string.value.str = text.data();
+    ASSERT_EQ(vhpi_get_value(tag, &string), 0) << lastError();
+    EXPECT_EQ(string.numElems, 0);
+    EXPECT_EQ(text[0], '\0');
+
+    ASSERT_EQ(vhpi_put_value(tag, &string, vhpiDepositPropagate), 0) << lastError();
+    vhpiValueT number{.format = vhpiIntVal, .bufSize = 0, .numElems = 0, .unit = {}, .value = {}};
+    ASSERT_EQ(vhpi_get_value(count, &number), 0) << lastError();
+    EXPECT_EQ(number.value.intg, 7);
+}
 
 TEST_F(Vhpi, AnEnumerationTakesOnlyItsLiteralsPositions) {
     // A position past the last literal is no value of the type, and the design relies on there
@@ -158,7 +203,7 @@ TEST_F(Vhpi, AnExtendedIdentifierIsOneNameAsWritten) {
     ASSERT_NE(iterator, nullptr) << lastError();
     while (vhpiHandleT signal = vhpi_scan(iterator))
         names.emplace_back(reinterpret_cast<const char*>(vhpi_get_str(vhpiNameP, signal)));
-    EXPECT_EQ(names, (std::vector<std::string>{"STATE", "\\Odd.Name\\"}));
+    EXPECT_EQ(names, (std::vector<std::string>{"STATE", "\\Odd.Name\\", "PAIR"}));
 }
 
 TEST_F(Vhpi, AStringReturnedStaysValidWhenAnotherIsAskedFor) {
