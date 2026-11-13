@@ -1866,6 +1866,70 @@ end architecture;
     EXPECT_EQ(simulation.messages(), std::vector<std::string>{"PASS"});
 }
 
+TEST_F(VhdlDesignTest, ArraysWithNothingInThemAreDescribedWithoutTheirPlaceholders) {
+    // A record's field, a dimension of an array, an element of one: each a placeholder bit that
+    // nothing reads, so no description gives it a width, and a signal of nothing else holds
+    // nothing.
+    std::unique_ptr<enzan::eir::Design> design = translate(R"(
+library ieee;
+use ieee.std_logic_1164.all;
+
+entity tb is
+end entity;
+
+architecture test of tb is
+  subtype none_t is std_logic_vector(0 downto 1);
+  type rec_t is record
+    tag : none_t;
+    n   : integer;
+  end record;
+  type nothing_t is record
+    tag : none_t;
+  end record;
+  type wide_empty_t is array (0 to 1, 1 to 0) of std_logic;
+  type empties_t is array (1 to 2) of none_t;
+  type grid_t is array (0 to 1, 0 to 2) of std_logic;
+  signal r : rec_t;
+  signal nothing : nothing_t;
+  signal wide_empty : wide_empty_t;
+  signal empties : empties_t;
+  signal grid : grid_t;
+begin
+end architecture;
+)",
+                                                           "tb");
+    ASSERT_NE(design, nullptr) << transcript();
+    const ModuleDefinition* tb = design->findModule("tb");
+    ASSERT_NE(tb, nullptr);
+    const auto objectOf = [&](std::string_view name) -> const enzan::eir::Object& {
+        const std::optional<std::uint32_t> found = tb->findObject(name);
+        EXPECT_TRUE(found.has_value()) << name;
+        return tb->objects.at(found.value_or(0));
+    };
+    const auto typeOf = [&](std::string_view name) -> const VhdlType& {
+        return tb->vhdlTypes.at(objectOf(name).vhdlType);
+    };
+
+    for (const char* name : {"nothing", "wide_empty", "empties"}) {
+        EXPECT_TRUE(objectOf(name).holdsNothing) << name;
+        EXPECT_EQ(typeOf(name).width, name == std::string_view("nothing") ? 1U : 0U) << name;
+    }
+    EXPECT_FALSE(objectOf("r").holdsNothing);
+    EXPECT_FALSE(objectOf("grid").holdsNothing);
+
+    const VhdlType& record = typeOf("r");
+    ASSERT_EQ(record.fields.size(), 2U);
+    EXPECT_EQ(tb->vhdlTypes.at(record.fields[0].type).width, 0U) << "the empty field";
+    EXPECT_EQ(tb->vhdlTypes.at(record.fields[1].type).width, 32U);
+
+    const VhdlType& empty = typeOf("wide_empty");
+    ASSERT_EQ(empty.ranges.size(), 2U);
+    EXPECT_EQ(empty.ranges[1], (VhdlType::Range{.left = 1, .right = 0, .ascending = true}));
+    EXPECT_NE(empty.element, VhdlType::None);
+    EXPECT_NE(typeOf("empties").element, VhdlType::None) << "elements of no elements";
+    EXPECT_TRUE(enzan::eir::verify(*design, engine)) << transcript();
+}
+
 TEST_F(VhdlDesignTest, AComponentWithNoEntityToBindIsLeftUnbound) {
     // An unbound instance is legal (IEEE 1076 section 7.3.3): it does nothing, so what it would
     // drive keeps its initial value, and a warning says why.

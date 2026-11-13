@@ -1870,9 +1870,9 @@ std::uint32_t ArchitectureTranslator::vhdlTypeFor(type_t type, const Layout& lay
     eir::VhdlType described;
     // A named subtype is known by its own name, `NATURAL`; an anonymous one by its base type's.
     described.name = upperName(type_has_ident(type) ? type_ident(type) : type_ident(base));
-    // A null array's placeholder bit is no part of it.
-    described.width =
-        layout.isArray() && layout.index.length() == 0 ? 0 : layout.storage.bitWidth();
+    // The placeholder bits of an array with no elements, or of elements that have none, are no
+    // part of it.
+    described.width = holdsNothing(layout) && !layout.isRecord() ? 0 : layout.storage.bitWidth();
     const auto rangeOf = [](const Folder::Range& range) {
         return eir::VhdlType::Range{
             .left = range.left, .right = range.right, .ascending = range.ascending};
@@ -1892,7 +1892,12 @@ std::uint32_t ArchitectureTranslator::vhdlTypeFor(type_t type, const Layout& lay
         described.kind = eir::VhdlType::Kind::Array;
         described.ranges.push_back(rangeOf(layout.index));
         for (const Folder::Range& inner : layout.inner) described.ranges.push_back(rangeOf(inner));
-        const std::optional<Layout> element = layoutOf(layout.elementType, folding);
+        // The element is the scalar or the record or vector it is, whatever the dimensions.
+        std::optional<Layout> element;
+        if (layout.inner.empty() && layout.element)
+            element = *layout.element;
+        else
+            element = componentLayout(layout.elementType, folding);
         if (!element) return eir::VhdlType::None;
         described.element = vhdlTypeFor(layout.elementType, *element);
         if (described.element == eir::VhdlType::None) return eir::VhdlType::None;
