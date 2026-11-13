@@ -804,7 +804,17 @@ bool BodyTranslator::statements(tree_t container) {
         // What follows an `exit` or a `next` cannot run, but it is still translated, into a block
         // nothing reaches, so that it is checked as everything else is.
         if (terminated()) selectBlock(newBlock("unreachable"));
+        unreachableAfter = false;
         if (!statement(tree_stmt(container, index))) return false;
+        // What follows an `if` whose condition folded and whose branch leaves is left out, as
+        // the branches a folded condition rules out are: a guard for a case that cannot arise
+        // is followed by code written for the others, a null array's `L(L'left)`.
+        if (unreachableAfter) {
+            unreachableAfter = false;
+            for (unsigned later = index + 1; later < count; ++later)
+                noteDriversIn(tree_stmt(container, later));
+            break;
+        }
     }
     return true;
 }
@@ -1190,11 +1200,17 @@ bool BodyTranslator::ifStatement(tree_t statement) {
     };
     bool fallsThrough = true;
 
+    // Whether any branch is chosen at run time. When none is, the branch chosen here is the only
+    // way on, and if it leaves the sequence the statements after the `if` cannot run.
+    bool chosenAtRunTime = false;
+    const auto leavesSequence = [&] { return !chosenAtRunTime && terminated(); };
+
     const unsigned count = tree_conds(statement);
     for (unsigned index = 0; index < count; ++index) {
         tree_t branch = tree_cond(statement, index);
         if (!tree_has_value(branch)) {
             if (!statements(branch)) return false;
+            unreachableAfter = leavesSequence();
             arrive();
             jump(join);
             fallsThrough = false;
@@ -1212,6 +1228,7 @@ bool BodyTranslator::ifStatement(tree_t statement) {
                 continue;
             }
             if (!statements(branch)) return false;
+            unreachableAfter = leavesSequence();
             arrive();
             jump(join);
             fallsThrough = false;
@@ -1221,6 +1238,7 @@ bool BodyTranslator::ifStatement(tree_t statement) {
             break;
         }
 
+        chosenAtRunTime = true;
         const std::optional<Value> condition = expression(tree_value(branch));
         if (!condition) return false;
         const std::uint32_t taken = newBlock("if-then");

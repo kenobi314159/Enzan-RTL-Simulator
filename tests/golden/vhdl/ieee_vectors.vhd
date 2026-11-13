@@ -31,6 +31,9 @@ begin
     variable ulv : std_ulogic_vector(3 downto 0);
     variable wide_a, wide_b : std_logic_vector(69 downto 0);
     variable ones : std_logic_vector(39 downto 0) := (others => '1');
+    variable null_u : unsigned(0 downto 1);
+    variable null_s : signed(0 downto 1);
+    variable null_v : std_logic_vector(0 downto 1);
   begin
     -- std_logic_1164 on std_logic_vector and on std_ulogic_vector.
     for i in v4'range loop
@@ -191,6 +194,14 @@ begin
     wide_a(10) := 'X';
     report "wide X " & to_string(unsigned(wide_a) + 1) & " " & to_string(wide_a and wide_b);
 
+    -- Operands of no elements, which each body answers with an empty vector or a warning.
+    report "null " & to_string(null_u + null_u) & " " & to_string(null_s - null_s) & " "
+      & to_string(null_u * null_u) & " " & to_string(-null_s) & " " & to_string(null_v and null_v);
+    report "null ? " & boolean'image(null_u = null_u) & " " & boolean'image(null_s < null_s) & " "
+      & boolean'image(null_u >= 3) & " " & boolean'image(2 /= null_s);
+    report "null to " & integer'image(to_integer(null_u)) & " " & integer'image(to_integer(null_s));
+    report "null + " & to_string(null_u + 1) & " " & to_string(unsigned'("101") + null_u);
+    report "null resize " & to_string(shift_left(null_u, 1)) & " " & to_string(resize(null_s, 3));
     report "PASS ieee_vectors";
     std.env.finish;
   end process;

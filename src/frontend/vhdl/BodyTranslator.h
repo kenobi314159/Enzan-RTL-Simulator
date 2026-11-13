@@ -810,6 +810,11 @@ private:
 
     std::vector<Folder> folders;
 
+    /// Set by an `if` whose branch was chosen by a condition that folded and leaves the sequence
+    /// it is in, with a `return`, an `exit` or a `next`: what follows it in that sequence cannot
+    /// run. Read, and cleared, by the loop over the sequence's statements.
+    bool unreachableAfter = false;
+
     /// The formal port of the association end being read, and its object, when one is.
     tree_t formalPort = nullptr;
     std::uint32_t formalObject = 0;
