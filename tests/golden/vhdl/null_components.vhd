@@ -19,6 +19,7 @@ package null_pack is
     flag : std_logic;
   end record;
   type rec_array_t is array (natural range <>) of rec_t;
+  type grid_t is array (natural range <>, natural range <>) of std_logic;
 end package;
 
 library ieee;
@@ -31,12 +32,15 @@ entity relay is
     d : in  slv_array_t(N - 1 downto 0)(W - 1 downto 0);
     r : in  rec_t;
     q : out slv_array_t(N - 1 downto 0)(W - 1 downto 0);
-    s : out rec_t);
+    s : out rec_t;
+    g : in  grid_t(0 to N - 1, 0 to W - 1);
+    h : out grid_t(0 to N - 1, 0 to W - 1));
 end entity;
 
 architecture rtl of relay is
 begin
   q <= d;
+  h <= g;
   s <= (tag => r.tag, n => r.n + 1, flag => not r.flag);
 end architecture;
 
@@ -52,6 +56,9 @@ architecture test of tb is
   signal d2, q2 : slv_array_t(1 to 2)(1 downto 0) := ("01", "10");
   signal dn, qn : slv_array_t(1 to 0)(3 downto 0);
   signal s0, s1 : rec_t;
+  signal g0, h0 : grid_t(0 to 1, 0 to -1);
+  signal g2, h2 : grid_t(0 to 1, 0 to 1) := (others => (others => '1'));
+  signal gn, hn : grid_t(0 to -1, 0 to 3);
 
   function count(a : slv_array_t) return integer is
   begin
@@ -65,16 +72,18 @@ architecture test of tb is
     return y;
   end function;
 begin
-  u0 : entity work.relay generic map (W => 0, N => 2) port map (d => d0, r => r, q => q0, s => s0);
-  u2 : entity work.relay generic map (W => 2, N => 2) port map (d => d2, r => r2, q => q2, s => s1);
+  u0 : entity work.relay generic map (W => 0, N => 2) port map (d => d0, r => r, q => q0, s => s0, g => g0, h => h0);
+  u2 : entity work.relay generic map (W => 2, N => 2) port map (d => d2, r => r2, q => q2, s => s1, g => g2, h => h2);
   un : entity work.relay generic map (W => 4, N => 0)
-    port map (d => dn, r => r, q => qn, s => open);
+    port map (d => dn, r => r, q => qn, s => open, g => gn, h => hn);
 
   process
     variable v, w : rec_t;
     variable a : slv_array_t(1 to 3)(-1 downto 0);
     variable b : slv_array_t(1 to 3)(-1 downto 0);
     variable mixed : rec_array_t(0 to 1);
+    variable e1 : grid_t(0 to 1, 0 to -1);
+    variable e2 : grid_t(0 to -1, 0 to 1);
   begin
     wait for 1 ns;
     report "field " & integer'image(r.tag'length) & " " & integer'image(r.n) & " "
@@ -110,6 +119,13 @@ begin
     b := a;
     report "equal arrays " & boolean'image(a = b) & " " & integer'image(a(3)'length) & " "
       & integer'image(dn'length) & " " & integer'image(qn'length);
+    e1 := g0;
+    report "grids " & integer'image(g0'length(1) * 100 + g0'length(2)) & " "
+      & integer'image(g2'length(1) * 100 + g2'length(2)) & " "
+      & integer'image(gn'length(1) * 100 + gn'length(2)) & " "
+      & integer'image(e1'length(1) * 100 + e1'length(2)) & " "
+      & integer'image(e2'length(1) * 100 + e2'length(2)) & " " & integer'image(h0'length(1)) & " "
+      & integer'image(hn'length(2)) & " " & std_logic'image(h2(1, 1));
     report "PASS null_components";
     std.env.finish;
   end process;
