@@ -161,7 +161,7 @@ jobs:
           exit "$status"
 
       # cocotb's own regression suite with VHDL toplevels, through VHPI, held to its own pass
-      # list; the run with Verilog ones is in the SystemVerilog job.
+      # list; the run with Verilog ones is in the default configuration's job.
       - name: cocotb regression suite, VHDL toplevels
         if: matrix.preset == 'gcc-release'
         env:
@@ -275,8 +275,12 @@ jobs:
         if: always()
         run: ccache --show-stats
 
-  systemverilog:
-    name: SystemVerilog frontend and golden suite, default configuration
+  # The default configuration, with both frontends and the GUI. It is named for the
+  # configuration rather than for slang, the reason it is a job of its own, because it runs the
+  # VHDL frontend's tests as well: ctest runs every test the build has, and what needs both
+  # frontends at once, VHDL with Verilog, can run nowhere else.
+  default:
+    name: Default configuration, both frontends
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
