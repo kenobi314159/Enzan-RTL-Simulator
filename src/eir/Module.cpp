@@ -39,16 +39,19 @@ void presentLogicCodes(ConstBitRef stored, BitRef shown) noexcept {
     const auto* codes = reinterpret_cast<const std::uint8_t*>(stored.aval());
     Word* aval = shown.aval();
     Word* bval = shown.bval();
+    // A word of each plane at a time, held in registers while its 64 elements are looked up.
     for (std::uint32_t word = 0; word < shown.words(); ++word) {
-        aval[word] = 0;
-        bval[word] = 0;
-    }
-    for (std::uint32_t element = 0; element < elements; ++element) {
-        const std::uint8_t logic = LogicOfCode[codes[element]];
-        const std::uint32_t word = element / BitsPerWord;
-        const std::uint32_t bit = element % BitsPerWord;
-        aval[word] |= static_cast<Word>(logic & 1U) << bit;
-        bval[word] |= static_cast<Word>((logic >> 1U) & 1U) << bit;
+        const std::uint32_t first = word * BitsPerWord;
+        const std::uint32_t count = std::min(elements - first, BitsPerWord);
+        Word known = 0;
+        Word unknown = 0;
+        for (std::uint32_t bit = 0; bit < count; ++bit) {
+            const std::uint8_t logic = LogicOfCode[codes[first + bit]];
+            known |= static_cast<Word>(logic & 1U) << bit;
+            unknown |= static_cast<Word>(logic >> 1U) << bit;
+        }
+        aval[word] = known;
+        bval[word] = unknown;
     }
 }
 
@@ -57,18 +60,25 @@ void presentLogicCodes(ConstBitRef stored, BitRef shown) noexcept {
 void encodeLogicCodes(ConstBitRef shown, BitRef stored,
                       const std::array<std::uint8_t, 4>& codes) noexcept {
     const std::uint32_t elements = shown.width();
+    const Word* known = shown.aval();
+    const Word* unknown = shown.bval();
     Word* aval = stored.aval();
+    Word* bval = stored.bval();
     for (std::uint32_t word = 0; word < stored.words(); ++word) {
         aval[word] = 0;
-        stored.bval()[word] = 0;
+        bval[word] = 0;
     }
     auto* bytes = reinterpret_cast<std::uint8_t*>(aval);
-    for (std::uint32_t element = 0; element < elements; ++element) {
-        const std::uint32_t word = element / BitsPerWord;
-        const std::uint32_t bit = element % BitsPerWord;
-        const auto logic = static_cast<std::uint32_t>(((shown.aval()[word] >> bit) & 1U)
-                                                      | (((shown.bval()[word] >> bit) & 1U) << 1U));
-        bytes[element] = codes[logic];
+    for (std::uint32_t word = 0; word < shown.words(); ++word) {
+        const std::uint32_t first = word * BitsPerWord;
+        const std::uint32_t count = std::min(elements - first, BitsPerWord);
+        const Word a = known[word];
+        const Word b = unknown[word];
+        for (std::uint32_t bit = 0; bit < count; ++bit) {
+            const auto logic =
+                static_cast<std::uint32_t>(((a >> bit) & 1U) | (((b >> bit) & 1U) << 1U));
+            bytes[first + bit] = codes[logic];
+        }
     }
 }
 
