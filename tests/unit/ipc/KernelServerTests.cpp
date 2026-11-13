@@ -830,6 +830,85 @@ TEST_F(ServerFixture, AVhdlArrayIsListedWithTheDimensionsItsTypeDeclares) {
 }
 #endif
 
+TEST_F(ServerFixture, ARecordWithAnEmptyFieldAndArraysWithAnEmptyDimensionAreListedAndServed) {
+    // What holds a placeholder bit in place of elements that are not there: a field of a record,
+    // a dimension of an array, an element of one. The window lists each, shows what is real of
+    // them and asks the kernel for nothing it does not have.
+    rebuildFrom({{"tb.vhd", R"(
+        library ieee;
+        use ieee.std_logic_1164.all;
+        entity tb is
+        end entity;
+        architecture a of tb is
+            subtype none_t is std_logic_vector(0 downto 1);
+            type rec_t is record
+                tag  : none_t;
+                n    : integer;
+                flag : std_logic;
+            end record;
+            type nothing_t is record
+                tag : none_t;
+            end record;
+            type grid_t is array (0 to 1, 0 to 2) of std_logic;
+            type wide_empty_t is array (0 to 1, 1 to 0) of std_logic;
+            type tall_empty_t is array (1 to 0, 0 to 2) of std_logic;
+            type empties_t is array (1 to 2) of none_t;
+            signal r : rec_t := (tag => (others => '0'), n => 3, flag => '0');
+            signal nothing : nothing_t;
+            signal grid : grid_t := (others => (others => '1'));
+            signal wide_empty : wide_empty_t;
+            signal tall_empty : tall_empty_t;
+            signal empties : empties_t;
+        begin
+            process
+            begin
+                wait for 10 ns;
+                r.n <= 4;
+                r.flag <= '1';
+                grid(1, 2) <= '0';
+                wait;
+            end process;
+        end architecture;
+    )"}});
+    connectClient();
+
+    enzan::ipc::QueryObjectsMessage query;
+    query.instancePath = "/tb";
+    request(MessageType::QueryObjects, query);
+    const auto objects = expect<ObjectsMessage>(MessageType::Objects);
+    for (const enzan::ipc::ObjectEntry& entry : objects.objects) {
+        SCOPED_TRACE(entry.name);
+        SubscribeMessage subscribe;
+        subscribe.signalIndices = {entry.signalIndex};
+        request(MessageType::Subscribe, subscribe);
+    }
+
+    RunMessage run;
+    run.untilFinished = true;
+    request(MessageType::Run, run);
+
+    const auto entry = [&](std::string_view name) {
+        const auto found = std::ranges::find(objects.objects, name, &enzan::ipc::ObjectEntry::name);
+        EXPECT_NE(found, objects.objects.end()) << name;
+        return found == objects.objects.end() ? enzan::ipc::ObjectEntry{} : *found;
+    };
+    // What is there is listed, recorded and followed; what is not is listed with no width and has
+    // no history to fetch.
+    for (const char* name : {"nothing", "wide_empty", "tall_empty", "empties"}) {
+        EXPECT_EQ(entry(name).width, 0U) << name;
+        EXPECT_TRUE(fetchAll(entry(name).signalIndex).empty()) << name;
+    }
+    const std::vector<ChangeEntry>& record = fetchAll(entry("r").signalIndex);
+    ASSERT_EQ(record.size(), 2U) << "its value at the start, and the one `n` and `flag` made";
+    EXPECT_EQ(record.front().value.width(), entry("r").width);
+    EXPECT_NE(record.front().value, record.back().value);
+
+    EXPECT_EQ(entry("grid").width, 6U);
+    const std::vector<ChangeEntry>& grid = fetchAll(entry("grid").signalIndex);
+    ASSERT_EQ(grid.size(), 2U);
+    EXPECT_EQ(grid.back().value, literal("6'b111110")) << "element (1, 2) is the last";
+}
+
 TEST_F(ServerFixture, AMemoryAndASignalTooWideToRecordAreRecordedOnceShown) {
     // The database leaves the wide one out of what it records of its own accord; the reader put
     // it in the window all the same, and its trace from then on is all the window can show of it.
