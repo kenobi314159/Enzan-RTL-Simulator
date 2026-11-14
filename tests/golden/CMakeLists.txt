@@ -101,6 +101,11 @@ enzan_add_golden_test(counter)
 enzan_add_golden_test(fifo)
 
 enzan_add_golden_test(operators)
+
+# Streaming concatenations, as expressions and as targets. Icarus Verilog has none, and Verilator
+# 5.020 neither streams an unpacked array nor left-justifies a stream in a wider target, so the
+# case is held to slang's folding of the same rules instead.
+enzan_add_golden_test(streaming NO_DIFFERENTIAL)
 enzan_add_golden_test(control_flow)
 
 # Time zero is where two correct simulators differ most: Icarus Verilog does not evaluate

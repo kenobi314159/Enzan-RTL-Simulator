@@ -124,6 +124,8 @@ Reported as `ENZ1004` with the construct named, rather than mistranslated:
   subroutine body: another process's block, the block a subroutine is called from, a task.
   A `disable` of a block it is in goes on after the block, with the next iteration when the
   block is a loop's body;
+- a streaming concatenation of something of no fixed size, or with a `with` clause; of fixed-size
+  operands, `>>` and `<<` with any slice work, as expressions and as targets;
 - `foreach` over a dimension of no fixed size, which needs the dynamic arrays and queues that
   are not here; over fixed dimensions it works, and `break` leaves the whole statement;
 - deferred assertions (`assert #0`, `assert final`) and concurrent ones (`assert property`),

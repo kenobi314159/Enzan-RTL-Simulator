@@ -436,6 +436,22 @@ private:
     std::optional<Value> translateConditionalExpression(const slang::ast::Expression& expression);
     std::optional<Value> translateConcatenation(const slang::ast::Expression& expression);
     std::optional<Value> translateReplication(const slang::ast::Expression& expression);
+
+    /// A streaming concatenation's stream (IEEE 1800 section 11.4.14): its operands packed, the
+    /// first most significant, and for `<<` its slices reversed.
+    std::optional<Value> translateStreaming(const slang::ast::Expression& expression);
+
+    /// `stream` with its slices of `sliceSize` bits in the reverse order. Packing counts them from
+    /// the least significant end, so that `{<< 4 {6'b11_0101}}` is `6'b0101_11`; unpacking a
+    /// target, which undoes that, from the most significant end, with `fromTop`.
+    Value reverseSlices(const Value& stream, std::uint64_t sliceSize, bool fromTop);
+
+    /// `stream` as a value of `type`, at least as wide: left-justified, as a stream assigned to a
+    /// wider target is, and zero-filled on the right.
+    Value leftJustified(const Value& stream, eir::Type type);
+
+    /// The bits of `value` from `offset` up, as many as `type` holds, as a value of it.
+    Value bitsOf(const Value& value, std::uint32_t offset, eir::Type type);
     std::optional<Value> translateCall(const slang::ast::Expression& expression);
 
     /// `$readmemh` and `$readmemb`, which write a whole memory from a file.

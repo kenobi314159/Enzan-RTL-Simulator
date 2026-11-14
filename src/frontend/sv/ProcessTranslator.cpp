@@ -2370,6 +2370,8 @@ ProcessTranslator::translateExpression(const ast::Expression& expression) {
 
     case ast::ExpressionKind::Replication: return translateReplication(expression);
 
+    case ast::ExpressionKind::Streaming: return translateStreaming(expression);
+
     case ast::ExpressionKind::ElementSelect:
     case ast::ExpressionKind::RangeSelect:
     case ast::ExpressionKind::MemberAccess: {
@@ -2390,9 +2392,13 @@ ProcessTranslator::translateExpression(const ast::Expression& expression) {
     case ast::ExpressionKind::Conversion: {
         // slang inserts a conversion wherever the language's width and signedness rules
         // change a value, so honouring it is what makes the widths downstream correct.
-        const std::optional<Value> operand =
-            translateExpression(expression.as<ast::ConversionExpression>().operand());
+        const auto& conversion = expression.as<ast::ConversionExpression>();
+        const std::optional<Value> operand = translateExpression(conversion.operand());
         if (!operand.has_value() || !type.has_value()) break;
+        // A stream fills a wider target from its most significant end (IEEE 1800 section
+        // 11.4.14), where any other value is extended on the left.
+        if (conversion.operand().kind == ast::ExpressionKind::Streaming)
+            return coerce(leftJustified(*operand, *type), *type);
         return coerce(*operand, *type);
     }
 
@@ -2409,6 +2415,102 @@ ProcessTranslator::translateExpression(const ast::Expression& expression) {
         failed = true;
     }
     return std::nullopt;
+}
+
+std::optional<ProcessTranslator::Value>
+ProcessTranslator::translateStreaming(const ast::Expression& expression) {
+    const auto& streaming = expression.as<ast::StreamingConcatenationExpression>();
+    const auto refuse = [&](const ast::Expression& where, std::string_view what) {
+        module->reportUnsupported(where.sourceRange.start(), what);
+        failed = true;
+        return std::nullopt;
+    };
+    if (!streaming.isFixedSize())
+        return refuse(expression, "a streaming concatenation of something of no fixed size");
+    const std::uint64_t width = streaming.getBitstreamWidth();
+    if (width == 0 || width > std::numeric_limits<std::uint32_t>::max())
+        return refuse(expression, std::format("a stream of {} bits", width));
+
+    const eir::Type streamType = eir::Type::bits(static_cast<std::uint32_t>(width), false, true);
+    const std::uint32_t result = newRegister(streamType);
+    emit(eir::Instruction::make(eir::Opcode::LoadConstant, eir::Operand::reg(result),
+                                eir::Operand::constant(addConstant(eir::BitVector::filled(
+                                    static_cast<std::uint32_t>(width), eir::Logic::Zero)))));
+
+    // An aggregate is the vector of its bits, its first element or field the highest, which is
+    // the order a stream takes them in.
+    auto offset = static_cast<std::uint32_t>(width);
+    for (const ast::StreamingConcatenationExpression::StreamExpression& stream :
+         streaming.streams()) {
+        if (stream.withExpr != nullptr)
+            return refuse(*stream.withExpr, "a streaming concatenation with a `with` clause");
+        const std::optional<Value> value = translateExpression(*stream.operand);
+        if (!value.has_value()) return std::nullopt;
+        if (value->type.isReal())
+            return refuse(*stream.operand, "a real in a streaming concatenation");
+        const std::uint32_t bits = value->type.bitWidth();
+        if (bits > offset)
+            return refuse(expression, "a streaming concatenation whose operands exceed its width");
+        offset -= bits;
+        const Value raw = coerce(*value, eir::Type::bits(bits, false, true));
+        emit(eir::Instruction::make(eir::Opcode::SplicePart, eir::Operand::reg(result),
+                                    eir::Operand::reg(raw.reg),
+                                    eir::Operand::reg(offsetConstant(offset).reg)));
+    }
+
+    const Value stream{.reg = result, .type = streamType};
+    return streaming.getSliceSize() == 0
+               ? stream
+               : reverseSlices(stream, streaming.getSliceSize(), /*fromTop=*/false);
+}
+
+ProcessTranslator::Value ProcessTranslator::bitsOf(const Value& value, std::uint32_t offset,
+                                                   eir::Type type) {
+    const std::uint32_t part = newRegister(type);
+    emit(eir::Instruction::make(eir::Opcode::PartSelect, eir::Operand::reg(part),
+                                eir::Operand::reg(value.reg),
+                                eir::Operand::reg(offsetConstant(offset).reg)));
+    return Value{.reg = part, .type = type};
+}
+
+ProcessTranslator::Value ProcessTranslator::reverseSlices(const Value& stream,
+                                                          std::uint64_t sliceSize, bool fromTop) {
+    const std::uint32_t width = stream.type.bitWidth();
+    if (sliceSize >= width) return stream;
+
+    // Each slice moves to where its mirror is: the one `taken` bits from one end is put as far
+    // from the other. Packing slices from the least significant end, so that a short slice is the
+    // stream's leftmost bits and ends last; unpacking from the most significant end, which undoes
+    // that (IEEE 1800 section 11.4.14.2).
+    const auto size = static_cast<std::uint32_t>(sliceSize);
+    const std::uint32_t result = newRegister(stream.type);
+    emit(eir::Instruction::make(eir::Opcode::Move, eir::Operand::reg(result),
+                                eir::Operand::reg(stream.reg)));
+    for (std::uint32_t taken = 0; taken < width; taken += size) {
+        const std::uint32_t length = std::min(size, width - taken);
+        const std::uint32_t from = fromTop ? width - taken - length : taken;
+        const std::uint32_t to = fromTop ? taken : width - taken - length;
+        const Value slice =
+            bitsOf(stream, from, eir::Type::bits(length, false, stream.type.isFourState()));
+        emit(eir::Instruction::make(eir::Opcode::SplicePart, eir::Operand::reg(result),
+                                    eir::Operand::reg(slice.reg),
+                                    eir::Operand::reg(offsetConstant(to).reg)));
+    }
+    return Value{.reg = result, .type = stream.type};
+}
+
+ProcessTranslator::Value ProcessTranslator::leftJustified(const Value& stream, eir::Type type) {
+    const std::uint32_t width = stream.type.bitWidth();
+    if (type.bitWidth() <= width) return stream;
+    const eir::Type wide = eir::Type::bits(type.bitWidth(), false, stream.type.isFourState());
+    const std::uint32_t result = newRegister(wide);
+    emit(eir::Instruction::make(eir::Opcode::LoadConstant, eir::Operand::reg(result),
+                                eir::Operand::constant(addConstant(
+                                    eir::BitVector::filled(wide.bitWidth(), eir::Logic::Zero)))));
+    emit(eir::Instruction::make(eir::Opcode::SplicePart, eir::Operand::reg(result),
+                                eir::Operand::reg(stream.reg),
+                                eir::Operand::reg(offsetConstant(type.bitWidth() - width).reg)));
+    return Value{.reg = result, .type = wide};
 }
 
 ProcessTranslator::Value ProcessTranslator::compare(eir::Opcode opcode, const Value& left,
@@ -4178,6 +4280,60 @@ bool ProcessTranslator::assignTo(const ast::Expression& target, const Value& val
         const std::optional<Location> location = locate(target);
         if (!location.has_value()) return false;
         return writeLocation(target, *location, value, nonBlocking);
+    }
+
+    case ast::ExpressionKind::Streaming: {
+        // The stream is taken from the value's most significant end, as many bits as it holds
+        // (IEEE 1800 section 11.4.14.3), its slices put back in order for `<<`, and then split
+        // across the operands as a concatenation's target splits it.
+        const auto& streaming = target.as<ast::StreamingConcatenationExpression>();
+        const std::uint64_t width = streaming.getBitstreamWidth();
+        if (!streaming.isFixedSize() || width == 0 || width > value.type.bitWidth()) {
+            module->reportUnsupported(target.sourceRange.start(),
+                                      "a streaming concatenation target of no fixed size, or "
+                                      "wider than its value");
+            failed = true;
+            return false;
+        }
+        const auto bits = static_cast<std::uint32_t>(width);
+        const Value raw =
+            coerce(value, eir::Type::bits(value.type.bitWidth(), false, value.type.isFourState()));
+        Value stream = bitsOf(raw, raw.type.bitWidth() - bits,
+                              eir::Type::bits(bits, false, raw.type.isFourState()));
+        if (streaming.getSliceSize() != 0)
+            stream = reverseSlices(stream, streaming.getSliceSize(), /*fromTop=*/true);
+
+        std::uint32_t offset = bits;
+        for (const ast::StreamingConcatenationExpression::StreamExpression& operand :
+             streaming.streams()) {
+            if (operand.withExpr != nullptr) {
+                module->reportUnsupported(operand.withExpr->sourceRange.start(),
+                                          "a streaming concatenation with a `with` clause");
+                failed = true;
+                return false;
+            }
+            const std::uint64_t operandBits = operand.operand->type->getBitstreamWidth();
+            if (operand.operand->kind == ast::ExpressionKind::Streaming) {
+                // A stream inside a stream takes its bits and orders them itself.
+                offset -= static_cast<std::uint32_t>(operandBits);
+                const eir::Type inner = eir::Type::bits(static_cast<std::uint32_t>(operandBits),
+                                                        false, stream.type.isFourState());
+                if (!assignTo(*operand.operand, bitsOf(stream, offset, inner), nonBlocking))
+                    return false;
+                continue;
+            }
+            const std::optional<eir::Type> pieceType = module->convertType(*operand.operand->type);
+            if (!pieceType.has_value() || pieceType->isReal()) {
+                module->reportUnsupported(operand.operand->sourceRange.start(),
+                                          "this streaming concatenation target");
+                failed = true;
+                return false;
+            }
+            offset -= pieceType->bitWidth();
+            if (!assignTo(*operand.operand, bitsOf(stream, offset, *pieceType), nonBlocking))
+                return false;
+        }
+        return true;
     }
 
     case ast::ExpressionKind::Concatenation: {
