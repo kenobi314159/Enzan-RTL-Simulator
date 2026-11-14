@@ -500,6 +500,19 @@ std::optional<bool> BodyTranslator::nativeProcedure(tree_t call, tree_t declarat
             if (mark) releaseScratch(*mark);
             return assignWhole((*actuals)[0], appended);
         }
+        // A path the kernel makes for the instance, as a message shows it.
+        if (tree_kind(written) == T_ATTR_REF
+            && (tree_subkind(written) == ATTR_PATH_NAME
+                || tree_subkind(written) == ATTR_INSTANCE_NAME)) {
+            std::string format;
+            native.kind = eir::SysTaskKind::LineWrite;
+            native.arguments = {argument(*line), argument(*justified), argument(*field)};
+            if (!messageParts(written, format, native.arguments)) return false;
+            native.formatIndex = addString(std::move(format));
+            const Value appended = systemFunction(std::move(native), handle);
+            releaseMessageScratch();
+            return assignWhole((*actuals)[0], appended);
+        }
         const std::optional<Value> shown = value(1);
         if (!shown) return false;
         native.kind = eir::SysTaskKind::LineWrite;

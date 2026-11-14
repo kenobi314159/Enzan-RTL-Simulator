@@ -19,6 +19,7 @@
 #include <fstream>
 #include <iostream>
 #include <optional>
+#include <span>
 #include <sstream>
 #include <string>
 #include <utility>
@@ -54,6 +55,46 @@ bool isPosedge(eir::Logic before, eir::Logic after) noexcept {
 bool isNegedge(eir::Logic before, eir::Logic after) noexcept {
     if (before == after) return false;
     return before == eir::Logic::One || after == eir::Logic::Zero;
+}
+
+/// The path VHDL's `'path_name` and `'instance_name` give the instance `index` (IEEE 1076 section
+/// 16.2.5): `:tb:g(0):u:`, and with `withUnits` `:tb(a):g(0):u@child(rtl):`. An instance's name
+/// joins the generate statements and blocks it is in with dots, `g(0).u`, which the path
+/// separates as it does instances. A SystemVerilog module above a VHDL instance has no
+/// architecture to give and is named by its instance alone.
+std::string vhdlPath(const eir::Design& design, std::span<const elab::Instance> instances,
+                     std::uint32_t index, bool withUnits) {
+    std::vector<std::uint32_t> chain;
+    for (std::uint32_t at = index; at != elab::Instance::NoParent; at = instances[at].parent)
+        chain.push_back(at);
+
+    std::ranges::reverse(chain);
+
+    std::string path;
+    for (const std::uint32_t at : chain) {
+        const elab::Instance& instance = instances[at];
+        const eir::ModuleDefinition& definition = design.module(instance.definitionIndex);
+        const bool vhdl = definition.language == eir::Language::Vhdl;
+        const bool root = instance.parent == elab::Instance::NoParent;
+        // The root is its entity, whatever case `--top` named it in.
+        const std::string_view name = root && vhdl ? definition.sourceName : instance.name;
+
+        path += ':';
+        int depth = 0;
+        bool escaped = false;
+        for (const char character : name) {
+            if (character == '\\') escaped = !escaped;
+            if (!escaped && character == '(') ++depth;
+            if (!escaped && character == ')') --depth;
+            path += !escaped && depth == 0 && character == '.' ? ':' : character;
+        }
+        if (withUnits && vhdl && !definition.architecture.empty()) {
+            if (!root) path += '@' + definition.sourceName;
+            path += '(' + definition.architecture + ')';
+        }
+    }
+    path += ':';
+    return path;
 }
 
 /// The most characters a string of run-time length may hold: more than any VHDL integer range
@@ -1693,6 +1734,7 @@ void Kernel::runSystemTask(std::uint32_t processIndex, const Activation& activat
     case eir::SysTaskKind::StringCompare:
     case eir::SysTaskKind::StringRead:
     case eir::SysTaskKind::StringMark:
+    case eir::SysTaskKind::PathName:
         ENZAN_ASSERT(false, "a system function run as a system task; run the EIR verifier");
         return;
     }
@@ -2079,6 +2121,18 @@ void Kernel::runSystemFunction(std::uint32_t processIndex, const Activation& act
     }
 
     case eir::SysTaskKind::StringMark: value = scratch.size(); break;
+
+    case eir::SysTaskKind::PathName: {
+        std::string text =
+            vhdlPath(designImage->analysedDesign(), designImage->elaboratedDesign().instances(),
+                     state.instanceIndex, argument(0) != 0);
+        if (descriptor.hasFormat()) text += body.strings[descriptor.formatIndex];
+        const auto length = static_cast<std::int64_t>(text.size());
+        scratch.push_back(
+            ScratchString{.left = 1, .right = length, .ascending = true, .text = std::move(text)});
+        value = scratch.size();
+        break;
+    }
 
     case eir::SysTaskKind::Random:
         if (descriptor.arguments.empty()) {

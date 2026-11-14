@@ -66,7 +66,8 @@ bool isSystemFunction(SysTaskKind kind) noexcept {
     case SysTaskKind::StringIntoArray:
     case SysTaskKind::StringCompare:
     case SysTaskKind::StringRead:
-    case SysTaskKind::StringMark: return true;
+    case SysTaskKind::StringMark:
+    case SysTaskKind::PathName: return true;
     default: return false;
     }
 }
@@ -118,6 +119,7 @@ std::string_view toString(SysTaskKind kind) noexcept {
     case SysTaskKind::StringCompare: return "a comparison of strings";
     case SysTaskKind::StringMark:
     case SysTaskKind::StringRelease: return "the scratch of strings";
+    case SysTaskKind::PathName: return "'path_name";
     }
     return "$unknown";
 }

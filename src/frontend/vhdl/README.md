@@ -71,8 +71,9 @@ associated with signals, parts of them, expressions and conversion functions, wh
 processes with variables, `if`, `case`, loops, `exit`, `next`, `wait` with a sensitivity, a
 condition, a timeout or any of them together, signal assignments with inertial and transport delay,
 to whole signals, to their parts and to aggregates of them, as variable assignments may be too,
-`assert`, `report` with messages built from any strings and characters and the `'image` of integers
-and times, `std.env.finish` and `stop`; aggregates, strings, elements and slices, with loops
+`assert`, `report` with messages built from any strings and characters, the `'image` of integers
+and times, and the `'path_name` and `'instance_name` of what the design unit declares, in a message or a
+`write`, which the runtime makes for each instance, `std.env.finish` and `stop`; aggregates, strings, elements and slices, with loops
 unrolled for slices that move with their parameter and variable slices of run-time lengths,
 concatenation, the predefined operators on scalars and arrays, `'event`, `'active` and
 `'last_value` of whole signals; aliases of objects and of their parts, of constants, subprograms and

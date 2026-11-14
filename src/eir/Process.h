@@ -170,6 +170,11 @@ enum class SysTaskKind : std::uint8_t {
     StringRead,
     /// How many strings of run-time length there are, the mark StringRelease releases to.
     StringMark,
+    /// VHDL's `'path_name` of something in the calling process's instance, or with the argument
+    /// not 0 its `'instance_name` (IEEE 1076 section 16.2.5): a new string, ascending from 1, of
+    /// the instance's path, `:tb:u:` or `:tb(a):u@child(rtl):`, and after it the characters of
+    /// the format string, which name what is in the instance. The result is its handle.
+    PathName,
 };
 
 /// The severities a Report takes as its first argument: the positions of

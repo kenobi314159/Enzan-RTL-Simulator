@@ -729,6 +729,11 @@ What a VHDL design becomes in EIR, in outline:
   through an object of the instantiating unit, kept equal to its actual by a process the kernel runs
   as part of the signal update. An `inout` so associated has two such objects, its driving value and
   its effective value (3.7). A port of mode out, inout or buffer is always a source of its actual.
+- **`'path_name` and `'instance_name` are the kernel's to make**, since one translation serves
+  every instance of its generics' values: the kernel gives the instance's path and the translation
+  where in the unit the prefix is. So they are shown only where a message or a `write` shows them,
+  and of what the unit declares; a SystemVerilog module above a VHDL instance is named by its
+  instance alone, having no architecture.
 - **Constant functions run in the adapter.** A call that does not fold where a static value is
   needed is refused, naming the call and the statement its run stopped at.
 - **The IEEE packages are translated from their own bodies.** `report` and a failed `assert` report
@@ -1944,6 +1949,8 @@ mistranslated:
   `fork`, `highz` strengths, resistive and bidirectional switches, the module paths 5.1 refuses, net
   aliases, and a procedural `assign` or `force` of part of an object.
 - VHDL access types beyond what `std.textio` needs, protected types and configuration declarations.
+- VHDL's `'path_name` and `'instance_name` other than in a message or a `write`, and of what a
+  package or a subprogram declares or of an instance's label.
 - VHDL values whose length only the run knows, beyond a subprogram's strings (4.1): arrays of
   anything but `character`, a function's result, a concatenation outside a message or a `write`,
   a whole such string assigned, a function's own string sized by a parameter its call leaves to the
