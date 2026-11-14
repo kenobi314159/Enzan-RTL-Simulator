@@ -471,6 +471,10 @@ struct ModuleDefinition {
     /// The language the definition was written in.
     Language language = Language::SystemVerilog;
 
+    /// For a VHDL entity's definition, the simple name of its architecture, which an
+    /// `'instance_name` gives beside the entity's: `:tb(behaviour):u@counter(rtl):`.
+    std::string architecture;
+
     SourceLocation location;
 
     std::vector<Object> objects;

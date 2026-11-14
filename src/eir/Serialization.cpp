@@ -346,6 +346,7 @@ void writeModule(Writer& out, NameTable& names, const ModuleDefinition& definiti
     out.text(definition.sourceName);
     out.boolean(definition.isPackage);
     out.u8(static_cast<std::uint8_t>(definition.language));
+    out.text(definition.architecture);
     writeLocation(out, names, definition.location);
     writeLocation(out, names, definition.firstTimingCheck);
 
@@ -685,6 +686,7 @@ ModuleDefinition readModule(Reader& in, BufferResolver& buffers) {
     definition.sourceName = in.text();
     definition.isPackage = in.boolean();
     definition.language = static_cast<Language>(in.u8());
+    definition.architecture = in.text();
     definition.location = readLocation(in, buffers);
     definition.firstTimingCheck = readLocation(in, buffers);
 

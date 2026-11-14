@@ -345,6 +345,31 @@ public:
         return std::nullopt;
     }
 
+    [[nodiscard]] std::optional<std::string> regionOf(tree_t declaration) const override {
+        if (const auto found = regions.find(declaration); found != regions.end())
+            return found->second;
+        // NVC's analysis replaces a generate statement whose alternative it can choose with a
+        // block of that alternative, placed where an if generate is or where a case generate's
+        // alternative is, or with an if generate of the alternatives left; a reference to the
+        // label still names the statement analysed.
+        const auto replaced = [this](tree_t at) -> std::optional<std::string> {
+            for (const auto& [replacement, where] : regions) {
+                if ((tree_kind(replacement) == T_BLOCK || tree_kind(replacement) == T_IF_GENERATE)
+                    && loc_eq(tree_loc(replacement), tree_loc(at)))
+                    return where;
+            }
+            return std::nullopt;
+        };
+        if (tree_kind(declaration) == T_IF_GENERATE) return replaced(declaration);
+        if (tree_kind(declaration) == T_CASE_GENERATE) {
+            for (unsigned index = 0; index < tree_stmts(declaration); ++index) {
+                if (std::optional<std::string> where = replaced(tree_stmt(declaration, index)))
+                    return where;
+            }
+        }
+        return std::nullopt;
+    }
+
     [[nodiscard]] const Folder& folder() const override { return folding; }
 
     [[nodiscard]] SourceLocation locate(tree_t where) const override;
@@ -465,6 +490,13 @@ private:
     /// What a name declared where translation is begins with: the generate blocks and blocks it
     /// is inside, each followed by a dot, as SystemVerilog's are.
     std::string prefix;
+
+    /// Where each declaration and region seen so far is, as `regionOf` gives it. An iteration of
+    /// a generate statement declares its names again, and replaces where they are.
+    std::map<tree_t, std::string> regions;
+
+    /// `prefix` as `'path_name` writes it, with each dot that ends a region a colon.
+    [[nodiscard]] std::string region() const;
 };
 
 /// The definition a package's subprograms are translated into: one with no objects, which a call
@@ -475,6 +507,10 @@ public:
         : design(owner), module(package) {}
 
     [[nodiscard]] std::optional<std::uint32_t> objectFor(tree_t /*declaration*/) const override {
+        return std::nullopt;
+    }
+
+    [[nodiscard]] std::optional<std::string> regionOf(tree_t /*declaration*/) const override {
         return std::nullopt;
     }
 
@@ -2019,6 +2055,17 @@ eir::ModuleDefinition ArchitectureTranslator::translate() {
     result.name = specialisation.name;
     result.sourceName = simpleName(tree_ident(entity));
     result.language = eir::Language::Vhdl;
+    // `WORK.COUNTER-RTL` names the architecture `rtl` of `counter`.
+    const std::string unit = simpleName(tree_ident(specialisation.architecture));
+    result.architecture = unit.substr(unit.find('-') + 1);
+
+    // Everything the entity and the architecture declare is in neither a block nor a generate.
+    regions.insert_or_assign(entity, std::string());
+    regions.insert_or_assign(specialisation.architecture, std::string());
+    for (unsigned index = 0; index < tree_generics(entity); ++index)
+        regions.insert_or_assign(tree_generic(entity, index), std::string());
+    for (unsigned index = 0; index < tree_ports(entity); ++index)
+        regions.insert_or_assign(tree_port(entity, index), std::string());
     // The library the entity was analysed into, which a design names it by.
     result.library = simpleName(ident_until(tree_ident(entity), '.'));
     result.location = locate(specialisation.architecture);
@@ -2128,10 +2175,15 @@ void ArchitectureTranslator::addPortSources(tree_t entity) {
     }
 }
 
+std::string ArchitectureTranslator::region() const {
+    return colonSeparated(prefix);
+}
+
 void ArchitectureTranslator::declarations(tree_t container) {
     const unsigned count = tree_decls(container);
     for (unsigned index = 0; index < count; ++index) {
         tree_t declaration = tree_decl(container, index);
+        regions.insert_or_assign(declaration, region());
         switch (tree_kind(declaration)) {
         case T_SIGNAL_DECL: static_cast<void>(addObject(declaration)); break;
         case T_CONST_DECL: addConstant(declaration); break;
@@ -2164,6 +2216,12 @@ void ArchitectureTranslator::statements(tree_t container) {
         tree_t statement = tree_stmt(container, index);
         switch (tree_kind(statement)) {
         case T_PROCESS: {
+            // A process with no label of its own is named by an empty one, `:tb::v`, as GHDL's
+            // and NVC's paths have it.
+            const bool labelled = (tree_flags(statement) & TREE_F_SYNTHETIC_NAME) == 0;
+            regions.insert_or_assign(
+                statement,
+                region() + (labelled ? simpleName(tree_ident(statement)) : std::string()) + ':');
             BodyTranslator translator(*this, statement, prefix + simpleName(tree_ident(statement)));
             if (std::optional<eir::Process> translated = translator.translate())
                 result.processes.push_back(std::move(*translated));
@@ -2183,6 +2241,7 @@ void ArchitectureTranslator::statements(tree_t container) {
 void ArchitectureTranslator::nested(tree_t container, const std::string& name) {
     const std::string outer = prefix;
     prefix += name + '.';
+    regions.insert_or_assign(container, region());
     declarations(container);
     statements(container);
     for (unsigned index = 0; index < tree_decls(container); ++index)
@@ -2204,6 +2263,8 @@ void ArchitectureTranslator::ifGenerate(tree_t statement) {
             }
             if (*holds == 0) continue;
         }
+        // The statement's label names the alternative elaborated.
+        regions.insert_or_assign(statement, region() + simpleName(tree_ident(statement)) + ':');
         nested(alternative, simpleName(tree_ident(statement)));
         return;
     }
@@ -2265,6 +2326,11 @@ void ArchitectureTranslator::block(tree_t statement) {
     const std::string name = simpleName(tree_ident(statement));
     const std::string outerPrefix = prefix;
     prefix += name + '.';
+    regions.insert_or_assign(statement, region());
+    for (unsigned index = 0; index < tree_ports(statement); ++index)
+        regions.insert_or_assign(tree_port(statement, index), region());
+    for (unsigned index = 0; index < tree_generics(statement); ++index)
+        regions.insert_or_assign(tree_generic(statement, index), region());
     std::vector<std::vector<tree_t>> byPort(tree_ports(statement));
     for (unsigned index = 0; index < tree_params(statement); ++index) {
         tree_t association = tree_param(statement, index);

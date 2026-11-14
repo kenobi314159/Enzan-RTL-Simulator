@@ -93,6 +93,7 @@ ModuleDefinition richModule(BufferId buffer) {
     definition.name = "counter$WIDTH=8";
     definition.sourceName = "counter";
     definition.language = Language::Vhdl;
+    definition.architecture = "rtl";
     definition.location = SourceLocation(buffer, 3);
     definition.firstTimingCheck = SourceLocation(buffer, 9);
 
@@ -273,6 +274,7 @@ TEST_F(SerializationTest, ModuleIdentityRoundTrips) {
     EXPECT_EQ(decoded.front().name, "counter$WIDTH=8");
     EXPECT_EQ(decoded.front().sourceName, "counter");
     EXPECT_EQ(decoded.front().language, Language::Vhdl);
+    EXPECT_EQ(decoded.front().architecture, "rtl");
     EXPECT_EQ(decoded.front().location, SourceLocation(buffer, 3));
     EXPECT_EQ(decoded.front().firstTimingCheck, SourceLocation(buffer, 9));
 }

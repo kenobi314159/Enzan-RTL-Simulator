@@ -92,6 +92,9 @@ enzan_add_vhdl_golden_test(generate)
 # Report messages built from strings a design computes.
 enzan_add_vhdl_golden_test(messages)
 
+# 'path_name and 'instance_name, which differ between the instances one translation serves.
+enzan_add_vhdl_golden_test(path_names)
+
 # Loops unrolled because a slice in them moves with their parameter.
 enzan_add_vhdl_golden_test(unrolled)
 

@@ -24,6 +24,14 @@ TEST(Names, TellsDifferentNamesApart) {
     EXPECT_FALSE(enzan::equalsIgnoringCase("[", "{"));
 }
 
+TEST(Names, SeparatesScopesWithColons) {
+    EXPECT_EQ(enzan::colonSeparated("g(0).b.u"), "g(0):b:u");
+    EXPECT_EQ(enzan::colonSeparated(""), "");
+    // A character iteration's dot, and an extended identifier's, separate nothing.
+    EXPECT_EQ(enzan::colonSeparated("g('.').u"), "g('.'):u");
+    EXPECT_EQ(enzan::colonSeparated("\\a.b\\.u"), "\\a.b\\:u");
+}
+
 TEST(Names, ListsNamesAsADiagnosticDoes) {
     EXPECT_EQ(enzan::quotedNames(std::vector<std::string>{"counter", "counter_tb"}),
               "'counter', 'counter_tb'");
