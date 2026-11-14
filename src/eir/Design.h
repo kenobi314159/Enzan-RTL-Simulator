@@ -79,6 +79,8 @@ public:
     /// name they wrote in the source and not the one analysis derived. More than one means the
     /// choice is not forced and has to be reported rather than guessed.
     ///
+    /// A VHDL unit's source name is compared without its case, as VHDL compares names.
+    ///
     /// In the order the definitions were added, so a diagnostic listing them is reproducible.
     /// A copy `mergeIdenticalDefinitions` found to be the same unit as an earlier one is left
     /// out, since it is not a second choice.
