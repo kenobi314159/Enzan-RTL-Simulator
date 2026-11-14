@@ -55,6 +55,16 @@ endif()
 # A counter on `bit` and `integer` alone, below a testbench that clocks and resets it.
 enzan_add_vhdl_golden_test(counter)
 
+# The top named in another case than its declaration's, as VHDL compares names, and as cocotb's
+# COCOTB_TOPLEVEL passes it on.
+add_test(NAME golden.vhdl.top_in_another_case
+         COMMAND enzan --top TB "${CMAKE_CURRENT_SOURCE_DIR}/counter.vhd")
+set_tests_properties(
+  golden.vhdl.top_in_another_case
+  PROPERTIES PASS_REGULAR_EXPRESSION "PASS counter"
+             FAIL_REGULAR_EXPRESSION ": (error|fatal): "
+             TIMEOUT 60)
+
 # Sequential statements: loops, case, the arithmetic operators' signs, short-circuit operators,
 # waits for time and for conditions, and a clock that stops by reassigning itself.
 enzan_add_vhdl_golden_test(statements)
@@ -81,6 +91,9 @@ enzan_add_vhdl_golden_test(generate)
 
 # Report messages built from strings a design computes.
 enzan_add_vhdl_golden_test(messages)
+
+# 'path_name and 'instance_name, which differ between the instances one translation serves.
+enzan_add_vhdl_golden_test(path_names)
 
 # Loops unrolled because a slice in them moves with their parameter.
 enzan_add_vhdl_golden_test(unrolled)

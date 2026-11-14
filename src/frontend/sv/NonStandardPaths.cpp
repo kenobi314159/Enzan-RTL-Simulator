@@ -71,9 +71,4 @@ std::optional<DiagCode> NonStandardPaths::excuses(const slang::Diagnostic& diagn
     return std::nullopt;
 }
 
-bool NonStandardPaths::repeats(const slang::Diagnostic& diagnostic) const {
-    return diagnostic.code == slang::diag::SpecifyBlockParam
-           && excusedConditions.contains(diagnostic.location);
-}
-
 } // namespace enzan::frontend::sv

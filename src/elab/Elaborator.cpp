@@ -4,6 +4,7 @@
 
 #include "common/Assert.h"
 #include "common/Diagnostics.h"
+#include "common/Names.h"
 #include "eir/Module.h"
 #include "eir/Process.h"
 
@@ -20,21 +21,6 @@
 namespace enzan::elab {
 
 namespace {
-
-/// Joins a list of names for a diagnostic, in the order given.
-template<typename Range>
-std::string joinNames(const Range& names) {
-    if (names.empty()) return "(none)";
-
-    std::string result;
-    for (const std::string_view name : names) {
-        if (!result.empty()) result += ", ";
-        result += '\'';
-        result += name;
-        result += '\'';
-    }
-    return result;
-}
 
 /// One process's write of a range of one slot, for finding where drivers overlap.
 struct DriverRange {
@@ -124,7 +110,7 @@ private:
                 design.findModuleIndex(topModuleName, &ambiguity);
             if (!index.has_value() && !ambiguity.empty()) {
                 diagnostics.report(DiagCode::AmbiguousModule, SourceLocation(), topModuleName,
-                                   joinNames(ambiguity), topModuleName);
+                                   quotedNames(ambiguity), topModuleName);
                 return std::nullopt;
             }
             // A parameterised module is named for its parameter values, so the name a user
@@ -139,17 +125,24 @@ private:
                     for (const std::uint32_t candidate : specialisations)
                         names.push_back(design.module(candidate).name);
                     diagnostics.report(DiagCode::AmbiguousSpecialisation, SourceLocation(),
-                                       topModuleName, joinNames(names));
+                                       topModuleName, quotedNames(names));
                     return std::nullopt;
                 }
             }
 
+            // By the names the sources give them, which is what `--top` takes, once each: a
+            // parameterised module's definitions are named for their values, and a package is no
+            // top level.
             if (!index.has_value()) {
                 std::vector<std::string> names;
-                for (const eir::ModuleDefinition& definition : design.modules())
-                    names.push_back(definition.name);
+                for (const eir::ModuleDefinition& definition : design.modules()) {
+                    if (definition.isPackage) continue;
+                    const std::string& name =
+                        definition.sourceName.empty() ? definition.name : definition.sourceName;
+                    if (std::ranges::find(names, name) == names.end()) names.push_back(name);
+                }
                 diagnostics.report(DiagCode::TopModuleNotFound, SourceLocation(), topModuleName,
-                                   joinNames(names));
+                                   quotedNames(names));
                 return std::nullopt;
             }
             return index;
@@ -169,7 +162,7 @@ private:
             shown.push_back(source.empty() ? candidate : source);
         }
         DiagnosticBuilder refusal = diagnostics.report(DiagCode::NoTopModule, SourceLocation(),
-                                                       candidates.size(), joinNames(shown));
+                                                       candidates.size(), quotedNames(shown));
         // AMD's models reach `glbl` by name, so it is a top level beside the design's own.
         if (candidates.size() > 1 && std::ranges::find(shown, "glbl") != shown.end())
             refusal.note({},
@@ -297,7 +290,7 @@ private:
             design.findModuleIndex(child.definitionName, &ambiguity);
         if (!childDefinition.has_value() && !ambiguity.empty()) {
             diagnostics.report(DiagCode::AmbiguousModule, child.location, child.definitionName,
-                               joinNames(ambiguity), child.definitionName);
+                               quotedNames(ambiguity), child.definitionName);
             return false;
         }
         if (!childDefinition.has_value()) {
@@ -622,7 +615,7 @@ private:
                                        call.subprogram, call.definition);
                 } else {
                     diagnostics.report(DiagCode::AmbiguousModule, call.location, call.definition,
-                                       joinNames(ambiguity), call.definition);
+                                       quotedNames(ambiguity), call.definition);
                 }
                 bindingsResolved = false;
                 return SubprogramInstance::NoInstance;

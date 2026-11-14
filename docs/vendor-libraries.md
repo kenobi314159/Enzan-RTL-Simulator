@@ -144,8 +144,6 @@ enzan --top tb -f cyclone10lp.f tb.v design.vo
 ```
 
 Each block RAM carries its contents as a parameter, so a netlist needs no initialisation file.
-Quartus connects every output it does not use to nothing by name, `.cout()`, and slang warns of
-each (ENZ1002): tens of thousands of lines for a processor, which change nothing in the run.
 NEORV32's netlist, 53,000 cells, runs as it does under Icarus Verilog.
 
 ### Not yet

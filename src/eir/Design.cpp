@@ -3,6 +3,7 @@
 #include "eir/Design.h"
 
 #include "common/Assert.h"
+#include "common/Names.h"
 
 #include <algorithm>
 #include <set>
@@ -88,9 +89,15 @@ const ModuleDefinition& Design::module(std::uint32_t index) const {
 }
 
 std::vector<std::uint32_t> Design::findSpecialisations(std::string_view sourceName) const {
+    // VHDL compares a name without its case, but for an extended identifier's, `\Top\`.
+    const auto named = [sourceName](const ModuleDefinition& definition) {
+        if (definition.language == Language::Vhdl && !sourceName.starts_with('\\'))
+            return equalsIgnoringCase(definition.sourceName, sourceName);
+        return definition.sourceName == sourceName;
+    };
     std::vector<std::uint32_t> found;
     for (std::uint32_t index = 0; index < definitions.size(); ++index) {
-        if (definitions[index].sourceName == sourceName && !definitions[index].isPackage
+        if (named(definitions[index]) && !definitions[index].isPackage
             && !duplicates.contains(index))
             found.push_back(index);
     }

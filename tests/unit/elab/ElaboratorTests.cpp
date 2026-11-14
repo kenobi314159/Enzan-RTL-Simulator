@@ -277,6 +277,29 @@ TEST_F(ElaboratorTest, ReportsAnUnknownTopModuleAndListsWhatExists) {
     EXPECT_TRUE(reported("'counter'")) << "a typo is only fixable if the real names are shown";
 }
 
+TEST_F(ElaboratorTest, ListsWhatExistsByTheNamesTopTakes) {
+    // Two parameterisations of one module are one name, and a package is no top level.
+    for (const char* name : {"fifo$depth_4", "fifo$depth_8"}) {
+        ModuleDefinition fifo;
+        fifo.name = name;
+        fifo.sourceName = "fifo";
+        design.addModule(std::move(fifo));
+    }
+    ModuleDefinition package;
+    package.name = "numeric_std::";
+    package.sourceName = "numeric_std";
+    package.isPackage = true;
+    design.addModule(std::move(package));
+
+    EXPECT_EQ(elaborate("fifo_tb"), nullptr);
+    ASSERT_EQ(consumer.messages.size(), 1U);
+    EXPECT_NE(consumer.messages.front().find("the design contains: 'fifo'"), std::string::npos)
+        << consumer.messages.front();
+    EXPECT_EQ(consumer.messages.front().find('$'), std::string::npos) << consumer.messages.front();
+    EXPECT_EQ(consumer.messages.front().find("numeric_std"), std::string::npos)
+        << consumer.messages.front();
+}
+
 // ---------------------------------------------------------------------------
 // The instance tree
 // ---------------------------------------------------------------------------

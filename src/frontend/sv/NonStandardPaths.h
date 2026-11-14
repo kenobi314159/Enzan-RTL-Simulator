@@ -43,10 +43,6 @@ public:
     /// The warning `diagnostic` is reported as, when it is one of the errors excused.
     [[nodiscard]] std::optional<DiagCode> excuses(const slang::Diagnostic& diagnostic) const;
 
-    /// True when `diagnostic` is slang's warning of a parameter in a specify block where an
-    /// excused error already says so.
-    [[nodiscard]] bool repeats(const slang::Diagnostic& diagnostic) const;
-
 private:
     [[nodiscard]] bool namesParameter(const slang::Diagnostic& diagnostic) const;
 

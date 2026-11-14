@@ -93,6 +93,7 @@ ModuleDefinition richModule(BufferId buffer) {
     definition.name = "counter$WIDTH=8";
     definition.sourceName = "counter";
     definition.language = Language::Vhdl;
+    definition.architecture = "rtl";
     definition.location = SourceLocation(buffer, 3);
     definition.firstTimingCheck = SourceLocation(buffer, 9);
 
@@ -167,6 +168,7 @@ ModuleDefinition richModule(BufferId buffer) {
     process.drivesSignals = true;
     process.strength = {.zero = enzan::eir::Strength::Strong, .one = enzan::eir::Strength::Weak};
     process.postponed = true;
+    process.reactive = true;
     process.connectsPort = true;
     process.name = "always_ff@counter.sv:14";
     process.location = SourceLocation(buffer, 14);
@@ -273,6 +275,7 @@ TEST_F(SerializationTest, ModuleIdentityRoundTrips) {
     EXPECT_EQ(decoded.front().name, "counter$WIDTH=8");
     EXPECT_EQ(decoded.front().sourceName, "counter");
     EXPECT_EQ(decoded.front().language, Language::Vhdl);
+    EXPECT_EQ(decoded.front().architecture, "rtl");
     EXPECT_EQ(decoded.front().location, SourceLocation(buffer, 3));
     EXPECT_EQ(decoded.front().firstTimingCheck, SourceLocation(buffer, 9));
 }
@@ -347,6 +350,7 @@ TEST_F(SerializationTest, ProcessesRoundTrip) {
     EXPECT_EQ(process.strength, (enzan::eir::DriveStrength{.zero = enzan::eir::Strength::Strong,
                                                            .one = enzan::eir::Strength::Weak}));
     EXPECT_TRUE(process.postponed);
+    EXPECT_TRUE(process.reactive);
     EXPECT_TRUE(process.connectsPort);
     EXPECT_EQ(process.name, "always_ff@counter.sv:14");
     EXPECT_EQ(process.location, SourceLocation(buffer, 14));

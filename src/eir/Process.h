@@ -170,6 +170,11 @@ enum class SysTaskKind : std::uint8_t {
     StringRead,
     /// How many strings of run-time length there are, the mark StringRelease releases to.
     StringMark,
+    /// VHDL's `'path_name` of something in the calling process's instance, or with the argument
+    /// not 0 its `'instance_name` (IEEE 1076 section 16.2.5): a new string, ascending from 1, of
+    /// the instance's path, `:tb:u:` or `:tb(a):u@child(rtl):`, and after it the characters of
+    /// the format string, which name what is in the instance. The result is its handle.
+    PathName,
 };
 
 /// The severities a Report takes as its first argument: the positions of
@@ -483,6 +488,11 @@ struct Process : Body {
     /// resumes only in the last delta cycle of a time step, once nothing else is due then, and so
     /// sees the values the step ends with.
     bool postponed = false;
+
+    /// True for a process that resumes in the Reactive region rather than Active, as a concurrent
+    /// assertion's evaluation and its action blocks run (IEEE 1800 section 16.14.1): after the time
+    /// slot's non-blocking assignments, so that an action block shows the values they wrote.
+    bool reactive = false;
 
     /// True for what the VHDL adapter makes of a port associated by parts or through a conversion
     /// (IEEE 1076 section 6.5.6.3): a copy from one side of the association to the other, which is

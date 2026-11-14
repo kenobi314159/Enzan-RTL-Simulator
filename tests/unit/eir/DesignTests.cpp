@@ -11,6 +11,7 @@ namespace {
 
 using enzan::eir::Design;
 using enzan::eir::Instance;
+using enzan::eir::Language;
 using enzan::eir::ModuleDefinition;
 using enzan::eir::Object;
 using enzan::eir::Type;
@@ -270,6 +271,26 @@ TEST(Design, AParameterisedTopInTwoLibrariesIsOneChoice) {
     design.mergeIdenticalDefinitions(sourceNameOf);
 
     EXPECT_EQ(design.findSpecialisations("tb"), std::vector<std::uint32_t>({0}));
+}
+
+TEST(Design, AVhdlTopIsNamedInAnyCase) {
+    // VHDL compares names without their case, so `--top COUNTER` names `entity counter`;
+    // SystemVerilog does not, and an extended identifier keeps its case.
+    Design design;
+    ModuleDefinition vhdl = makeModule("counter$width_8");
+    vhdl.sourceName = "counter";
+    vhdl.language = Language::Vhdl;
+    ModuleDefinition extended = makeModule("\\Top\\");
+    extended.language = Language::Vhdl;
+    design.addModule(std::move(vhdl));
+    design.addModule(makeModule("Adder"));
+    design.addModule(std::move(extended));
+
+    EXPECT_EQ(design.findSpecialisations("COUNTER"), std::vector<std::uint32_t>({0}));
+    EXPECT_TRUE(design.findSpecialisations("adder").empty());
+    EXPECT_EQ(design.findSpecialisations("Adder"), std::vector<std::uint32_t>({1}));
+    EXPECT_TRUE(design.findSpecialisations("\\TOP\\").empty());
+    EXPECT_EQ(design.findSpecialisations("\\Top\\"), std::vector<std::uint32_t>({2}));
 }
 
 TEST(Design, ReplacingACopyForgetsThatItWasOne) {
