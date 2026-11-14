@@ -29,9 +29,9 @@ The designs are each a source under `designs/`, or a file list there naming seve
 | `fifo-mixed` | the same FIFO and stimulus, the testbench in SystemVerilog | crossing the language boundary on every port and cycle |
 
 A file list reads a golden case's sources where they are, under a testbench of the benchmark's
-own in `designs/tops/`, so a change to one of those sources moves the benchmark too.
-`fifo-vhdl` and `fifo-mixed` print the same checksum, and every design prints what Icarus
-Verilog or GHDL prints for it. A design in a language the build has no
+own in `designs/tops/`, so a change to one of those sources moves the benchmark too, and its
+reference with it. `fifo-vhdl` and `fifo-mixed` print the same checksum, and every design
+prints what Icarus Verilog or GHDL prints for it. A design in a language the build has no
 frontend for is skipped, as `enzan --version` lists the frontends.
 
 Each design runs three times, and the fastest run is recorded: whatever else slows a run down,
@@ -50,6 +50,34 @@ loaded machine alongside three hundred other tests is not comparable with anythi
 
 `results.tsv` is not committed: a number from one machine does not compare with one from
 another, and the file would be a merge conflict on every run.
+
+### Holding a change to the reference
+
+CI's benchmark job runs `run-bench.sh --check reference.tsv`, which fails when a design does
+more work or runs more slowly than its row of `reference.tsv` allows:
+
+- **Its instructions and delta cycles may grow by `work_margin` percent at most**, as
+  `run-bench.sh` sets it. The kernel counts them, so they are the same on every machine and
+  every run of one build, and a change that makes a design take more of them is seen whatever
+  machine it is measured on. Two runs of one design counting differently fail, since that would
+  be a simulation that is not deterministic.
+- **Its rate may fall to `rate_floor` percent of the reference at most.** It depends on the
+  machine, GitHub's runners are not all one model of processor, and the best of three runs on
+  one machine still varies by a tenth or more, so the bound is loose. It is there for a slowdown
+  the counts cannot see, such as one in the dispatch loop.
+- **A design with no row fails**, so that a design added is given its row in the same commit.
+
+A change that moves a design on purpose replaces its row in the same commit, with the row the
+job printed for it, which the job's summary shows. A design whose counts fall by more than
+`work_margin` percent is named, so that its row is lowered and what the change won is held from
+then on, as a conformance suite's pass list is ratcheted. The counts can be checked on any
+machine:
+
+```sh
+./bench/run-bench.sh --check bench/reference.tsv ./build/gcc-release/bin/enzan
+```
+
+where a rate below the reference's says only that the machine is slower than CI's.
 
 ### Finding a value in the wave window
 
