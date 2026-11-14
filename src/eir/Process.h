@@ -489,6 +489,11 @@ struct Process : Body {
     /// sees the values the step ends with.
     bool postponed = false;
 
+    /// True for a process that resumes in the Reactive region rather than Active, as a concurrent
+    /// assertion's evaluation and its action blocks run (IEEE 1800 section 16.14.1): after the time
+    /// slot's non-blocking assignments, so that an action block shows the values they wrote.
+    bool reactive = false;
+
     /// True for what the VHDL adapter makes of a port associated by parts or through a conversion
     /// (IEEE 1076 section 6.5.6.3): a copy from one side of the association to the other, which is
     /// the connection itself rather than a process of the design. The kernel runs it as part of

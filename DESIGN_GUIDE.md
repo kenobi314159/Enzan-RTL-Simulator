@@ -658,6 +658,14 @@ floor.
   simulators rely on them and what they mean is plain: a parameter in a path's condition (IEEE
   1800 section 30.4.4), as Icarus Verilog takes it, and a parallel path from one bit to a vector
   (section 30.4.5), which can only join the bit to every bit of the output.
+- **A concurrent assertion is a process of its own, of the properties whose every attempt lasts
+  a fixed number of ticks**: booleans joined by `##n` and `[*n]` under one `|->` or `|=>`, with
+  `disable iff` and the sampled value functions, which keep each attempt in flight as one bit.
+  Ranges of delays, the other repetitions and property operators, and one in a procedure are
+  refused. The booleans read copies the module keeps of what they read, written in Postponed and
+  so holding the values a slot begins with (IEEE 1800 section 16.5.1), and the process resumes
+  in Reactive, where an action block runs after the slot's non-blocking assignments (section
+  4.4.2.6). Verilator runs action blocks before them, so it is no reference for what one shows.
 - **A `defparam` on an instance declared beside it**, in the same module or generate block,
   **becomes that instance's parameter value assignment** before slang elaborates. An untyped
   parameter takes the type of its final value (IEEE 1800 section 6.20.2), which slang gives an
@@ -1929,7 +1937,7 @@ committed figure.
 
 ### M9+ — Verification features
 
-SVA and PSL assertions; functional coverage; constrained random (which requires a constraint
+SVA beyond the properties 5.1 translates, and PSL; functional coverage; constrained random (which requires a constraint
 solver); save and restore; multiple-clock-domain tooling; UVM.
 
 **The VHDL verification libraries, VUnit and OSVVM**, and what they are built from: access types as
@@ -1947,7 +1955,8 @@ mistranslated:
 - SystemVerilog `string` variables, real and string ports, and ports holding reals, a real
   exponent, events as values, dynamic and associative arrays, queues, classes, unpacked unions,
   `fork`, `highz` strengths, resistive and bidirectional switches, the module paths 5.1 refuses, net
-  aliases, and a procedural `assign` or `force` of part of an object.
+  aliases, a procedural `assign` or `force` of part of an object, and the concurrent assertions
+  5.1 refuses.
 - VHDL access types beyond what `std.textio` needs, protected types and configuration declarations.
 - VHDL's `'path_name` and `'instance_name` other than in a message or a `write`, and of what a
   package or a subprogram declares or of an instance's label.

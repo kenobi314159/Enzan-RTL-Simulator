@@ -689,9 +689,10 @@ void Kernel::runConnections() {
 }
 
 Region Kernel::resumeRegion(std::uint32_t processIndex) const {
-    return designImage->compiledDesign().body(processes[processIndex].bodyIndex).postponed
-               ? Region::Postponed
-               : Region::Active;
+    const codegen::CompiledBody& body =
+        designImage->compiledDesign().body(processes[processIndex].bodyIndex);
+    if (body.postponed) return Region::Postponed;
+    return body.reactive ? Region::Reactive : Region::Active;
 }
 
 void Kernel::writeSignal(std::uint32_t signalIndex, eir::ConstBitRef value) {

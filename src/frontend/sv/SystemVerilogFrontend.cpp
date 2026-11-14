@@ -412,6 +412,8 @@ public:
 
     std::optional<std::uint32_t> addEventValue(const ast::Expression& expression) override;
 
+    std::optional<std::uint32_t> sampledCopyOf(std::uint32_t objectIndex) override;
+
 private:
     /// Walks a scope, collecting declarations and remembering what to translate later.
     bool collectScope(const ast::Scope& scope, const std::string& prefix);
@@ -522,6 +524,9 @@ private:
     eir::ModuleDefinition definitionValue;
 
     std::map<const ast::ValueSymbol*, std::uint32_t> objectBySymbol;
+
+    /// The copy of each object a concurrent assertion reads sampled, by the object's index.
+    std::map<std::uint32_t, std::uint32_t> sampledCopies;
     std::map<std::string, std::uint32_t, std::less<>> portIndexByName;
 
     std::vector<std::pair<std::string, const ast::ProceduralBlockSymbol*>> proceduralBlocks;
@@ -828,6 +833,30 @@ std::optional<std::uint32_t> ModuleBuilder::addEventValue(const ast::Expression&
     // it comes before that process and has the value before the process first waits on it.
     definitionValue.processes.push_back(translator.take());
     return objectIndex;
+}
+
+std::optional<std::uint32_t> ModuleBuilder::sampledCopyOf(std::uint32_t objectIndex) {
+    if (const auto found = sampledCopies.find(objectIndex); found != sampledCopies.end())
+        return found->second;
+    const eir::Object& source = definitionValue.objects[objectIndex];
+    eir::Object object;
+    object.name = uniqueObjectName("sampled$" + source.name);
+    object.type = source.type;
+    object.kind = eir::ObjectKind::Variable;
+    object.location = source.location;
+    const SourceLocation location = source.location;
+    const std::uint32_t copy = definitionValue.addObject(std::move(object));
+
+    // At the end of each time slot the object changed in, which leaves the copy holding the
+    // value the next slot begins with until the object next changes.
+    ProcessTranslator translator(*this, eir::ProcessKind::ContinuousAssign,
+                                 "sampled@" + definitionValue.objects[objectIndex].name, location);
+    if (!translator.translateCopyInto(copy, objectIndex)) return std::nullopt;
+    eir::Process process = translator.take();
+    process.postponed = true;
+    definitionValue.processes.push_back(std::move(process));
+    sampledCopies.emplace(objectIndex, copy);
+    return copy;
 }
 
 const ast::PackageSymbol* ModuleBuilder::packageOf(const ast::ValueSymbol& symbol) {
@@ -1563,6 +1592,29 @@ bool ModuleBuilder::translateProcesses() {
         if (block->location) {
             name += ':';
             name += std::to_string(shared->slangSources.getLineNumber(block->location));
+        }
+
+        // A concurrent assertion the module declares is a process of its own that never ends,
+        // checking its property at each tick of its clock; a labelled one is in a block of its
+        // label's name.
+        const ast::Statement* asserted = &block->getBody();
+        if (asserted->kind == ast::StatementKind::Block)
+            asserted = &asserted->as<ast::BlockStatement>().body;
+        if (asserted->kind == ast::StatementKind::ConcurrentAssertion) {
+            std::string assertionName =
+                std::format("assert@{}", shared->slangSources.getFileName(block->location));
+            if (block->location)
+                assertionName +=
+                    ':' + std::to_string(shared->slangSources.getLineNumber(block->location));
+            ProcessTranslator translator(*this, eir::ProcessKind::Initial, std::move(assertionName),
+                                         location);
+            const ast::Scope* scope = block->getParentScope();
+            if (scope == nullptr || !translator.translateConcurrentAssertion(*asserted, *scope)) {
+                failed = true;
+                continue;
+            }
+            definitionValue.processes.push_back(translator.take());
+            continue;
         }
 
         ProcessTranslator translator(*this, kind, std::move(name), location);

@@ -128,8 +128,12 @@ Reported as `ENZ1004` with the construct named, rather than mistranslated:
   operands, `>>` and `<<` with any slice work, as expressions and as targets;
 - `foreach` over a dimension of no fixed size, which needs the dynamic arrays and queues that
   are not here; over fixed dimensions it works, and `break` leaves the whole statement;
-- deferred assertions (`assert #0`, `assert final`) and concurrent ones (`assert property`),
-  which are SVA; immediate assertions work;
+- deferred assertions (`assert #0`, `assert final`); immediate assertions work, and so do
+  concurrent ones declared in a module, `assert`, `assume` and `cover property`, of booleans joined
+  by fixed delays, `##2`, and consecutive repetitions, `[*3]`, under one `|->` or `|=>`, with
+  `disable iff`, a default clocking block and `$past`, `$rose`, `$fell`, `$stable`, `$changed` and
+  `$sampled` (`Assertions.cpp`). A range of delays, `##[1:3]`, any other repetition, any other
+  property operator, and a concurrent assertion inside a procedure are refused;
 - every system function but `$time`, `$signed`, `$unsigned`, `$bits`, `$clog2`, `$isunknown`,
   `$countones`, `$onehot`, `$onehot0`, `$random`, `$urandom`, `$urandom_range`, `$fopen` and
   `$fgetc`, and those slang folds to a constant. Files are written, with `$fdisplay`, `$fwrite`,

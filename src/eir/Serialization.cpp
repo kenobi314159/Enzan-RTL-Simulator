@@ -308,6 +308,7 @@ void writeProcess(Writer& out, NameTable& names, const Process& process) {
     out.u8(static_cast<std::uint8_t>(process.strength.zero));
     out.u8(static_cast<std::uint8_t>(process.strength.one));
     out.boolean(process.postponed);
+    out.boolean(process.reactive);
     out.boolean(process.connectsPort);
     writeBody(out, names, process);
 
@@ -643,6 +644,7 @@ Process readProcess(Reader& in, BufferResolver& buffers) {
     process.strength.zero = static_cast<Strength>(in.u8());
     process.strength.one = static_cast<Strength>(in.u8());
     process.postponed = in.boolean();
+    process.reactive = in.boolean();
     process.connectsPort = in.boolean();
     readBody(in, buffers, process);
 

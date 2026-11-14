@@ -24,12 +24,14 @@
 #include <algorithm>
 #include <cstdint>
 #include <filesystem>
+#include <format>
 #include <fstream>
 #include <memory>
 #include <optional>
 #include <set>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 #include <unistd.h>
@@ -1054,6 +1056,54 @@ TEST_F(FrontendTest, RefusesAStreamWithAWithClause) {
               nullptr);
     EXPECT_TRUE(reportedCode(DiagCode::UnsupportedConstruct));
     EXPECT_TRUE(reported("a streaming concatenation with a `with` clause"));
+}
+
+TEST_F(FrontendTest, RefusesAConcurrentAssertionOutsideItsSubset) {
+    // Each by name, rather than checked some other way.
+    const std::pair<const char*, const char*> cases[] = {
+        {"assert property (@(posedge clk) a |-> ##[1:3] b);", "a delay of a range of ticks"},
+        {"assert property (@(posedge clk) a[->2] |-> b);", "a repetition other than"},
+        {"assert property (a |-> b);", "a concurrent assertion with no clock"},
+        {"assert property (@(posedge clk) not (a |-> b));", "this property operator"},
+        {"always @(posedge clk) assert property (a);", "a concurrent assertion inside a procedure"},
+        {"initial if ($rose(a)) $display(\"rose\");", "$rose outside a concurrent assertion"},
+    };
+    for (const auto& [statement, refusal] : cases) {
+        consumer.messages.clear();
+        consumer.codes.clear();
+        EXPECT_EQ(analyse(std::format(R"(
+            module m;
+                logic clk, a, b;
+                {}
+            endmodule
+        )",
+                                      statement)),
+                  nullptr)
+            << statement;
+        EXPECT_TRUE(reported(refusal)) << statement;
+    }
+}
+
+TEST_F(FrontendTest, AConcurrentAssertionIsAReactiveProcessReadingSampledCopies) {
+    const std::unique_ptr<Design> design = analyse(R"(
+        module m;
+            logic clk, a, b;
+            assert property (@(posedge clk) a |=> b);
+        endmodule
+    )");
+    ASSERT_NE(design, nullptr) << consumer.messages.front();
+    const ModuleDefinition* definition = design->findModule("m");
+    ASSERT_NE(definition, nullptr);
+    std::size_t reactive = 0;
+    std::size_t postponed = 0;
+    for (const enzan::eir::Process& process : definition->processes) {
+        if (process.reactive) ++reactive;
+        if (process.postponed) ++postponed;
+    }
+    EXPECT_EQ(reactive, 1U) << "the assertion runs in the Reactive region";
+    EXPECT_EQ(postponed, 2U) << "a copy of a and of b keeps each one's sampled value";
+    for (const char* copy : {"sampled$a", "sampled$b"})
+        EXPECT_TRUE(definition->findObject(copy).has_value()) << copy;
 }
 
 TEST_F(FrontendTest, DoesNotWarnOfDeliberateCode) {

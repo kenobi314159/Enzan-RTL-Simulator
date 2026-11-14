@@ -211,6 +211,9 @@ struct CompiledBody {
     /// rather than in Active.
     bool postponed = false;
 
+    /// eir::Process::reactive: the kernel resumes it in the Reactive region rather than in Active.
+    bool reactive = false;
+
     /// eir::Process::connectsPort: the kernel runs it as part of the signal update.
     bool connectsPort = false;
 
