@@ -1770,8 +1770,13 @@ implementation began: it constrains EIR, and discovering the constraint later me
 
 ### 15.3 Benchmarks
 
-`bench/` holds a fixed set of designs with fixed stimulus, which CI runs as a step of its own. Once
-a threshold is agreed, a regression beyond it should fail CI, in a nightly job if one is added (16).
+`bench/` holds a fixed set of designs with fixed stimulus, which CI runs as a job of its own.
+**A regression fails CI**: each design is held to a reference of the instructions and delta cycles
+it takes, closely, and of its rate, loosely. The counts are the same on every machine, so they are
+what can be held tightly; a rate is measured on whichever processor a runner has, so it fails only
+far below its reference, for a slowdown the counts cannot see. A change that moves a reference
+moves it in the same commit, and one that lowers the counts lowers it, as a pass list is ratcheted
+(14.4).
 
 ---
 
@@ -1784,7 +1789,7 @@ a threshold is agreed, a regression beyond it should fail CI, in a nightly job i
   after a merge, leaving `main` red, rather than on the pull request before it.
 - **Code compiled only with a component, or only without one, is compiled somewhere with warnings as
   errors.** One job builds every optional component, as a contributor's plain configure does, and is
-  the only one to build the SystemVerilog frontend, since one is enough to prove it; another builds
+  the only one to test the SystemVerilog frontend, since one is enough to prove it; another builds
   the GUI with neither language frontend.
 - **The release workflow** runs on a tag or by hand (11.6). Run by hand on a branch, it tries the
   packaging and releases nothing.

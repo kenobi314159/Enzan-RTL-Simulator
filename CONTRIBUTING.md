@@ -102,7 +102,9 @@ NVC or Qt headers, and reports whatever its half-parsed view of the file suggest
 The GUI's tests need no display; they select Qt's offscreen platform themselves. The suite compares
 designs against Icarus Verilog when `iverilog` is installed, and against GHDL when `ghdl` is.
 Benchmarks are a target of their own, since a measurement taken alongside the rest of the suite
-compares with nothing: `cmake --build --preset gcc-release --target enzan-bench`. The conformance
+compares with nothing: `cmake --build --preset gcc-release --target enzan-bench`. CI holds each
+design to `bench/reference.tsv`, and a change that moves a design's row replaces it in the same
+commit, as `bench/README.md` describes. The conformance
 suites run from their scripts under `tests/conformance/`; cocotb's, for example, is
 `tests/conformance/cocotb/run-suite.sh <enzan> <work>`, with `vhdl` after it for VHDL toplevels.
 

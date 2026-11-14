@@ -1,0 +1,12 @@
+# What each benchmark design is held to by `run-bench.sh --check`, which CI's benchmark job runs:
+# the instructions and delta cycles it takes, which are the same on every machine, and the rate
+# at which CI's runner simulates it. A row is replaced by the one a run prints for it, in the same
+# commit as the change that moved it. Tab separated:
+#
+# design	instructions	deltas	cycles_per_second
+pipeline	10299959	300001	598802
+pipeline-vhdl	3990466	10000	98039
+counters	56548657	75001	38052
+fifo-mixed	51899740	1253729	261780
+fifo-vhdl	72920608	374487	311042
+router	73792376	1200001	496894
