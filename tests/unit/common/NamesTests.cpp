@@ -4,6 +4,10 @@
 
 #include <gtest/gtest.h>
 
+#include <string>
+#include <string_view>
+#include <vector>
+
 namespace {
 
 TEST(Names, ComparesWithoutCase) {
@@ -18,6 +22,13 @@ TEST(Names, TellsDifferentNamesApart) {
     // '@' and '`' sit just before 'A' and 'a', and '[' and '{' just after 'Z' and 'z'.
     EXPECT_FALSE(enzan::equalsIgnoringCase("@", "`"));
     EXPECT_FALSE(enzan::equalsIgnoringCase("[", "{"));
+}
+
+TEST(Names, ListsNamesAsADiagnosticDoes) {
+    EXPECT_EQ(enzan::quotedNames(std::vector<std::string>{"counter", "counter_tb"}),
+              "'counter', 'counter_tb'");
+    EXPECT_EQ(enzan::quotedNames(std::vector<std::string_view>{"tb"}), "'tb'");
+    EXPECT_EQ(enzan::quotedNames(std::vector<std::string>{}), "(none)");
 }
 
 } // namespace

@@ -1222,9 +1222,19 @@ private:
     /// analysed that nothing instantiates. Nothing, having reported them, when there are several.
     std::vector<tree_t> tops() {
         if (!request.top.empty()) {
-            // Left to elaboration, when there is none, which says what the design does have.
-            tree_t top = entityIn(request.work, request.top);
-            return top == nullptr ? std::vector<tree_t>() : std::vector<tree_t>{top};
+            if (tree_t top = entityIn(request.work, request.top)) return {top};
+
+            // What the design has, by the names `--top` takes: the entities analysed and the
+            // modules beside them. Elaboration could say only what was translated, which is
+            // nothing.
+            std::vector<std::string> units;
+            for (tree_t unit : request.analysed) {
+                if (tree_kind(unit) == T_ENTITY) units.push_back(declaredName(unit));
+            }
+            units.insert(units.end(), request.modules.begin(), request.modules.end());
+            engine.report(DiagCode::TopModuleNotFound, SourceLocation(), request.top,
+                          quotedNames(units));
+            return {};
         }
 
         // Every entity this run analysed that no architecture of it instantiates.
