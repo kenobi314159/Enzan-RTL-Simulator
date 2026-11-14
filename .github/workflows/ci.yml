@@ -330,10 +330,10 @@ jobs:
       # the one contributors actually take. This job exists to catch a break in
       # it — an upstream revision that no longer builds, or a CMake option that
       # was renamed — at the commit that caused it rather than at the start of M1.
-      # This is the only job that builds slang, which is why it is also the only one that runs
-      # the frontend unit tests and the golden suite. The build matrix above configures the
-      # frontend off: nothing outside this job links slang, and compiling it five times per
-      # commit would spend most of every run on one dependency.
+      # This is the only job that tests slang's frontend, its unit tests and the golden suite.
+      # The build matrix above configures the frontend off, since compiling it five times more
+      # per commit would spend most of every run on one dependency; clang-tidy's job and the
+      # benchmark's build it, to lint it and to run designs with it.
       #
       # Everything else is the defaults too, the VHDL frontend and the GUI with it, so that the
       # configuration a plain `cmake --preset` gives a contributor is the one built and tested
@@ -455,12 +455,54 @@ jobs:
             build/designs/taxi/*.log
             build/designs/common_cells/*.*
 
-      # The benchmark is a target rather than a test, because a measurement taken alongside three
-      # hundred other tests compares with nothing. It runs here so that a change which breaks the
-      # harness is caught, and so that a number is recorded per commit. Publishing the series, from
-      # a nightly job say, waits until there is somewhere to publish it.
+      - name: Report cache statistics
+        if: always()
+        run: ccache --show-stats
+
+  # The benchmark, held to bench/reference.tsv: a design that takes more instructions or delta
+  # cycles than its row allows, or runs much more slowly, fails the job. A job of its own, so that
+  # nothing else runs on its machine while it is timed, and a build of both frontends, since one
+  # design is of both languages, with neither the tests nor the GUI, which it does not run.
+  # Publishing the series, from a nightly job say, waits until there is somewhere to publish it.
+  benchmark:
+    name: Benchmark
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      # NVC, which the VHDL frontend builds part of, is a submodule.
+      - uses: actions/checkout@v7
+        with:
+          submodules: true
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y \
+            cmake ninja-build ccache zlib1g-dev flex libzstd-dev
+
+      - name: Restore compiler cache
+        uses: actions/cache@v6
+        with:
+          path: ${{ env.CCACHE_DIR }}
+          key: ccache-benchmark-${{ github.sha }}
+          restore-keys: ccache-benchmark-
+
+      - name: Configure and build
+        run: |
+          cmake --preset gcc-release -DENZAN_WERROR=ON -DENZAN_BUILD_TESTS=OFF \
+            -DENZAN_BUILD_GUI=OFF
+          cmake --build --preset gcc-release
+
+      # The rows the run prints go into the job summary, so that a reference moved on purpose is
+      # copied from the run that measured it.
       - name: Benchmark
-        run: cmake --build --preset gcc-release --target enzan-bench
+        run: |
+          status=0
+          bench/run-bench.sh --check bench/reference.tsv build/gcc-release/bin/enzan \
+            build/bench.tsv > build/bench.txt 2>&1 || status=$?
+          cat build/bench.txt
+          { echo '```'; cat build/bench.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+          exit "$status"
 
       - name: Report cache statistics
         if: always()

@@ -136,9 +136,9 @@ endif()
 # Benchmarks
 # ---------------------------------------------------------------------------
 
-# A target rather than a test. CI runs it as a step of its own, and a measurement that runs as
-# part of the ordinary test suite would be both slow and meaningless: a number taken on a loaded machine alongside three hundred
-# other tests is not comparable with anything.
+# A target rather than a test. CI runs it as a job of its own, and a measurement that runs as
+# part of the ordinary test suite would be both slow and meaningless: a number taken on a loaded
+# machine alongside three hundred other tests is not comparable with anything.
 if(ENZAN_ENABLE_SYSTEMVERILOG)
   add_custom_target(
     enzan-bench

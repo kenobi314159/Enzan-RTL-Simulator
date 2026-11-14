@@ -45,7 +45,7 @@ The elapsed time covers analysis, elaboration and the run, which is what a user 
 Separating them is worth doing once there is something to tune; conflating them at least never
 flatters the result.
 
-It is a target rather than a test. CI runs it as a step of its own, and a measurement taken on a
+It is a target rather than a test. CI runs it as a job of its own, and a measurement taken on a
 loaded machine alongside three hundred other tests is not comparable with anything.
 
 `results.tsv` is not committed: a number from one machine does not compare with one from
