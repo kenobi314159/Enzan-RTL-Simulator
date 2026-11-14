@@ -3,6 +3,7 @@
 #include "frontend/vhdl/Translator.h"
 
 #include "common/Diagnostics.h"
+#include "common/Names.h"
 #include "common/SourceManager.h"
 #include "eir/BitOps.h"
 #include "frontend/vhdl/BodyTranslator.h"
@@ -180,14 +181,6 @@ std::optional<std::string> systemVerilogLiteral(const Folder& generics, tree_t g
         return std::format("1'b{}", Logic[static_cast<std::size_t>(*value)]);
     if (encoding == eir::Encoding::VhdlBit) return *value != 0 ? "1'b1" : "1'b0";
     return std::nullopt;
-}
-
-/// Whether two names are one in any case.
-bool sameName(std::string_view left, std::string_view right) {
-    return std::ranges::equal(left, right, [](char a, char b) {
-        return std::tolower(static_cast<unsigned char>(a))
-               == std::tolower(static_cast<unsigned char>(b));
-    });
 }
 
 /// `text` in lower case, as a source most often writes what NVC prints in upper case.
@@ -1163,7 +1156,7 @@ public:
     [[nodiscard]] std::vector<std::string> modulesNamed(std::string_view simple) const {
         std::vector<std::string> found;
         for (const std::string& module : request.modules) {
-            if (sameName(module, simple)) found.push_back(module);
+            if (equalsIgnoringCase(module, simple)) found.push_back(module);
         }
         return found;
     }
@@ -1277,7 +1270,7 @@ private:
             const std::string name = simpleName(tree_ident(unit));
             if (std::ranges::any_of(request.described,
                                     [&name](const std::string& fromSystemVerilog) {
-                                        return sameName(fromSystemVerilog, name);
+                                        return equalsIgnoringCase(fromSystemVerilog, name);
                                     }))
                 continue;
             roots.push_back(unit);
@@ -1352,7 +1345,7 @@ private:
         const std::string_view text = request.sources->bufferText(at.buffer());
         if (at.offset() > text.size() || text.size() - at.offset() < lower.size()) return lower;
         const std::string_view written = text.substr(at.offset(), lower.size());
-        return sameName(written, lower) ? std::string(written) : lower;
+        return equalsIgnoringCase(written, lower) ? std::string(written) : lower;
     }
 
     /// The name of the definition the entity SystemVerilog asks for is with the values it asks for,
@@ -1401,7 +1394,7 @@ private:
             const std::string name = simpleName(tree_ident(generic));
             const auto given =
                 std::ranges::find_if(values, [&name](const eir::UnitRequest::Parameter& value) {
-                    return sameName(value.name, name);
+                    return equalsIgnoringCase(value.name, name);
                 });
             if (given == values.end()) {
                 if (!tree_has_value(generic)) {
@@ -1555,7 +1548,7 @@ private:
             const std::string name = simpleName(tree_ident(generic));
             const auto given =
                 std::ranges::find_if(request.generics, [&name](std::string_view set) {
-                    return sameName(set.substr(0, set.find('=')), name);
+                    return equalsIgnoringCase(set.substr(0, set.find('=')), name);
                 });
             if (given != request.generics.end()) {
                 used[static_cast<std::size_t>(given - request.generics.begin())] = true;

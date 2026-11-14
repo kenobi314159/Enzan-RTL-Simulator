@@ -3,11 +3,11 @@
 #include "elab/Link.h"
 
 #include "common/Diagnostics.h"
+#include "common/Names.h"
 #include "eir/Design.h"
 #include "eir/Module.h"
 
 #include <algorithm>
-#include <cctype>
 #include <cstdint>
 #include <format>
 #include <map>
@@ -19,13 +19,6 @@ namespace enzan::elab {
 
 namespace {
 
-bool sameName(std::string_view left, std::string_view right) {
-    return std::ranges::equal(left, right, [](char a, char b) {
-        return std::tolower(static_cast<unsigned char>(a))
-               == std::tolower(static_cast<unsigned char>(b));
-    });
-}
-
 /// The index of `definition`'s port called `name`: exactly, or else in another case when only one
 /// port is.
 std::optional<std::uint32_t> portNamed(const eir::ModuleDefinition& definition,
@@ -34,7 +27,7 @@ std::optional<std::uint32_t> portNamed(const eir::ModuleDefinition& definition,
     bool several = false;
     for (std::uint32_t index = 0; index < definition.ports.size(); ++index) {
         if (definition.ports[index].name == name) return index;
-        if (!sameName(definition.ports[index].name, name)) continue;
+        if (!equalsIgnoringCase(definition.ports[index].name, name)) continue;
         several = found.has_value();
         found = index;
     }

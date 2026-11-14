@@ -14,6 +14,8 @@ on nothing inside Enzan themselves.
 - **Diagnostics** (`Diagnostics.h`) — the single diagnostic engine that serves
   the whole tool. Frontend diagnostics from slang and NVC are translated into it
   so that output is uniform regardless of source language.
+- **Names** (`Names.h`) — comparing names without their case, as VHDL and
+  library names are compared.
 - Small shared utilities that genuinely have no better home.
 
 ## Allowed dependencies
