@@ -3,6 +3,7 @@
 #include "frontend/sv/SystemVerilogFrontend.h"
 
 #include "common/Diagnostics.h"
+#include "common/Names.h"
 #include "common/SourceManager.h"
 #include "eir/BitOps.h"
 #include "eir/Module.h"
@@ -51,7 +52,6 @@
 
 #include <algorithm>
 #include <bit>
-#include <cctype>
 #include <format>
 #include <limits>
 #include <map>
@@ -2631,14 +2631,6 @@ void collectModules(const slang::syntax::SyntaxTree& tree, std::vector<DeclaredM
     }
 }
 
-/// Whether two names are one in any case.
-bool sameName(std::string_view left, std::string_view right) {
-    return std::ranges::equal(left, right, [](char a, char b) {
-        return std::tolower(static_cast<unsigned char>(a))
-               == std::tolower(static_cast<unsigned char>(b));
-    });
-}
-
 /// The one of `names` that is `wanted` exactly, or else the one that is in some case; nothing when
 /// there is none, or several in other cases.
 std::optional<std::string_view> nameMatching(std::span<const std::string_view> names,
@@ -2646,7 +2638,7 @@ std::optional<std::string_view> nameMatching(std::span<const std::string_view> n
     if (const auto exact = std::ranges::find(names, wanted); exact != names.end()) return *exact;
     std::optional<std::string_view> found;
     for (const std::string_view name : names) {
-        if (!sameName(name, wanted)) continue;
+        if (!equalsIgnoringCase(name, wanted)) continue;
         if (found) return std::nullopt;
         found = name;
     }

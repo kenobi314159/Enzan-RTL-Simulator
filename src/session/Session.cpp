@@ -4,6 +4,7 @@
 
 #include "codegen/Compiler.h"
 #include "common/Diagnostics.h"
+#include "common/Names.h"
 #include "common/SourceManager.h"
 #include "eir/BitOps.h"
 #include "eir/Design.h"
@@ -45,15 +46,6 @@ bool isVhdlSource(const std::filesystem::path& file) {
     for (char& character : extension)
         character = static_cast<char>(std::tolower(static_cast<unsigned char>(character)));
     return extension == ".vhd" || extension == ".vhdl";
-}
-
-/// True when `left` and `right` are one name of a library or a VHDL unit, which VHDL compares
-/// without its case.
-bool sameName(std::string_view left, std::string_view right) {
-    return std::ranges::equal(left, right, [](char a, char b) {
-        return std::tolower(static_cast<unsigned char>(a))
-               == std::tolower(static_cast<unsigned char>(b));
-    });
 }
 
 #if defined(ENZAN_WITH_SYSTEMVERILOG) && defined(ENZAN_WITH_VHDL)
@@ -132,7 +124,7 @@ void addWidths(std::vector<eir::UnitInterface>& interfaces,
         eir::UnitInterface::Widths row{.values = valuesOf(requests[index]), .ports = {}};
         for (const eir::UnitInterface::Port& port : unit->ports) {
             const auto inside = std::ranges::find_if(definition->ports, [&](const eir::Port& one) {
-                return sameName(one.name, port.name);
+                return equalsIgnoringCase(one.name, port.name);
             });
             eir::UnitInterface::PortWidth width;
             if (inside != definition->ports.end()) {
@@ -485,7 +477,7 @@ bool Session::setVhdlOptions(const AnalysisRequest& request, bool sourcesGiven,
     // not answer to.
     std::string work = request.vhdlWork;
     if (library.isOpen()) {
-        if (!work.empty() && !sameName(work, library.name())) {
+        if (!work.empty() && !equalsIgnoringCase(work, library.name())) {
             diagnostics.report(DiagCode::WorkLibraryNamedOtherwise, SourceLocation(), work,
                                library.name());
             return false;
@@ -510,7 +502,8 @@ bool Session::setVhdlOptions(const AnalysisRequest& request, bool sourcesGiven,
     // The VHDL of every library this design is analysed against, by the names it carries.
     keyOptions = "std " + request.vhdlStandard + "\nwork " + work;
     for (const eir::Library& input : inputLibraries) {
-        if (!input.holdsVhdl() || sameName(input.name(), options.units.work.name)) continue;
+        if (!input.holdsVhdl() || equalsIgnoringCase(input.name(), options.units.work.name))
+            continue;
         options.units.libraries.push_back(
             {.name = input.name(), .directory = input.vhdlDirectory()});
         keyOptions += "\nagainst " + input.name() + " " + input.vhdlStamp();
@@ -577,8 +570,8 @@ bool Session::addSearched(std::vector<std::string> wanted, std::vector<std::stri
 
     // A module of any case serves a VHDL component, so a name is taken as declared in any case.
     const auto isDeclared = [&declared](std::string_view name) {
-        return std::ranges::any_of(declared,
-                                   [name](const std::string& one) { return sameName(one, name); });
+        return std::ranges::any_of(
+            declared, [name](const std::string& one) { return equalsIgnoringCase(one, name); });
     };
     const auto find = [&](std::string_view name) -> std::optional<std::filesystem::path> {
         for (std::size_t index = 0; index < searchFiles.size(); ++index) {
@@ -724,7 +717,7 @@ bool Session::analyseMixed(const AnalysisRequest& request) {
     if (diagnostics.errorCount() != errorsBefore) return false;
     const bool svTop =
         !request.top.empty() && std::ranges::any_of(names.declared, [&](const std::string& name) {
-            return sameName(name, request.top);
+            return equalsIgnoringCase(name, request.top);
         });
 
     // A further top level is a module: the adapter translates under one top.
@@ -745,8 +738,9 @@ bool Session::analyseMixed(const AnalysisRequest& request) {
     // A component no entity binds to may bind to a module `-v` or `-y` holds, which is then
     // analysed with the sources.
     for (std::string& one : searchableModules()) {
-        if (std::ranges::none_of(options.modules,
-                                 [&one](const std::string& name) { return sameName(name, one); }))
+        if (std::ranges::none_of(options.modules, [&one](const std::string& name) {
+                return equalsIgnoringCase(name, one);
+            }))
             options.modules.push_back(std::move(one));
     }
     options.described = names.undeclared;
@@ -954,12 +948,13 @@ const eir::Library* Session::vhdlLibraryOf(std::string_view top, std::string_vie
     for (const eir::Library& input : inputLibraries) {
         if (!input.holdsVhdl()) continue;
         if (!wanted.empty()) {
-            if (sameName(input.name(), wanted)) return &input;
+            if (equalsIgnoringCase(input.name(), wanted)) return &input;
             continue;
         }
         const std::vector<std::string> units = input.vhdlUnits();
-        if (std::ranges::any_of(
-                units, [entity](const std::string& unit) { return sameName(unit, entity); }))
+        if (std::ranges::any_of(units, [entity](const std::string& unit) {
+                return equalsIgnoringCase(unit, entity);
+            }))
             holders.push_back(&input);
     }
 

@@ -8,6 +8,7 @@
 #include "pli/PliModel.h"
 
 #include "common/Diagnostics.h"
+#include "common/Names.h"
 #include "common/SourceManager.h"
 #include "common/Version.h"
 #include "eir/BitOps.h"
@@ -789,11 +790,7 @@ std::string PliContext::declaredCase(const Object& object) const {
     const std::size_t offset = object.declaredAt.offset();
     if (offset > source.size() || source.size() - offset < name.size()) return upper(name);
     const std::string_view spelled = source.substr(offset, name.size());
-    const bool same = std::ranges::equal(spelled, name, [](char left, char right) {
-        return std::tolower(static_cast<unsigned char>(left))
-               == std::tolower(static_cast<unsigned char>(right));
-    });
-    return same ? std::string(spelled) : upper(name);
+    return equalsIgnoringCase(spelled, name) ? std::string(spelled) : upper(name);
 }
 
 vhpiPhysT PliContext::vhpiGetPhys(vhpiPhysPropertyT property, vhpiHandleT /*object*/) {
