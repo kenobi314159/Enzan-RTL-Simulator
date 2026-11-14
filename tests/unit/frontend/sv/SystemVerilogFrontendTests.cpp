@@ -1106,6 +1106,20 @@ TEST_F(FrontendTest, AConcurrentAssertionIsAReactiveProcessReadingSampledCopies)
         EXPECT_TRUE(definition->findObject(copy).has_value()) << copy;
 }
 
+TEST_F(FrontendTest, ARefusalNamesTheTypeItRefuses) {
+    // What is refused, said in the reader's terms: the object and its type, as written.
+    EXPECT_EQ(analyse(R"(
+        module m;
+            logic [7:0] q[$];
+            logic [7:0] y;
+            initial y = q[0];
+        endmodule
+    )"),
+              nullptr);
+    EXPECT_TRUE(reported("'q', of type logic[7:0]$[$], is not supported"))
+        << consumer.messages.front();
+}
+
 TEST_F(FrontendTest, DoesNotWarnOfDeliberateCode) {
     // Each of these is written on purpose and means what it says, and other tools take them
     // silently: unnamed and standalone generate blocks, ports connected to nothing, a parameter

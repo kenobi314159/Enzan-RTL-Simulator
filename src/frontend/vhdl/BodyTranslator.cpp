@@ -2821,8 +2821,15 @@ std::optional<BodyTranslator::Value> BodyTranslator::expression(tree_t expressio
     case T_CONV_FUNC: {
         tree_t declaration = tree_has_ref(expression) ? tree_ref(expression) : nullptr;
         tree_t body = declaration == nullptr ? nullptr : subprogramBody(declaration);
-        if (body == nullptr || tree_ports(declaration) != 1) {
+        if (declaration == nullptr) {
             fail(expression, "this conversion function");
+            return std::nullopt;
+        }
+        if (body == nullptr || tree_ports(declaration) != 1) {
+            fail(expression,
+                 std::format("the conversion function {}, {}", simpleName(tree_ident(declaration)),
+                             body == nullptr ? "whose body has not been analysed"
+                                             : "which takes more than one parameter"));
             return std::nullopt;
         }
         return inlineCall(expression, declaration, body, {tree_value(expression)});

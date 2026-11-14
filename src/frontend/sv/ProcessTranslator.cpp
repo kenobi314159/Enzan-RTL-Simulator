@@ -2687,7 +2687,9 @@ ProcessTranslator::translateBinary(const ast::Expression& expression) {
 
     const std::optional<eir::Type> resultType = module->convertType(*expression.type);
     if (!resultType.has_value()) {
-        module->reportUnsupported(expression.sourceRange.start(), "this operand type");
+        module->reportUnsupported(
+            expression.sourceRange.start(),
+            std::format("an operation of type {}", expression.type->toString()));
         failed = true;
         return std::nullopt;
     }
@@ -2849,7 +2851,9 @@ ProcessTranslator::translateUnary(const ast::Expression& expression) {
 
     const std::optional<eir::Type> resultType = module->convertType(*expression.type);
     if (!resultType.has_value()) {
-        module->reportUnsupported(expression.sourceRange.start(), "this operand type");
+        module->reportUnsupported(
+            expression.sourceRange.start(),
+            std::format("an operation of type {}", expression.type->toString()));
         failed = true;
         return std::nullopt;
     }
@@ -2931,7 +2935,9 @@ ProcessTranslator::translateConditionalExpression(const ast::Expression& express
 
     const std::optional<eir::Type> resultType = knownType;
     if (!resultType.has_value()) {
-        module->reportUnsupported(expression.sourceRange.start(), "this conditional result type");
+        module->reportUnsupported(
+            expression.sourceRange.start(),
+            std::format("a conditional expression of type {}", expression.type->toString()));
         failed = true;
         return std::nullopt;
     }
@@ -3055,7 +3061,9 @@ ProcessTranslator::translateConcatenation(const ast::Expression& expression) {
 
     const std::optional<eir::Type> resultType = module->convertType(*expression.type);
     if (!resultType.has_value()) {
-        module->reportUnsupported(expression.sourceRange.start(), "this concatenation type");
+        module->reportUnsupported(
+            expression.sourceRange.start(),
+            std::format("a concatenation of type {}", expression.type->toString()));
         failed = true;
         return std::nullopt;
     }
@@ -3078,8 +3086,10 @@ ProcessTranslator::translateConcatenation(const ast::Expression& expression) {
         if (!value.has_value()) return std::nullopt;
 
         if (value->type.bitWidth() > offset) {
-            module->reportUnsupported(expression.sourceRange.start(),
-                                      "a concatenation whose operands exceed its width");
+            module->reportUnsupported(
+                expression.sourceRange.start(),
+                std::format("a concatenation of {} bits whose operands are wider",
+                            resultType->bitWidth()));
             failed = true;
             return std::nullopt;
         }
@@ -3101,7 +3111,9 @@ std::optional<ProcessTranslator::Value>
 ProcessTranslator::translateAssignmentPattern(const ast::Expression& expression) {
     const std::optional<eir::Type> resultType = module->convertType(*expression.type);
     if (!resultType.has_value()) {
-        module->reportUnsupported(expression.sourceRange.start(), "this assignment pattern type");
+        module->reportUnsupported(
+            expression.sourceRange.start(),
+            std::format("an assignment pattern of type {}", expression.type->toString()));
         failed = true;
         return std::nullopt;
     }
@@ -3145,7 +3157,9 @@ ProcessTranslator::translateAssignmentPattern(const ast::Expression& expression)
     for (const ast::Expression* element : pattern->elements()) {
         const std::optional<eir::Type> elementType = module->convertType(*element->type);
         if (!elementType.has_value()) {
-            module->reportUnsupported(element->sourceRange.start(), "this element type");
+            module->reportUnsupported(
+                element->sourceRange.start(),
+                std::format("an element of type {}", element->type->toString()));
             failed = true;
             return std::nullopt;
         }
@@ -3158,8 +3172,10 @@ ProcessTranslator::translateAssignmentPattern(const ast::Expression& expression)
     for (std::int64_t copy = 0; copy < copies; ++copy) {
         for (const Value& stored : elements) {
             if (stored.type.bitWidth() > offset) {
-                module->reportUnsupported(expression.sourceRange.start(),
-                                          "an assignment pattern whose elements exceed its width");
+                module->reportUnsupported(
+                    expression.sourceRange.start(),
+                    std::format("an assignment pattern of {} bits whose elements are wider",
+                                resultType->bitWidth()));
                 failed = true;
                 return std::nullopt;
             }
@@ -3191,7 +3207,9 @@ ProcessTranslator::translateReplication(const ast::Expression& expression) {
 
     const std::optional<eir::Type> resultType = module->convertType(*expression.type);
     if (!resultType.has_value()) {
-        module->reportUnsupported(expression.sourceRange.start(), "this replication type");
+        module->reportUnsupported(
+            expression.sourceRange.start(),
+            std::format("a replication of type {}", expression.type->toString()));
         failed = true;
         return std::nullopt;
     }
@@ -3422,7 +3440,8 @@ ProcessTranslator::locateElement(const ast::ElementSelectExpression& select) {
 
     const std::optional<eir::Type> elementType = module->convertType(*select.type);
     if (!elementType.has_value()) {
-        module->reportUnsupported(select.sourceRange.start(), "this element type");
+        module->reportUnsupported(select.sourceRange.start(),
+                                  std::format("an element of type {}", select.type->toString()));
         failed = true;
         return std::nullopt;
     }
@@ -3468,7 +3487,8 @@ ProcessTranslator::locateRange(const ast::RangeSelectExpression& select) {
 
     const std::optional<eir::Type> partType = module->convertType(*select.type);
     if (!partType.has_value()) {
-        module->reportUnsupported(select.sourceRange.start(), "this part select type");
+        module->reportUnsupported(select.sourceRange.start(),
+                                  std::format("a part select of type {}", select.type->toString()));
         failed = true;
         return std::nullopt;
     }
@@ -3480,7 +3500,9 @@ ProcessTranslator::locateRange(const ast::RangeSelectExpression& select) {
         const std::optional<eir::Type> element =
             module->convertType(*baseType.getArrayElementType());
         if (!element.has_value()) {
-            module->reportUnsupported(select.sourceRange.start(), "this element type");
+            module->reportUnsupported(
+                select.sourceRange.start(),
+                std::format("an element of type {}", baseType.getArrayElementType()->toString()));
             failed = true;
             return std::nullopt;
         }
@@ -3575,7 +3597,9 @@ ProcessTranslator::locateMember(const ast::MemberAccessExpression& access) {
 
     const std::optional<eir::Type> fieldType = module->convertType(*access.type);
     if (!fieldType.has_value()) {
-        module->reportUnsupported(access.sourceRange.start(), "the type of this member");
+        module->reportUnsupported(
+            access.sourceRange.start(),
+            std::format("the member '{}' of type {}", field.name, access.type->toString()));
         failed = true;
         return std::nullopt;
     }
@@ -3593,7 +3617,9 @@ ProcessTranslator::locateMember(const ast::MemberAccessExpression& access) {
             if (other->fieldIndex <= field.fieldIndex) continue;
             const std::optional<eir::Type> otherType = module->convertType(other->getType());
             if (!otherType.has_value()) {
-                module->reportUnsupported(access.sourceRange.start(), "the type of this member");
+                module->reportUnsupported(access.sourceRange.start(),
+                                          std::format("the member '{}' of type {}", other->name,
+                                                      other->getType().toString()));
                 failed = true;
                 return std::nullopt;
             }
@@ -4316,9 +4342,12 @@ bool ProcessTranslator::assignTo(const ast::Expression& target, const Value& val
         const auto& streaming = target.as<ast::StreamingConcatenationExpression>();
         const std::uint64_t width = streaming.getBitstreamWidth();
         if (!streaming.isFixedSize() || width == 0 || width > value.type.bitWidth()) {
-            module->reportUnsupported(target.sourceRange.start(),
-                                      "a streaming concatenation target of no fixed size, or "
-                                      "wider than its value");
+            module->reportUnsupported(
+                target.sourceRange.start(),
+                streaming.isFixedSize()
+                    ? std::format("a streaming concatenation target of {} bits from a value of {}",
+                                  width, value.type.bitWidth())
+                    : std::string("a streaming concatenation target of no fixed size"));
             failed = true;
             return false;
         }
@@ -4352,7 +4381,8 @@ bool ProcessTranslator::assignTo(const ast::Expression& target, const Value& val
             const std::optional<eir::Type> pieceType = module->convertType(*operand.operand->type);
             if (!pieceType.has_value() || pieceType->isReal()) {
                 module->reportUnsupported(operand.operand->sourceRange.start(),
-                                          "this streaming concatenation target");
+                                          std::format("a streaming concatenation target of type {}",
+                                                      operand.operand->type->toString()));
                 failed = true;
                 return false;
             }
@@ -4373,14 +4403,17 @@ bool ProcessTranslator::assignTo(const ast::Expression& target, const Value& val
         for (const ast::Expression* operand : concatenation.operands()) {
             const std::optional<eir::Type> pieceType = module->convertType(*operand->type);
             if (!pieceType.has_value()) {
-                module->reportUnsupported(operand->sourceRange.start(),
-                                          "this concatenation target type");
+                module->reportUnsupported(
+                    operand->sourceRange.start(),
+                    std::format("a concatenation target of type {}", operand->type->toString()));
                 failed = true;
                 return false;
             }
             if (pieceType->bitWidth() > offset) {
-                module->reportUnsupported(target.sourceRange.start(),
-                                          "a concatenation target wider than its value");
+                module->reportUnsupported(
+                    target.sourceRange.start(),
+                    std::format("a concatenation target wider than its value of {} bits",
+                                value.type.bitWidth()));
                 failed = true;
                 return false;
             }

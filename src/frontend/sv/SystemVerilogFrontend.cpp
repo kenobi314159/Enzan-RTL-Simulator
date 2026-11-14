@@ -812,7 +812,8 @@ std::optional<std::uint32_t> ModuleBuilder::addEventValue(const ast::Expression&
     const slang::SourceLocation location = expression.sourceRange.start();
     const std::optional<eir::Type> type = convertType(*expression.type);
     if (!type.has_value()) {
-        reportUnsupported(location, "an event control on an expression of this type");
+        reportUnsupported(location, std::format("an event control on an expression of type {}",
+                                                expression.type->toString()));
         return std::nullopt;
     }
     eir::Object object;
@@ -891,9 +892,8 @@ std::optional<std::uint32_t> ModuleBuilder::objectFor(const ast::ValueSymbol& sy
 
     const std::optional<eir::Type> type = convertType(symbol.getType());
     if (!type.has_value()) {
-        reportUnsupported(
-            symbol.location,
-            std::format("the type of '{}', which is not a packed integral type", symbol.name));
+        reportUnsupported(symbol.location, std::format("'{}', of type {},", symbol.name,
+                                                       symbol.getType().toString()));
         return std::nullopt;
     }
 
@@ -1519,13 +1519,16 @@ bool ModuleBuilder::collectDeclarations() {
             continue;
         }
         if (portSymbol->kind != slang::ast::SymbolKind::Port) {
-            reportUnsupported(portSymbol->location, "multi-ports");
+            reportUnsupported(portSymbol->location,
+                              std::format("the multi-port '{}'", portSymbol->name));
             continue;
         }
 
         const auto& port = portSymbol->as<ast::PortSymbol>();
         if (port.internalSymbol == nullptr) {
-            reportUnsupported(port.location, "a port with no internal connection");
+            reportUnsupported(
+                port.location,
+                std::format("the port '{}', which connects to nothing inside", port.name));
             continue;
         }
 
@@ -2118,7 +2121,10 @@ ModuleBuilder::materialiseConnection(const ast::InstanceSymbol& instance,
     const std::optional<eir::Type> type =
         convertType(port.internalSymbol->as<ast::ValueSymbol>().getType());
     if (!type.has_value()) {
-        reportUnsupported(port.location, "the type of this port");
+        reportUnsupported(
+            port.location,
+            std::format("the port '{}' of type {}", port.name,
+                        port.internalSymbol->as<ast::ValueSymbol>().getType().toString()));
         return std::nullopt;
     }
 
@@ -2133,7 +2139,9 @@ ModuleBuilder::materialiseConnection(const ast::InstanceSymbol& instance,
         const std::optional<eir::NetKind> netKind =
             convertNetKind(port.internalSymbol->as<ast::NetSymbol>().netType.netKind);
         if (!netKind.has_value()) {
-            reportUnsupported(port.location, "the net type of this port");
+            reportUnsupported(port.location,
+                              std::format("the port '{}' of net type {}", port.name,
+                                          port.internalSymbol->as<ast::NetSymbol>().netType.name));
             return std::nullopt;
         }
         object.kind = eir::ObjectKind::Net;
