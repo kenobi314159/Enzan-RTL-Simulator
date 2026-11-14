@@ -1043,6 +1043,19 @@ TEST_F(FrontendTest, ASlangWarningDoesNotStopAnalysis) {
     EXPECT_TRUE(reportedCode(DiagCode::SystemVerilogWarning)) << "a width truncation warns";
 }
 
+TEST_F(FrontendTest, RefusesAStreamWithAWithClause) {
+    EXPECT_EQ(analyse(R"(
+        module m;
+            logic [7:0] bytes [0:3];
+            logic [15:0] w;
+            initial w = {>>{bytes with [0+:2]}};
+        endmodule
+    )"),
+              nullptr);
+    EXPECT_TRUE(reportedCode(DiagCode::UnsupportedConstruct));
+    EXPECT_TRUE(reported("a streaming concatenation with a `with` clause"));
+}
+
 TEST_F(FrontendTest, DoesNotWarnOfDeliberateCode) {
     // Each of these is written on purpose and means what it says, and other tools take them
     // silently: unnamed and standalone generate blocks, ports connected to nothing, a parameter
