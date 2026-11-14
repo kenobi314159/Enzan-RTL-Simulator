@@ -27,6 +27,7 @@ struct TimeScaleValue;
 
 namespace slang::ast {
 enum class EdgeKind;
+class AssertionExpr;
 class Symbol;
 class CallExpression;
 class Scope;
@@ -172,6 +173,12 @@ public:
     /// nothing, having reported why, when `expression` cannot be translated.
     virtual std::optional<std::uint32_t>
     addEventValue(const slang::ast::Expression& expression) = 0;
+
+    /// The object holding the sampled value of `objectIndex` (IEEE 1800 section 16.5.1), the one
+    /// it had as the time slot began, which a concurrent assertion reads: a copy the module adds
+    /// the first time it is asked for, kept by a process that copies the object at the end of each
+    /// slot it changed in. Nothing, having reported why, when no copy can be made.
+    virtual std::optional<std::uint32_t> sampledCopyOf(std::uint32_t objectIndex) = 0;
 };
 
 /// A kind of slang's syntax tree, `ElementSelect`, in the words a reader would use for it,
@@ -230,6 +237,18 @@ public:
     /// false having reported why.
     bool translatePrimitive(const slang::ast::PrimitiveInstanceSymbol& instance,
                             std::optional<std::uint32_t> held);
+
+    /// Translates a concurrent assertion, `assert`, `assume` or `cover property`, declared in
+    /// `scope`, as a process that checks each attempt of it at the ticks of its clock and resumes
+    /// in the Reactive region (IEEE 1800 section 16.14). The subset translated is a property of
+    /// booleans joined by fixed delays and consecutive repetitions, with `|->` or `|=>` at its
+    /// top, `disable iff`, and the sampled value functions; anything else is refused by name.
+    /// Returns false having reported why.
+    bool translateConcurrentAssertion(const slang::ast::Statement& statement,
+                                      const slang::ast::Scope& scope);
+
+    /// Copies `source` into `target` whole, as a continuous assignment would.
+    bool translateCopyInto(std::uint32_t target, std::uint32_t source);
 
     /// Translates `expression` and stores its value into `objectIndex`.
     ///
@@ -707,6 +726,50 @@ private:
     };
 
     std::vector<NamedBlock> namedBlocks;
+
+    // --- concurrent assertions (Assertions.cpp) ------------------------------
+
+    /// One boolean of a property: an expression checked `offset` ticks after an attempt starts,
+    /// whose failure in the antecedent of an implication makes the attempt succeed vacuously and
+    /// anywhere else fails it.
+    struct PropertyTerm {
+        std::uint32_t offset = 0;
+        const slang::ast::Expression* expression = nullptr;
+        bool antecedent = false;
+    };
+
+    /// Appends the booleans of the sequence `sequence`, starting `offset` ticks into an attempt,
+    /// and returns the offset of its last; nothing, having reported why, for a sequence outside
+    /// the subset.
+    std::optional<std::uint32_t> flattenSequence(const slang::ast::AssertionExpr& sequence,
+                                                 std::uint32_t offset, bool antecedent,
+                                                 std::vector<PropertyTerm>& terms);
+
+    /// A one-bit two-state register that is 1 where `value` is true and 0 where it is false or
+    /// unknown, as an assertion reads a boolean (IEEE 1800 section 16.6).
+    std::uint32_t holds(const Value& value);
+
+    /// The sampled value function `call`, `$rose` and the rest (IEEE 1800 section 16.9.3), from
+    /// the history the assertion keeps of its operand.
+    std::optional<Value> translateSampledFunction(const slang::ast::CallExpression& call,
+                                                  std::string_view name);
+
+    /// What a sampled value function keeps of its operand: its values at the last `depth` ticks,
+    /// the most recent first.
+    struct SampledHistory {
+        const slang::ast::Expression* operand = nullptr;
+        eir::Type type;
+        std::vector<std::uint32_t> past;
+    };
+
+    /// While a concurrent assertion's booleans are translated: their reads are of the objects'
+    /// sampled copies, and a sampled value function keeps its history here.
+    bool sampling = false;
+    std::vector<SampledHistory>* histories = nullptr;
+
+    /// `objectIndex`, or its sampled copy while `sampling`.
+    std::optional<std::uint32_t> readable(std::uint32_t objectIndex);
+
     eir::Process process;
     std::uint32_t current = 0;
 

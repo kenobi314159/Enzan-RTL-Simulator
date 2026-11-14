@@ -106,6 +106,11 @@ enzan_add_golden_test(operators)
 # 5.020 neither streams an unpacked array nor left-justifies a stream in a wider target, so the
 # case is held to slang's folding of the same rules instead.
 enzan_add_golden_test(streaming NO_DIFFERENTIAL)
+
+# Concurrent assertions. Icarus Verilog has none; Verilator 5.020 agrees on every one without a
+# `##` or a repetition, which it does not take, but runs the action blocks before the slot's
+# non-blocking assignments, where IEEE 1800 section 4.4.2.6 has them in the Reactive region.
+enzan_add_golden_test(concurrent_assertions NO_DIFFERENTIAL)
 enzan_add_golden_test(control_flow)
 
 # Time zero is where two correct simulators differ most: Icarus Verilog does not evaluate

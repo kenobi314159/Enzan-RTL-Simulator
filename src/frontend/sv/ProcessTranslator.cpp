@@ -1384,6 +1384,15 @@ bool ProcessTranslator::translateStatement(const ast::Statement& statement) {
 
     case ast::StatementKind::ImmediateAssertion: return translateImmediateAssertion(statement);
 
+    // One in a procedure takes its clock from the procedure's event control and is started
+    // where the procedure reaches it (IEEE 1800 section 16.14.6); only one declared in the
+    // module is translated.
+    case ast::StatementKind::ConcurrentAssertion:
+        module->reportUnsupported(statement.sourceRange.start(),
+                                  "a concurrent assertion inside a procedure");
+        failed = true;
+        return false;
+
     case ast::StatementKind::ProceduralAssign: return translateProceduralAssign(statement);
 
     case ast::StatementKind::ProceduralDeassign: return translateProceduralDeassign(statement);
@@ -2343,10 +2352,15 @@ ProcessTranslator::translateExpression(const ast::Expression& expression) {
         }
 
         const eir::Type objectType = module->definition().objects[*objectIndex].type;
-        noteRead(*objectIndex);
+        const std::optional<std::uint32_t> read = readable(*objectIndex);
+        if (!read.has_value()) {
+            failed = true;
+            return std::nullopt;
+        }
+        noteRead(*read);
         const std::uint32_t result = newRegister(objectType);
         emit(eir::Instruction::make(eir::Opcode::ReadObject, eir::Operand::reg(result),
-                                    eir::Operand::object(*objectIndex)));
+                                    eir::Operand::object(*read)));
         return Value{.reg = result, .type = objectType};
     }
 
@@ -3602,23 +3616,33 @@ std::optional<ProcessTranslator::Value> ProcessTranslator::readLocation(const Lo
         return Value{.reg = result, .type = type};
     }
 
+    // The object read, or its sampled copy while an assertion's booleans are translated.
+    std::uint32_t read = location.objectIndex;
+    if (location.inObject()) {
+        const std::optional<std::uint32_t> readableObject = readable(location.objectIndex);
+        if (!readableObject.has_value()) {
+            failed = true;
+            return std::nullopt;
+        }
+        read = *readableObject;
+    }
+
     if (location.whole) {
         if (!location.inObject())
             return location.rootIsLocal ? copyOf(location.root) : location.root;
-        noteRead(location.objectIndex);
+        noteRead(read);
         const std::uint32_t result = newRegister(type);
         emit(eir::Instruction::make(eir::Opcode::ReadObject, eir::Operand::reg(result),
-                                    eir::Operand::object(location.objectIndex)));
+                                    eir::Operand::object(read)));
         return Value{.reg = result, .type = type};
     }
 
     const Value low = lowOf(location);
     const std::uint32_t result = newRegister(type);
     if (location.inObject()) {
-        noteRead(location.objectIndex);
+        noteRead(read);
         emit(eir::Instruction::make(eir::Opcode::ReadObjectPart, eir::Operand::reg(result),
-                                    eir::Operand::object(location.objectIndex),
-                                    eir::Operand::reg(low.reg)));
+                                    eir::Operand::object(read), eir::Operand::reg(low.reg)));
     } else {
         emit(eir::Instruction::make(eir::Opcode::PartSelect, eir::Operand::reg(result),
                                     eir::Operand::reg(location.root.reg),
@@ -3857,6 +3881,9 @@ ProcessTranslator::translateCall(const ast::Expression& expression) {
 
     if (call.isSystemCall()) {
         const std::string_view name = call.getSubroutineName();
+        if (name == "$past" || name == "$rose" || name == "$fell" || name == "$stable"
+            || name == "$changed" || name == "$sampled")
+            return translateSampledFunction(call, name);
         if (name == "$realtime") {
             // The run's ticks counted in the calling scope's unit, a fraction of it included.
             const eir::Type ticksType = eir::Type::bits(64, false, false);

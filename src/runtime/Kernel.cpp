@@ -335,9 +335,14 @@ void Kernel::initialize() {
         const codegen::CompiledBody& body =
             designImage->compiledDesign().body(processes[processIndex].bodyIndex);
         if (!body.startsAtTimeZero || body.connectsPort) continue;
-        // A postponed process runs at initialization after the others and before the first
-        // delta cycle (IEEE 1076 section 14.7.5.2), which Inactive is.
-        if (body.postponed) {
+        // A VHDL postponed process runs at initialization after the others and before the first
+        // delta cycle (IEEE 1076 section 14.7.5.2), which Inactive is. SystemVerilog has no
+        // initialization, and one of its own starts where it resumes, at the end of the slot.
+        const elab::Instance& instance =
+            designImage->elaboratedDesign().instances()[processes[processIndex].instanceIndex];
+        if (body.postponed
+            && designImage->analysedDesign().module(instance.definitionIndex).language
+                   == eir::Language::Vhdl) {
             processes[processIndex].queued = true;
             scheduler.schedule(Region::Inactive, processIndex);
             continue;
@@ -682,9 +687,10 @@ void Kernel::runConnections() {
 }
 
 Region Kernel::resumeRegion(std::uint32_t processIndex) const {
-    return designImage->compiledDesign().body(processes[processIndex].bodyIndex).postponed
-               ? Region::Postponed
-               : Region::Active;
+    const codegen::CompiledBody& body =
+        designImage->compiledDesign().body(processes[processIndex].bodyIndex);
+    if (body.postponed) return Region::Postponed;
+    return body.reactive ? Region::Reactive : Region::Active;
 }
 
 void Kernel::writeSignal(std::uint32_t signalIndex, eir::ConstBitRef value) {
