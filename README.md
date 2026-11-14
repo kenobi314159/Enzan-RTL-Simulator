@@ -48,15 +48,21 @@ enzan run --gui --top tb design.sv testbench.sv
 
 | | |
 |---|---|
+| Verilog sources | yes, read as SystemVerilog; a name that SystemVerilog made a keyword has to be renamed |
 | SystemVerilog modules, parameters, generate, packages, interfaces | yes |
 | Processes, continuous assignments, tasks and functions, `#` delays and event controls | yes |
 | Packed and unpacked arrays, structs, enums, four-state values with X and Z | yes |
 | Nets with several drivers, resolved by their type | yes |
 | `` `timescale `` and `timeunit` | yes, each module's delays and `$time` in its own unit |
 | `real` variables | yes; a `real` port not yet, reported by name |
+| Streaming concatenations, `{<<{...}}` and `{>>{...}}` | yes |
+| Immediate assertions | yes |
+| Concurrent assertions (SVA) | of fixed delays and repetitions under `\|->` or `\|=>`, with `disable iff` and `$past`, `$rose` and the rest |
 | `string` variables and ports | not yet, reported by name |
+| Classes, randomization, coverage, dynamic arrays, queues, DPI | not yet, reported by name |
 | VHDL entities, architectures, processes, generics, generate, records, arrays | yes |
 | `std_logic_1164`, `numeric_std`, `math_real`, `std.textio` and files | yes |
+| `'path_name` and `'instance_name` | yes, in reports and writes |
 | VHDL access types beyond `line`, protected types, configurations | not yet, reported by name |
 | A design mixing SystemVerilog and VHDL, either instantiating the other | yes |
 | AMD Xilinx's simulation models, from your own Vivado | yes |
@@ -67,7 +73,8 @@ enzan run --gui --top tb design.sv testbench.sv
 | cocotb testbenches, of a SystemVerilog or a VHDL toplevel | yes |
 
 Anything unsupported is reported with a source location and the construct named, never simulated
-wrongly.
+wrongly. [Language support](docs/language-support.md) lists what works and what does not, language
+by language.
 
 ## Documentation
 
@@ -79,6 +86,8 @@ Using Enzan:
 - [Signal lists](docs/signal-lists.md): the file the wave window's rows are saved to.
 - [Libraries, file lists and make](docs/libraries.md): analysis libraries, `.f` files, and
   building a design with `make`.
+- [Language support](docs/language-support.md): what of SystemVerilog, Verilog and VHDL works, and
+  what does not yet.
 - [Vendors' simulation libraries](docs/vendor-libraries.md): AMD Xilinx's and Altera's models, read
   from your own installation.
 - [Mixed-language designs](docs/mixed-language.md): what crosses between SystemVerilog and VHDL,

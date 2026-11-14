@@ -308,6 +308,7 @@ void writeProcess(Writer& out, NameTable& names, const Process& process) {
     out.u8(static_cast<std::uint8_t>(process.strength.zero));
     out.u8(static_cast<std::uint8_t>(process.strength.one));
     out.boolean(process.postponed);
+    out.boolean(process.reactive);
     out.boolean(process.connectsPort);
     writeBody(out, names, process);
 
@@ -346,6 +347,7 @@ void writeModule(Writer& out, NameTable& names, const ModuleDefinition& definiti
     out.text(definition.sourceName);
     out.boolean(definition.isPackage);
     out.u8(static_cast<std::uint8_t>(definition.language));
+    out.text(definition.architecture);
     writeLocation(out, names, definition.location);
     writeLocation(out, names, definition.firstTimingCheck);
 
@@ -642,6 +644,7 @@ Process readProcess(Reader& in, BufferResolver& buffers) {
     process.strength.zero = static_cast<Strength>(in.u8());
     process.strength.one = static_cast<Strength>(in.u8());
     process.postponed = in.boolean();
+    process.reactive = in.boolean();
     process.connectsPort = in.boolean();
     readBody(in, buffers, process);
 
@@ -685,6 +688,7 @@ ModuleDefinition readModule(Reader& in, BufferResolver& buffers) {
     definition.sourceName = in.text();
     definition.isPackage = in.boolean();
     definition.language = static_cast<Language>(in.u8());
+    definition.architecture = in.text();
     definition.location = readLocation(in, buffers);
     definition.firstTimingCheck = readLocation(in, buffers);
 

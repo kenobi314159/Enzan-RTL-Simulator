@@ -41,11 +41,12 @@ configure_file(InstallationInfo.h.in "${_enzan_installation_info}" @ONLY)
 
 enzan_add_component(
   common
-  SOURCES Assert.cpp Diagnostics.cpp Installation.cpp SourceManager.cpp Version.cpp
+  SOURCES Assert.cpp Diagnostics.cpp Installation.cpp Names.cpp SourceManager.cpp Version.cpp
   HEADERS Assert.h
           DiagnosticCodes.def
           Diagnostics.h
           Installation.h
+          Names.h
           SourceLocation.h
           SourceManager.h
           Version.h

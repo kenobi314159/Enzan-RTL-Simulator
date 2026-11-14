@@ -92,6 +92,13 @@ public:
     /// The definition being built, for the types of its objects.
     [[nodiscard]] virtual const eir::ModuleDefinition& definition() const = 0;
 
+    /// Where in this definition `declaration` is declared, as `'path_name` writes it after the
+    /// instance: `g(0):b:` inside a generate statement and a block, and nothing more in the entity
+    /// and the architecture. A process, a block or an iteration of a generate statement is the
+    /// region it opens, so its path ends with its own label: `g(0):b:p:`. Nothing when it is
+    /// declared outside this definition's regions, in a package or a subprogram.
+    [[nodiscard]] virtual std::optional<std::string> regionOf(tree_t declaration) const = 0;
+
     /// The unit EIR's delays count, as a power of ten of a second.
     [[nodiscard]] virtual std::int8_t timeUnitExponent() const = 0;
 
@@ -635,6 +642,12 @@ private:
     /// way almost always, and it needs no string values at run time.
     bool messageParts(tree_t message, std::string& format,
                       std::vector<eir::SysTaskArgument>& arguments);
+
+    /// The `'path_name`, or with `instanceName` the `'instance_name`, of what `attribute`'s prefix
+    /// names, appended to a message as a string the kernel makes: the instance's path and after
+    /// it where in the instance it is declared (IEEE 1076 section 16.2.5).
+    bool pathName(tree_t attribute, bool instanceName, std::string& format,
+                  std::vector<eir::SysTaskArgument>& arguments);
 
     /// `to_string(v)` of `expression`, a vector of an enumeration of characters: a string of the
     /// characters its elements are.

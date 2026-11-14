@@ -5,6 +5,7 @@
 
 #include "common/Assert.h"
 #include "common/Diagnostics.h"
+#include "common/Names.h"
 #include "common/SourceManager.h"
 #include "common/Version.h"
 #include "eir/BitOps.h"
@@ -31,14 +32,6 @@ namespace {
 /// The one context the routines act on. There is at most one per process, for the reason there
 /// is one session per process; see the class comment.
 PliContext* currentContext = nullptr;
-
-/// Whether two names are one in any case, as VHDL compares them.
-bool equalsIgnoringCase(std::string_view left, std::string_view right) {
-    return std::ranges::equal(left, right, [](char a, char b) {
-        return std::tolower(static_cast<unsigned char>(a))
-               == std::tolower(static_cast<unsigned char>(b));
-    });
-}
 
 /// Splits a hierarchical name at the dots that separate scopes, leaving the ones inside an
 /// index or an escaped identifier alone: `gen[0].inner.q` is three names, `\weird.name\` one.

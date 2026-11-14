@@ -51,6 +51,7 @@ assign8
 attr10
 attr11
 attr16
+attr21
 attr3
 attr4
 attr8
@@ -114,8 +115,10 @@ driver4
 driver5
 driver8
 elab1
+elab10
 elab11
 elab12
+elab13
 elab14
 elab15
 elab16
@@ -132,6 +135,7 @@ elab25
 elab27
 elab28
 elab29
+elab3
 elab30
 elab32
 elab37
@@ -144,6 +148,7 @@ elab5
 elab6
 elab7
 elab8
+elab9
 file10
 file15
 file2
@@ -264,6 +269,7 @@ issue432
 issue433
 issue434
 issue447
+issue45
 issue460
 issue467
 issue484

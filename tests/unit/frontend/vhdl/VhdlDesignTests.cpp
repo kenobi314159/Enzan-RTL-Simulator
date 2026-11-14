@@ -289,6 +289,106 @@ TEST_F(VhdlDesignTest, TheCounterSimulates) {
     EXPECT_EQ(simulation.value("/counter_tb/count", enzan::eir::Radix::Decimal), "10");
 }
 
+TEST_F(VhdlDesignTest, ATopNothingDeclaresIsReportedWithWhatIsDeclared) {
+    // A misspelt top translates nothing, so only the translation can say what the design has.
+    EXPECT_EQ(translate(Counter, "counter_bt"), nullptr);
+    const Diagnostic* refused = first(DiagCode::TopModuleNotFound);
+    ASSERT_NE(refused, nullptr) << transcript();
+    EXPECT_NE(refused->message.find("'counter_bt' was not found; the design contains: 'counter', "
+                                    "'counter_tb'"),
+              std::string::npos)
+        << refused->message;
+}
+
+TEST_F(VhdlDesignTest, APathNameIsItsInstancesOwn) {
+    // Both instances share one translation of `leaf`, so the path is the kernel's to make; what
+    // is inside the instance, the process's label and the variable, the translation's.
+    std::unique_ptr<enzan::eir::Design> design = translate(R"(
+entity leaf is
+end entity;
+
+architecture rtl of leaf is
+begin
+  p : process
+    variable v : integer;
+  begin
+    report v'path_name & " " & v'instance_name;
+    wait;
+  end process;
+end architecture;
+
+entity tb is end entity;
+
+architecture test of tb is
+begin
+  a : entity work.leaf;
+  g : for k in 1 to 1 generate
+    b : entity work.leaf;
+  end generate;
+end architecture;
+)",
+                                                           "tb");
+    ASSERT_NE(design, nullptr) << transcript();
+    EXPECT_EQ(design->findSpecialisations("leaf").size(), 1U);
+
+    Simulation simulation(std::move(*design), "tb");
+    ASSERT_TRUE(simulation.ready()) << simulation.messages().front();
+    simulation.run();
+    std::vector<std::string> reported = simulation.messages();
+    std::ranges::sort(reported);
+    EXPECT_EQ(reported,
+              std::vector<std::string>({":tb:a:p:v :tb(test):a@leaf(rtl):p:v",
+                                        ":tb:g(1):b:p:v :tb(test):g(1):b@leaf(rtl):p:v"}));
+}
+
+TEST_F(VhdlDesignTest, APathNameIsRefusedWhereItIsNotShown) {
+    // Only a message or a write shows one; elsewhere it would be a string of each instance's
+    // length, which one translation cannot hold.
+    EXPECT_EQ(translate(R"(
+entity tb is end entity;
+
+architecture test of tb is
+  signal s : bit;
+begin
+  process
+  begin
+    assert s'path_name = ":tb:s";
+    wait;
+  end process;
+end architecture;
+)"),
+              nullptr);
+    const Diagnostic* refused = first(DiagCode::VhdlUnsupported);
+    ASSERT_NE(refused, nullptr) << transcript();
+    EXPECT_NE(refused->message.find("'path_name other than in a report"), std::string::npos)
+        << refused->message;
+
+    // An instance's label, which GHDL, the reference, does not name.
+    consumer.received.clear();
+    EXPECT_EQ(translate(R"(
+entity leaf is end entity;
+architecture rtl of leaf is begin end architecture;
+
+entity tb is end entity;
+
+architecture test of tb is
+begin
+  u : entity work.leaf;
+  process
+  begin
+    report u'instance_name;
+    wait;
+  end process;
+end architecture;
+)",
+                        "tb"),
+              nullptr);
+    refused = first(DiagCode::VhdlUnsupported);
+    ASSERT_NE(refused, nullptr) << transcript();
+    EXPECT_NE(refused->message.find("'instance_name of an instance's label"), std::string::npos)
+        << refused->message;
+}
+
 TEST_F(VhdlDesignTest, SequentialStatementsMeanWhatVhdlSays) {
     // Loops with `next` and `exit`, `mod` and `rem` of negative values, short-circuit operators,
     // a state machine, and waits for time and for conditions.
@@ -4341,6 +4441,7 @@ end architecture;
 )");
     EXPECT_EQ(design, nullptr);
     EXPECT_NE(first(DiagCode::VhdlProcessNeverWaits), nullptr) << transcript();
+    EXPECT_EQ(first(DiagCode::VhdlWarning), nullptr) << "NVC's own warning of it says it twice";
 }
 
 } // namespace

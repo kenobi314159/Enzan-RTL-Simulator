@@ -12,6 +12,7 @@
 #include <format>
 #include <map>
 #include <optional>
+#include <ranges>
 #include <set>
 #include <string>
 #include <utility>
@@ -2176,6 +2177,9 @@ bool BodyTranslator::messageParts(tree_t message, std::string& format,
     }
 
     case T_ATTR_REF: {
+        if (tree_subkind(message) == ATTR_PATH_NAME || tree_subkind(message) == ATTR_INSTANCE_NAME)
+            return pathName(message, tree_subkind(message) == ATTR_INSTANCE_NAME, format,
+                            arguments);
         if (tree_subkind(message) != ATTR_IMAGE || tree_params(message) != 1) break;
         tree_t operand = tree_value(tree_param(message, 0));
         if (type_is_enum(tree_type(operand))) return enumerationImage(operand, format, arguments);
@@ -2207,6 +2211,65 @@ bool BodyTranslator::messageParts(tree_t message, std::string& format,
     }
     return fail(message, "a message built other than from strings, characters and the 'image of "
                          "integers and times");
+}
+
+bool BodyTranslator::pathName(tree_t attribute, bool instanceName, std::string& format,
+                              std::vector<eir::SysTaskArgument>& arguments) {
+    const std::string_view what = instanceName ? "'instance_name" : "'path_name";
+    tree_t prefix = tree_name(attribute);
+    tree_t named = tree_kind(prefix) == T_REF && tree_has_ref(prefix) ? tree_ref(prefix) : nullptr;
+    if (named == nullptr) return fail(attribute, std::format("the {} of this", what));
+
+    // Where the prefix is declared: in this process, after its label, or in a region of the
+    // definition, which a label of one is itself.
+    const bool inProcess = isProcess && tree_kind(source) == T_PROCESS;
+    const auto declaredHere = [&] {
+        for (unsigned index = 0; index < tree_decls(source); ++index) {
+            if (tree_decl(source, index) == named) return true;
+        }
+        return false;
+    };
+    std::optional<std::string> where;
+    bool isRegion = false;
+    if (inProcess && (named == source || declaredHere())) {
+        where = owner.regionOf(source);
+        isRegion = named == source;
+    } else {
+        where = owner.regionOf(named);
+        switch (tree_kind(named)) {
+        case T_ENTITY:
+        case T_ARCH:
+        case T_BLOCK:
+        case T_FOR_GENERATE:
+        case T_IF_GENERATE:
+        case T_COND_STMT:
+        case T_PROCESS: isRegion = true; break;
+        default: break;
+        }
+    }
+    if (!where) {
+        // GHDL, the reference, cannot name an instance's label.
+        if (tree_kind(named) == T_INSTANCE)
+            return fail(attribute, std::format("the {} of an instance's label", what));
+        return fail(attribute,
+                    std::format("the {} of something a package or a subprogram declares", what));
+    }
+    std::string tail = std::move(*where);
+    if (!isRegion) tail += simpleName(tree_ident(named));
+
+    if (!messageScratch) messageScratch = scratchMark();
+    eir::SysTaskCall call;
+    call.kind = eir::SysTaskKind::PathName;
+    call.location = owner.locate(attribute);
+    call.formatIndex = addString(std::move(tail));
+    const Value form = constant(instanceName ? 1 : 0, eir::Type::bits(1, false, false), nullptr);
+    call.arguments.push_back(
+        eir::SysTaskArgument{.value = eir::Operand::reg(form.reg), .type = form.type});
+    const Value made = systemFunction(std::move(call), eir::Type::bits(64, false, false));
+    format += "%s";
+    arguments.push_back(
+        eir::SysTaskArgument{.value = eir::Operand::reg(made.reg), .type = eir::Type::string()});
+    return true;
 }
 
 bool BodyTranslator::procedureCall(tree_t statement) {
@@ -2758,8 +2821,15 @@ std::optional<BodyTranslator::Value> BodyTranslator::expression(tree_t expressio
     case T_CONV_FUNC: {
         tree_t declaration = tree_has_ref(expression) ? tree_ref(expression) : nullptr;
         tree_t body = declaration == nullptr ? nullptr : subprogramBody(declaration);
-        if (body == nullptr || tree_ports(declaration) != 1) {
+        if (declaration == nullptr) {
             fail(expression, "this conversion function");
+            return std::nullopt;
+        }
+        if (body == nullptr || tree_ports(declaration) != 1) {
+            fail(expression,
+                 std::format("the conversion function {}, {}", simpleName(tree_ident(declaration)),
+                             body == nullptr ? "whose body has not been analysed"
+                                             : "which takes more than one parameter"));
             return std::nullopt;
         }
         return inlineCall(expression, declaration, body, {tree_value(expression)});
@@ -2979,6 +3049,14 @@ std::optional<BodyTranslator::Value> BodyTranslator::attribute(tree_t expression
     const auto kind = static_cast<attr_kind_t>(tree_subkind(expression));
     type_t resultType = tree_type(expression);
     const std::optional<eir::Type> storage = scalarStorage(resultType);
+
+    // A path differs between the instances one translation serves, and is the kernel's to make
+    // where a message or a `write` shows it.
+    if (kind == ATTR_PATH_NAME || kind == ATTR_INSTANCE_NAME) {
+        fail(expression, std::format("{} other than in a report, an assertion's message or a write",
+                                     kind == ATTR_PATH_NAME ? "'path_name" : "'instance_name"));
+        return std::nullopt;
+    }
 
     // Where a line ends only the runtime holding it knows; where it starts folds.
     if (isDereferencedLine(tree_name(expression))

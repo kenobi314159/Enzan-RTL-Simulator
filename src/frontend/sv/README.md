@@ -5,7 +5,10 @@ Turns SystemVerilog source text into EIR, and nothing else.
 ## Responsibility
 
 - Drive [slang](https://sv-lang.com/) over the input files and translate its diagnostics
-  into Enzan's diagnostic engine.
+  into Enzan's diagnostic engine. The warnings are slang's default set, less its warning of a
+  parameter in a specify block, which every vendor's cell library has, and with its warnings of
+  truncation, of a constant's value changed, of signedness mixed, of a result ignored and of a
+  primitive leaving edges unspecified.
 - Walk slang's elaborated AST and emit one EIR module definition per distinct instance
   body.
 - Translate procedural blocks, continuous assignments and expressions into EIR-B.
@@ -121,10 +124,16 @@ Reported as `ENZ1004` with the construct named, rather than mistranslated:
   subroutine body: another process's block, the block a subroutine is called from, a task.
   A `disable` of a block it is in goes on after the block, with the next iteration when the
   block is a loop's body;
+- a streaming concatenation of something of no fixed size, or with a `with` clause; of fixed-size
+  operands, `>>` and `<<` with any slice work, as expressions and as targets;
 - `foreach` over a dimension of no fixed size, which needs the dynamic arrays and queues that
   are not here; over fixed dimensions it works, and `break` leaves the whole statement;
-- deferred assertions (`assert #0`, `assert final`) and concurrent ones (`assert property`),
-  which are SVA; immediate assertions work;
+- deferred assertions (`assert #0`, `assert final`); immediate assertions work, and so do
+  concurrent ones declared in a module, `assert`, `assume` and `cover property`, of booleans joined
+  by fixed delays, `##2`, and consecutive repetitions, `[*3]`, under one `|->` or `|=>`, with
+  `disable iff`, a default clocking block and `$past`, `$rose`, `$fell`, `$stable`, `$changed` and
+  `$sampled` (`Assertions.cpp`). A range of delays, `##[1:3]`, any other repetition, any other
+  property operator, and a concurrent assertion inside a procedure are refused;
 - every system function but `$time`, `$signed`, `$unsigned`, `$bits`, `$clog2`, `$isunknown`,
   `$countones`, `$onehot`, `$onehot0`, `$random`, `$urandom`, `$urandom_range`, `$fopen` and
   `$fgetc`, and those slang folds to a constant. Files are written, with `$fdisplay`, `$fwrite`,

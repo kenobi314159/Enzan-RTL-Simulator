@@ -164,9 +164,9 @@ Analysis & Synthesis 2 minutes and 744 MB, and the EDA Netlist Writer's function
   the netlist needs no Memory Initialization File, and none of the `$fopen` and `$fgetc` work.
 - **The device-wide controls are `tri1` nets nothing drives**, `devclrn`, `devpor` and `devoe`,
   into inputs the atoms declare `tri1` too; Icarus says each such input "is coerced to inout".
-- **Every unused output is connected to nothing explicitly**, `.cout()`, and slang warns of each
-  (ENZ1002): 29,552 warnings, 26,431 of them `cout`. Enzan itself no longer reports an output left
-  open; slang's own warning still does.
+- **Every unused output is connected to nothing explicitly**, `.cout()`: 29,552 of slang's warnings
+  when the spike was run, 26,431 of them `cout`. Enzan no longer reports an output connected to
+  nothing.
 - **NEORV32's TRNG becomes latches** that Quartus builds from combinational loops, as Vivado's
   netlist has its ring oscillators; the program does not start the TRNG within the window.
 

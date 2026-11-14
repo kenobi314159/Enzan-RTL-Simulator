@@ -3,6 +3,7 @@
 #include "frontend/sv/SystemVerilogFrontend.h"
 
 #include "common/Diagnostics.h"
+#include "common/Names.h"
 #include "common/SourceManager.h"
 #include "eir/BitOps.h"
 #include "eir/Module.h"
@@ -51,13 +52,13 @@
 
 #include <algorithm>
 #include <bit>
-#include <cctype>
 #include <format>
 #include <limits>
 #include <map>
 #include <optional>
 #include <set>
 #include <span>
+#include <string>
 #include <string_view>
 #include <utility>
 #include <vector>
@@ -411,6 +412,8 @@ public:
 
     std::optional<std::uint32_t> addEventValue(const ast::Expression& expression) override;
 
+    std::optional<std::uint32_t> sampledCopyOf(std::uint32_t objectIndex) override;
+
 private:
     /// Walks a scope, collecting declarations and remembering what to translate later.
     bool collectScope(const ast::Scope& scope, const std::string& prefix);
@@ -521,6 +524,9 @@ private:
     eir::ModuleDefinition definitionValue;
 
     std::map<const ast::ValueSymbol*, std::uint32_t> objectBySymbol;
+
+    /// The copy of each object a concurrent assertion reads sampled, by the object's index.
+    std::map<std::uint32_t, std::uint32_t> sampledCopies;
     std::map<std::string, std::uint32_t, std::less<>> portIndexByName;
 
     std::vector<std::pair<std::string, const ast::ProceduralBlockSymbol*>> proceduralBlocks;
@@ -806,7 +812,8 @@ std::optional<std::uint32_t> ModuleBuilder::addEventValue(const ast::Expression&
     const slang::SourceLocation location = expression.sourceRange.start();
     const std::optional<eir::Type> type = convertType(*expression.type);
     if (!type.has_value()) {
-        reportUnsupported(location, "an event control on an expression of this type");
+        reportUnsupported(location, std::format("an event control on an expression of type {}",
+                                                expression.type->toString()));
         return std::nullopt;
     }
     eir::Object object;
@@ -827,6 +834,30 @@ std::optional<std::uint32_t> ModuleBuilder::addEventValue(const ast::Expression&
     // it comes before that process and has the value before the process first waits on it.
     definitionValue.processes.push_back(translator.take());
     return objectIndex;
+}
+
+std::optional<std::uint32_t> ModuleBuilder::sampledCopyOf(std::uint32_t objectIndex) {
+    if (const auto found = sampledCopies.find(objectIndex); found != sampledCopies.end())
+        return found->second;
+    const eir::Object& source = definitionValue.objects[objectIndex];
+    eir::Object object;
+    object.name = uniqueObjectName("sampled$" + source.name);
+    object.type = source.type;
+    object.kind = eir::ObjectKind::Variable;
+    object.location = source.location;
+    const SourceLocation location = source.location;
+    const std::uint32_t copy = definitionValue.addObject(std::move(object));
+
+    // At the end of each time slot the object changed in, which leaves the copy holding the
+    // value the next slot begins with until the object next changes.
+    ProcessTranslator translator(*this, eir::ProcessKind::ContinuousAssign,
+                                 "sampled@" + definitionValue.objects[objectIndex].name, location);
+    if (!translator.translateCopyInto(copy, objectIndex)) return std::nullopt;
+    eir::Process process = translator.take();
+    process.postponed = true;
+    definitionValue.processes.push_back(std::move(process));
+    sampledCopies.emplace(objectIndex, copy);
+    return copy;
 }
 
 const ast::PackageSymbol* ModuleBuilder::packageOf(const ast::ValueSymbol& symbol) {
@@ -861,9 +892,8 @@ std::optional<std::uint32_t> ModuleBuilder::objectFor(const ast::ValueSymbol& sy
 
     const std::optional<eir::Type> type = convertType(symbol.getType());
     if (!type.has_value()) {
-        reportUnsupported(
-            symbol.location,
-            std::format("the type of '{}', which is not a packed integral type", symbol.name));
+        reportUnsupported(symbol.location, std::format("'{}', of type {},", symbol.name,
+                                                       symbol.getType().toString()));
         return std::nullopt;
     }
 
@@ -1489,13 +1519,16 @@ bool ModuleBuilder::collectDeclarations() {
             continue;
         }
         if (portSymbol->kind != slang::ast::SymbolKind::Port) {
-            reportUnsupported(portSymbol->location, "multi-ports");
+            reportUnsupported(portSymbol->location,
+                              std::format("the multi-port '{}'", portSymbol->name));
             continue;
         }
 
         const auto& port = portSymbol->as<ast::PortSymbol>();
         if (port.internalSymbol == nullptr) {
-            reportUnsupported(port.location, "a port with no internal connection");
+            reportUnsupported(
+                port.location,
+                std::format("the port '{}', which connects to nothing inside", port.name));
             continue;
         }
 
@@ -1562,6 +1595,29 @@ bool ModuleBuilder::translateProcesses() {
         if (block->location) {
             name += ':';
             name += std::to_string(shared->slangSources.getLineNumber(block->location));
+        }
+
+        // A concurrent assertion the module declares is a process of its own that never ends,
+        // checking its property at each tick of its clock; a labelled one is in a block of its
+        // label's name.
+        const ast::Statement* asserted = &block->getBody();
+        if (asserted->kind == ast::StatementKind::Block)
+            asserted = &asserted->as<ast::BlockStatement>().body;
+        if (asserted->kind == ast::StatementKind::ConcurrentAssertion) {
+            std::string assertionName =
+                std::format("assert@{}", shared->slangSources.getFileName(block->location));
+            if (block->location)
+                assertionName +=
+                    ':' + std::to_string(shared->slangSources.getLineNumber(block->location));
+            ProcessTranslator translator(*this, eir::ProcessKind::Initial, std::move(assertionName),
+                                         location);
+            const ast::Scope* scope = block->getParentScope();
+            if (scope == nullptr || !translator.translateConcurrentAssertion(*asserted, *scope)) {
+                failed = true;
+                continue;
+            }
+            definitionValue.processes.push_back(translator.take());
+            continue;
         }
 
         ProcessTranslator translator(*this, kind, std::move(name), location);
@@ -2065,7 +2121,10 @@ ModuleBuilder::materialiseConnection(const ast::InstanceSymbol& instance,
     const std::optional<eir::Type> type =
         convertType(port.internalSymbol->as<ast::ValueSymbol>().getType());
     if (!type.has_value()) {
-        reportUnsupported(port.location, "the type of this port");
+        reportUnsupported(
+            port.location,
+            std::format("the port '{}' of type {}", port.name,
+                        port.internalSymbol->as<ast::ValueSymbol>().getType().toString()));
         return std::nullopt;
     }
 
@@ -2080,7 +2139,9 @@ ModuleBuilder::materialiseConnection(const ast::InstanceSymbol& instance,
         const std::optional<eir::NetKind> netKind =
             convertNetKind(port.internalSymbol->as<ast::NetSymbol>().netType.netKind);
         if (!netKind.has_value()) {
-            reportUnsupported(port.location, "the net type of this port");
+            reportUnsupported(port.location,
+                              std::format("the port '{}' of net type {}", port.name,
+                                          port.internalSymbol->as<ast::NetSymbol>().netType.name));
             return std::nullopt;
         }
         object.kind = eir::ObjectKind::Net;
@@ -2630,14 +2691,6 @@ void collectModules(const slang::syntax::SyntaxTree& tree, std::vector<DeclaredM
     }
 }
 
-/// Whether two names are one in any case.
-bool sameName(std::string_view left, std::string_view right) {
-    return std::ranges::equal(left, right, [](char a, char b) {
-        return std::tolower(static_cast<unsigned char>(a))
-               == std::tolower(static_cast<unsigned char>(b));
-    });
-}
-
 /// The one of `names` that is `wanted` exactly, or else the one that is in some case; nothing when
 /// there is none, or several in other cases.
 std::optional<std::string_view> nameMatching(std::span<const std::string_view> names,
@@ -2645,7 +2698,7 @@ std::optional<std::string_view> nameMatching(std::span<const std::string_view> n
     if (const auto exact = std::ranges::find(names, wanted); exact != names.end()) return *exact;
     std::optional<std::string_view> found;
     for (const std::string_view name : names) {
-        if (!sameName(name, wanted)) continue;
+        if (!equalsIgnoringCase(name, wanted)) continue;
         if (found) return std::nullopt;
         found = name;
     }
@@ -3106,7 +3159,18 @@ std::unique_ptr<eir::Design> analyse(const Options& options, SourceManager& sour
     // preserving that quality end to end is a genuine selling point rather than polish.
     // They are translated into Enzan's engine so that the transcript is uniform
     // regardless of which phase produced a message.
-    const slang::DiagnosticEngine slangEngine(slangSources);
+    //
+    // The warnings are slang's default set, as its own driver shows them, and a few more of its
+    // checks that point at a likely mistake. Its other checks are of style, or of code that is
+    // written on purpose and means what it says, which a design of other tools' writing has by
+    // the thousand: they would bury the warnings that matter. A parameter in a specify block is
+    // in slang's default set and in every vendor's cell library, and is simulated as a specparam.
+    slang::DiagnosticEngine slangEngine(slangSources);
+    static const std::vector<std::string> WarningOptions = {
+        "width-trunc",     "port-width-trunc", "constant-conversion", "sign-compare",
+        "sign-conversion", "unused-result",    "udp-coverage",        "no-specify-param",
+    };
+    slangEngine.setWarningOptions(WarningOptions);
     bool hasError = false;
 
     // Elaborated before anything is asked of the design, so that the dead code is known.
@@ -3147,7 +3211,8 @@ std::unique_ptr<eir::Design> analyse(const Options& options, SourceManager& sour
     std::set<slang::BufferID> encryptionReported;
 
     for (const slang::Diagnostic& diagnostic : slangDiagnostics) {
-        const slang::DiagnosticSeverity severity = slang::getDefaultSeverity(diagnostic.code);
+        const slang::DiagnosticSeverity severity =
+            slangEngine.getSeverity(diagnostic.code, diagnostic.location);
         if (severity == slang::DiagnosticSeverity::Ignored) continue;
 
         // A request's module leaves the ports of what it instantiates open, which the instances
@@ -3179,9 +3244,7 @@ std::unique_ptr<eir::Design> analyse(const Options& options, SourceManager& sour
         }
 
         // Two module paths the standard refuses and other simulators accept (see
-        // NonStandardPaths); slang's warning of a parameter in a specify block says again what
-        // the excused error says.
-        if (nonStandardPaths.repeats(diagnostic)) continue;
+        // NonStandardPaths).
         if (severity == slang::DiagnosticSeverity::Error) {
             if (const std::optional<DiagCode> code = nonStandardPaths.excuses(diagnostic)) {
                 diagnostics.report(*code, location, message);

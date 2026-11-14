@@ -2,8 +2,8 @@
 
 enzan_add_unit_test(
   common
-  SOURCES AssertTests.cpp DiagnosticsTests.cpp InstallationTests.cpp SourceManagerTests.cpp
-          VersionTests.cpp
+  SOURCES AssertTests.cpp DiagnosticsTests.cpp InstallationTests.cpp NamesTests.cpp
+          SourceManagerTests.cpp VersionTests.cpp
   DEPENDS enzan::common)
 
 # Where the install rules put each part, and where this build put its own.
