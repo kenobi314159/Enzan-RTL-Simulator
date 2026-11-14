@@ -4441,6 +4441,7 @@ end architecture;
 )");
     EXPECT_EQ(design, nullptr);
     EXPECT_NE(first(DiagCode::VhdlProcessNeverWaits), nullptr) << transcript();
+    EXPECT_EQ(first(DiagCode::VhdlWarning), nullptr) << "NVC's own warning of it says it twice";
 }
 
 } // namespace

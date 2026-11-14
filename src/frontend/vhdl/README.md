@@ -9,7 +9,9 @@ configured with `-DENZAN_ENABLE_VHDL=OFF`.
   and bounds checking — into NVC's units in a library, and translate NVC's diagnostics into
   Enzan's diagnostic engine (ENZ2001–ENZ2004, ENZ2008 for a design naming VITAL, and ENZ2009
   and ENZ2010 for a library the run was not given). A hint naming an option of NVC's command line
-  is left out, or respelt as Enzan's.
+  is left out, or respelt as Enzan's. Three warnings that leave the user nothing to act on are
+  left out too: a process that never waits, which the translator refuses itself; a pragma before a design
+  unit; and a name that a later revision of VHDL reserves.
 - Walk NVC's analysed trees and emit EIR, one unit per entity, architecture, set of generic
   values and set of bounds its unconstrained ports take, folding generics as it goes, from the top
   down the hierarchy.
