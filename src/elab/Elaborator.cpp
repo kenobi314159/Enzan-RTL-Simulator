@@ -144,10 +144,17 @@ private:
                 }
             }
 
+            // By the names the sources give them, which is what `--top` takes, once each: a
+            // parameterised module's definitions are named for their values, and a package is no
+            // top level.
             if (!index.has_value()) {
                 std::vector<std::string> names;
-                for (const eir::ModuleDefinition& definition : design.modules())
-                    names.push_back(definition.name);
+                for (const eir::ModuleDefinition& definition : design.modules()) {
+                    if (definition.isPackage) continue;
+                    const std::string& name =
+                        definition.sourceName.empty() ? definition.name : definition.sourceName;
+                    if (std::ranges::find(names, name) == names.end()) names.push_back(name);
+                }
                 diagnostics.report(DiagCode::TopModuleNotFound, SourceLocation(), topModuleName,
                                    joinNames(names));
                 return std::nullopt;

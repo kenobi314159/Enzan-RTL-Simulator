@@ -289,6 +289,17 @@ TEST_F(VhdlDesignTest, TheCounterSimulates) {
     EXPECT_EQ(simulation.value("/counter_tb/count", enzan::eir::Radix::Decimal), "10");
 }
 
+TEST_F(VhdlDesignTest, ATopNothingDeclaresIsReportedWithWhatIsDeclared) {
+    // A misspelt top translates nothing, so only the translation can say what the design has.
+    EXPECT_EQ(translate(Counter, "counter_bt"), nullptr);
+    const Diagnostic* refused = first(DiagCode::TopModuleNotFound);
+    ASSERT_NE(refused, nullptr) << transcript();
+    EXPECT_NE(refused->message.find("'counter_bt' was not found; the design contains: 'counter', "
+                                    "'counter_tb'"),
+              std::string::npos)
+        << refused->message;
+}
+
 TEST_F(VhdlDesignTest, SequentialStatementsMeanWhatVhdlSays) {
     // Loops with `next` and `exit`, `mod` and `rem` of negative values, short-circuit operators,
     // a state machine, and waits for time and for conditions.
