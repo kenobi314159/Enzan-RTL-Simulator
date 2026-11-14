@@ -5,7 +5,10 @@ Turns SystemVerilog source text into EIR, and nothing else.
 ## Responsibility
 
 - Drive [slang](https://sv-lang.com/) over the input files and translate its diagnostics
-  into Enzan's diagnostic engine.
+  into Enzan's diagnostic engine. The warnings are slang's default set, less its warning of a
+  parameter in a specify block, which every vendor's cell library has, and with its warnings of
+  truncation, of a constant's value changed, of signedness mixed, of a result ignored and of a
+  primitive leaving edges unspecified.
 - Walk slang's elaborated AST and emit one EIR module definition per distinct instance
   body.
 - Translate procedural blocks, continuous assignments and expressions into EIR-B.

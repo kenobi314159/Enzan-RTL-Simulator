@@ -1043,6 +1043,103 @@ TEST_F(FrontendTest, ASlangWarningDoesNotStopAnalysis) {
     EXPECT_TRUE(reportedCode(DiagCode::SystemVerilogWarning)) << "a width truncation warns";
 }
 
+TEST_F(FrontendTest, DoesNotWarnOfDeliberateCode) {
+    // Each of these is written on purpose and means what it says, and other tools take them
+    // silently: unnamed and standalone generate blocks, ports connected to nothing, a parameter
+    // in a specify block, operands of different widths, a case with no default and a unique one
+    // with one, `&&` within `||`, an upward name, a useless cast, extra semicolons, misleading
+    // indentation, a dangling else, and a file ending without a newline.
+    const std::unique_ptr<Design> design = analyse(R"(
+        module child(input logic i, output logic o);
+            wire up = m.b;
+            assign o = i;
+        endmodule
+        module delayed(input a, output y);
+            parameter D = 1;
+            assign y = a;
+            specify
+                (a => y) = D;
+            endspecify
+        endmodule
+        module m;
+            logic [3:0] a = 4'd0, s, t;
+            logic [7:0] wide, sum;
+            logic b = 1'b0, c, d;
+            integer n;
+            child u(.i(), .o());
+            delayed k(.a(b), .y(c));
+            if (1) begin
+                logic g;
+            end
+            begin
+                logic h;
+            end
+            assign wide = a;
+            assign sum = a + wide;
+            assign d = b && c || b;
+            assign t = type(a)'(a);
+            always_comb begin
+                case (a)
+                    4'd0: s = 4'd1;
+                endcase
+                unique case (a)
+                    4'd1: n = 0;
+                    default: n = 1;
+                endcase
+                if (b)
+                    n = 1;
+                    n = 2;
+                if (b) if (c) n = 3; else n = 4;
+                ;
+            end
+        endmodule)");
+    ASSERT_NE(design, nullptr) << consumer.messages.front();
+    EXPECT_TRUE(consumer.messages.empty()) << consumer.messages.front();
+}
+
+TEST_F(FrontendTest, WarnsOfLikelyMistakesBeyondSlangsDefaultSet) {
+    // Truncations, a constant's value changed, signedness mixed, a result ignored and a primitive
+    // leaving edges unspecified, each of which slang's own driver keeps quiet by default.
+    const std::unique_ptr<Design> design = analyse(R"(
+        primitive latch (q, clk, d);
+            output reg q;
+            input clk, d;
+            table
+                (01) 0 : ? : 0;
+                (01) 1 : ? : 1;
+            endtable
+        endprimitive
+        module narrow(input logic [3:0] i);
+        endmodule
+        module m;
+            logic [7:0] a = 8'd0;
+            logic [3:0] b;
+            int signed si = -1;
+            int unsigned ui = 1, converted;
+            int r;
+            logic less, q;
+            function automatic int f();
+                return 1;
+            endfunction
+            narrow k(.i(a));
+            latch l(q, a[0], a[1]);
+            always_comb b = a;
+            assign converted = si;
+            assign less = si < ui;
+            initial begin
+                r = 1.5;
+                f();
+            end
+        endmodule
+    )");
+    ASSERT_NE(design, nullptr) << consumer.messages.front();
+    for (const std::string_view warning :
+         {"truncates from 8 to 4 bits", "port connection truncates", "changes value from 1.5",
+          "comparison of differently signed types", "changes signedness",
+          "ignoring return value of 'f'", "does not specify outputs for all edges"})
+        EXPECT_TRUE(reported(warning)) << warning;
+}
+
 TEST_F(FrontendTest, ReportsSourceWithNoTopLevel) {
     // A file containing only a package has nothing to elaborate.
     EXPECT_EQ(analyse("package p; endpackage"), nullptr);
@@ -3018,8 +3115,7 @@ TEST_F(FrontendTest, AnInstanceOfAnotherLanguagesUnitAsksForItWithItsValues) {
     // No row is for the width 4 yet, so w's ports are one bit until an analysis with one.
     EXPECT_EQ(consumer.messages,
               (std::vector<std::string>{
-                  "implicit conversion of port connection truncates from 4 to 1 bits",
-                  "implicit conversion of port connection expands from 1 to 32 bits"}));
+                  "implicit conversion of port connection truncates from 4 to 1 bits"}));
 }
 
 TEST_F(FrontendTest, AnAnalysisFailingBeforeAnInstancesWidthsAreKnownSaysWhatItAsks) {

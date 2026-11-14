@@ -58,6 +58,7 @@
 #include <optional>
 #include <set>
 #include <span>
+#include <string>
 #include <string_view>
 #include <utility>
 #include <vector>
@@ -3106,7 +3107,18 @@ std::unique_ptr<eir::Design> analyse(const Options& options, SourceManager& sour
     // preserving that quality end to end is a genuine selling point rather than polish.
     // They are translated into Enzan's engine so that the transcript is uniform
     // regardless of which phase produced a message.
-    const slang::DiagnosticEngine slangEngine(slangSources);
+    //
+    // The warnings are slang's default set, as its own driver shows them, and a few more of its
+    // checks that point at a likely mistake. Its other checks are of style, or of code that is
+    // written on purpose and means what it says, which a design of other tools' writing has by
+    // the thousand: they would bury the warnings that matter. A parameter in a specify block is
+    // in slang's default set and in every vendor's cell library, and is simulated as a specparam.
+    slang::DiagnosticEngine slangEngine(slangSources);
+    static const std::vector<std::string> WarningOptions = {
+        "width-trunc",     "port-width-trunc", "constant-conversion", "sign-compare",
+        "sign-conversion", "unused-result",    "udp-coverage",        "no-specify-param",
+    };
+    slangEngine.setWarningOptions(WarningOptions);
     bool hasError = false;
 
     // Elaborated before anything is asked of the design, so that the dead code is known.
@@ -3147,7 +3159,8 @@ std::unique_ptr<eir::Design> analyse(const Options& options, SourceManager& sour
     std::set<slang::BufferID> encryptionReported;
 
     for (const slang::Diagnostic& diagnostic : slangDiagnostics) {
-        const slang::DiagnosticSeverity severity = slang::getDefaultSeverity(diagnostic.code);
+        const slang::DiagnosticSeverity severity =
+            slangEngine.getSeverity(diagnostic.code, diagnostic.location);
         if (severity == slang::DiagnosticSeverity::Ignored) continue;
 
         // A request's module leaves the ports of what it instantiates open, which the instances
@@ -3179,9 +3192,7 @@ std::unique_ptr<eir::Design> analyse(const Options& options, SourceManager& sour
         }
 
         // Two module paths the standard refuses and other simulators accept (see
-        // NonStandardPaths); slang's warning of a parameter in a specify block says again what
-        // the excused error says.
-        if (nonStandardPaths.repeats(diagnostic)) continue;
+        // NonStandardPaths).
         if (severity == slang::DiagnosticSeverity::Error) {
             if (const std::optional<DiagCode> code = nonStandardPaths.excuses(diagnostic)) {
                 diagnostics.report(*code, location, message);
