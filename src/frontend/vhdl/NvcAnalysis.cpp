@@ -90,6 +90,18 @@ std::string missingVitalPackage(std::string_view message) {
     return unit;
 }
 
+/// Whether an NVC warning is one Enzan leaves out, as giving the user nothing to act on.
+///
+/// A pragma comment before a design unit, as `-- pragma translate_off` heading a vendor's file, is
+/// ignored, but so is one inside a unit: NVC records pragmas for coverage only, and analyses the
+/// code between them either way. An identifier that a later revision made a reserved word is legal
+/// in the revision being analysed, and NVC's hint to analyse as the later one would refuse it. NVC
+/// gives either no more than its wording, so the wording is matched, and a unit test pins it.
+bool isLeftOut(std::string_view message) {
+    return message == "ignoring pragma outside of design unit"
+           || message.find(" is a reserved word in VHDL-") != std::string_view::npos;
+}
+
 /// The library an NVC message says it cannot find, as NVC names it, or an empty string; and
 /// whether the message is the fatal error that ends the analysis.
 ///
@@ -219,6 +231,7 @@ void translate(diag_t* nvcDiagnostic, void* context) {
     diagnostic.code = code;
     diagnostic.severity = defaultSeverity(code);
     diagnostic.message = stripMarkup(diag_get_text(nvcDiagnostic));
+    if (code == DiagCode::VhdlWarning && isLeftOut(diagnostic.message)) return;
     if (const std::string vital = missingVitalPackage(diagnostic.message); !vital.empty()) {
         diagnostic.code = DiagCode::VhdlVital;
         diagnostic.severity = defaultSeverity(DiagCode::VhdlVital);
@@ -295,6 +308,10 @@ public:
         // component declarations overflows. The arena is reserved rather than touched, so a larger
         // one costs no memory a unit does not use.
         opt_set_size(OPT_ARENA_SIZE, std::size_t{64} << 20U);
+
+        // The translator refuses a process that never waits (VhdlProcessNeverWaits), so NVC's
+        // warning of one would say it twice.
+        opt_set_int(OPT_MISSING_WAIT, 0);
 
         set_standard(nvcStandard(options.standard));
         if (options.bootstrap) opt_set_int(OPT_BOOTSTRAP, 1);

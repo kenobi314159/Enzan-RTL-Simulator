@@ -390,6 +390,29 @@ TEST_F(VhdlAnalysisTest, TellsADesignNamingVitalThatItIsOutOfScope) {
     EXPECT_EQ(transcript().find("not found in library"), std::string::npos) << transcript();
 }
 
+TEST_F(VhdlAnalysisTest, LeavesOutWarningsOfLegalCodeGivingNothingToActOn) {
+    // A pragma before the design unit, and a word VHDL-2008 reserves used as a name in VHDL-1993.
+    // This also pins the NVC wording the frontend recognises. A pragma left unmatched in a unit
+    // still warns.
+    EXPECT_TRUE(analyse("-- pragma translate_off\n"
+                        "-- pragma translate_on\n"
+                        "entity e is\n"
+                        "end entity;\n"
+                        "architecture a of e is\n"
+                        "  signal default : bit;\n"
+                        "begin\n"
+                        "  -- pragma translate_off\n"
+                        "end architecture;\n",
+                        "work", Standard::Vhdl1993))
+        << transcript();
+
+    ASSERT_EQ(std::ranges::count(consumer.received, DiagCode::VhdlWarning, &Diagnostic::code), 1)
+        << transcript();
+    EXPECT_NE(first(DiagCode::VhdlWarning)->message.find("no matching pragma translate_on"),
+              std::string::npos)
+        << transcript();
+}
+
 TEST_F(VhdlAnalysisTest, ReportsAMissingLibraryOnce) {
     // NVC reports it at the library clause and again, as the fatal error that stops it, where
     // the use clause needs it.
