@@ -56,7 +56,7 @@ protected:
         SessionFixture::SetUp();
 
         theme.loadBuiltIn();
-        model = std::make_unique<WaveformModel>(*session, theme);
+        model = std::make_unique<WaveformModel>(*session);
 
         treeView = std::make_unique<QTreeView>();
         treeView->setModel(model.get());
@@ -992,48 +992,40 @@ TEST_F(InteractionTest, HighlightingARowComesFromTheThemeAndCanBeCleared) {
 
     EXPECT_EQ(model->row(clock)->highlight, 2);
 
-    // The colour on screen is the theme's, not a literal in widget code.
-    const QVariant background = model->data(model->indexOfRow(clock), Qt::BackgroundRole);
-    ASSERT_TRUE(background.isValid());
-    EXPECT_EQ(background.value<QColor>(), theme.color(enzan::gui::highlightColor(2)));
+    EXPECT_FALSE(model->data(model->indexOfRow(clock), Qt::BackgroundRole).isValid())
+        << "a trace highlight must not colour the signal list's background";
+    EXPECT_FALSE(model->data(model->indexOfRow(clock), Qt::ForegroundRole).isValid())
+        << "a trace highlight must not colour the signal list's text";
 
-    // And so is its text, which has a colour of its own for every highlight.
-    const QVariant text = model->data(model->indexOfRow(clock), Qt::ForegroundRole);
-    ASSERT_TRUE(text.isValid());
-    EXPECT_EQ(text.value<QColor>(), theme.color(enzan::gui::ThemeColor::WaveHighlightText));
-    EXPECT_EQ(model->data(model->indexOfRow(clock).siblingAtColumn(WaveformModel::ValueColumn),
-                          Qt::ForegroundRole),
-              text)
-        << "the value is on the highlighted row too";
+    // The colour on screen is the theme's, not a literal in widget code.
+    const QColor highlighted = theme.color(enzan::gui::highlightColor(2));
+    const QImage painted = view->grab().toImage().convertToFormat(QImage::Format_RGB32);
+    int found = 0;
+    for (int y = 0; y < painted.height(); ++y) {
+        for (int x = 0; x < painted.width(); ++x) {
+            if (painted.pixel(x, y) == highlighted.rgb()) ++found;
+        }
+    }
+    EXPECT_GT(found, 100) << "the row's known trace did not take its highlight colour";
 
     model->setHighlight(clock, 0);
     EXPECT_FALSE(model->data(model->indexOfRow(clock), Qt::BackgroundRole).isValid());
-    EXPECT_FALSE(model->data(model->indexOfRow(clock), Qt::ForegroundRole).isValid())
-        << "a row with no highlight keeps the panel's text";
-}
+    EXPECT_FALSE(model->data(model->indexOfRow(clock), Qt::ForegroundRole).isValid());
 
-TEST_F(InteractionTest, AHighlightIsPaintedOnTheTraceToo) {
-    // A highlight that stopped at the splitter would read as a rendering fault: the name and
-    // the trace are one row to the reader.
-    populate();
-    model->setHighlight(rowOf.value(QStringLiteral("clk")), 3);
-
-    const QImage rendered = view->grab().toImage().convertToFormat(QImage::Format_RGB32);
-    ASSERT_FALSE(rendered.isNull());
-
-    const QRgb wanted = theme.color(enzan::gui::highlightColor(3)).rgb();
-    int found = 0;
-    for (int y = 0; y < rendered.height(); ++y) {
-        for (int x = 0; x < rendered.width(); ++x) {
-            if (rendered.pixel(x, y) == wanted) ++found;
+    const QImage cleared = view->grab().toImage().convertToFormat(QImage::Format_RGB32);
+    found = 0;
+    for (int y = 0; y < cleared.height(); ++y) {
+        for (int x = 0; x < cleared.width(); ++x) {
+            if (cleared.pixel(x, y) == highlighted.rgb()) ++found;
         }
     }
-    EXPECT_GT(found, 100);
+    EXPECT_EQ(found, 0) << "clearing the highlight did not restore the default trace colour";
 }
 
 TEST_F(InteractionTest, EveryHighlightSlotHasAColour) {
     for (int slot = 1; slot <= HighlightSlots; ++slot) {
         EXPECT_TRUE(theme.color(enzan::gui::highlightColor(slot)).isValid()) << slot;
+        EXPECT_TRUE(theme.color(enzan::gui::highlightFillColor(slot)).isValid()) << slot;
     }
 }
 

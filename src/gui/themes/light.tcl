@@ -89,11 +89,17 @@ theme wave.beyond.recorded         #090c12
 
 theme wave.zoom.band               #40ffd866
 
-theme wave.highlight.1             #444444
-theme wave.highlight.2             #2c5428
-theme wave.highlight.3             #5a4b28
-theme wave.highlight.4             #512a48
-theme wave.highlight.5             #26455a
+theme wave.highlight.1             #ffef42
+theme wave.highlight.2             #ff8020
+theme wave.highlight.3             #cc88f2
+theme wave.highlight.4             #30cadd
+theme wave.highlight.5             #f0f6fc
+
+theme wave.highlight.fill.1        #816b0b
+theme wave.highlight.fill.2        #aa5615
+theme wave.highlight.fill.3        #885ba1
+theme wave.highlight.fill.4        #1c7883
+theme wave.highlight.fill.5        #6b6d70
 
 theme wave.highlight.text          #f2f5f9
 

@@ -241,7 +241,7 @@ MainWindow::MainWindow(KernelSession& kernelSession, const Theme& initialTheme,
 
     designModel = new DesignTreeModel(this);
     objectsModel = new ObjectsModel(*session, this);
-    waveModel = new WaveformModel(*session, theme, this);
+    waveModel = new WaveformModel(*session, this);
 
     buildDocks();
     buildToolBar();
@@ -483,7 +483,7 @@ void MainWindow::buildDocks() {
         connect(entry, &QAction::triggered, this, [this, slot] { setSelectedHighlight(slot); });
         highlightActions.at(static_cast<std::size_t>(slot - 1)) = entry;
     }
-    connect(highlightMenu->addAction(tr("None")), &QAction::triggered, this,
+    connect(highlightMenu->addAction(tr("Default")), &QAction::triggered, this,
             [this] { setSelectedHighlight(0); });
     waveRowsView->addAction(highlightMenu->menuAction());
     addWaveSeparator();
@@ -541,8 +541,7 @@ void MainWindow::applyTheme() {
         highlightActions.at(static_cast<std::size_t>(slot - 1))->setIcon(QIcon(swatch));
     }
 
-    // A highlighted name is the model's background, read as the list paints, and a trace is a
-    // picture the canvas keeps; each is told to look again.
+    // A trace is a picture the canvas keeps, so it has to be told to use the new theme.
     waveRowsView->viewport()->update();
     waveView->themeChanged();
     transcriptView->applyTheme();

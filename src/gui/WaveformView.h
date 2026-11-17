@@ -289,6 +289,12 @@ private:
     void paintRowBackground(QPainter& painter, const RowGeometry& geometry, const QRect& area);
     void paintZoomBand(QPainter& painter);
 
+    /// The colour of known wave lines on `rowId`, including its highlight choice.
+    [[nodiscard]] QColor traceColor(int rowId) const;
+
+    /// The colour of dense known activity on `rowId`, including its highlight choice.
+    [[nodiscard]] QColor traceFillColor(int rowId) const;
+
     /// The cache entry for `rowId`, with its summary filled in, or nullptr when there is
     /// nothing to draw. Valid until the next call.
     [[nodiscard]] CachedSamples* sampleRow(int rowId, const QRect& area);

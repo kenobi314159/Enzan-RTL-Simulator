@@ -406,15 +406,14 @@ TEST(SignalList, TheDeepestSubtreeSavesAListThatLoadsBack) {
         scope = design.add(scope, "l" + std::to_string(level), {"q"});
 
     const KernelSession session;
-    const Theme theme;
-    WaveformModel added(session, theme);
+    WaveformModel added(session);
     static_cast<void>(added.insertSignalRows(design.resolve("add wave -r /tb\n").rows, -1, -1));
     const QString saved = added.writeSignalList({});
 
     const ParsedSignalList parsed = parseSignalList(saved.toUtf8());
     ASSERT_TRUE(parsed.errors.isEmpty()) << firstError(parsed);
 
-    WaveformModel loaded(session, theme);
+    WaveformModel loaded(session);
     static_cast<void>(loaded.insertSignalRows(
         resolveSignalList(parsed.entries, design.instances, design.objects).rows, -1, -1));
     EXPECT_EQ(loaded.writeSignalList({}), saved);

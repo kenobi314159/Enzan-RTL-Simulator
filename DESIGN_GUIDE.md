@@ -1384,7 +1384,10 @@ they are decided here.
 - **Parameters are rows**, constant, so drawn across the whole window and never clipped where the
   traces stop.
 - **A scope lists what the reader wrote**, without the objects a frontend introduced (7.1).
-- A row may be **highlighted** with one of five colours from the theme, covering its name and trace.
+- A row may be **highlighted** with one of five trace colours from the theme. The colour applies
+  to known wave lines and dense-activity fills; semantic colours such as an unknown value's red
+  and a high-impedance bit's blue take precedence. Highlighting does not colour the row's name or
+  background, leaving the background tint to show which row is selected.
 
 ### 10.8 Signal list files
 

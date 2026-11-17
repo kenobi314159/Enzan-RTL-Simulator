@@ -188,10 +188,18 @@ TEST(ThemeTests, EveryShippedThemeIsReadable) {
         }
         for (int slot = 1; slot <= enzan::gui::HighlightSlots; ++slot) {
             const QColor highlight = theme.color(enzan::gui::highlightColor(slot));
-            EXPECT_GE(contrast(theme.color(ThemeColor::WaveTrace), highlight), Mark)
-                << name.toStdString() << ": the trace on highlight " << slot;
-            EXPECT_GE(contrast(theme.color(ThemeColor::WaveHighlightText), highlight), Text)
-                << name.toStdString() << ": a name on highlight " << slot;
+            const QColor fill = theme.color(enzan::gui::highlightFillColor(slot));
+            ASSERT_TRUE(fill.isValid())
+                << name.toStdString() << ": activity fill for highlight " << slot;
+            for (const ThemeColor ground : {ThemeColor::WaveBackground, ThemeColor::WaveSelectedRow,
+                                            ThemeColor::WaveBeyondRecorded}) {
+                EXPECT_GE(contrast(highlight, theme.color(ground)), Mark)
+                    << name.toStdString() << ": highlight " << slot << " on "
+                    << enzan::gui::themeKey(ground);
+                EXPECT_GE(contrast(fill, theme.color(ground)), Mark)
+                    << name.toStdString() << ": activity fill " << slot << " on "
+                    << enzan::gui::themeKey(ground);
+            }
         }
         // A program's colours are text, whichever of the sixteen it asks for.
         for (int index = 0; index < enzan::gui::TerminalColors; ++index) {

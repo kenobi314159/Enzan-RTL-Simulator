@@ -63,7 +63,7 @@ protected:
     void SetUp() override {
         SessionFixture::SetUp();
         theme.loadBuiltIn();
-        model = std::make_unique<WaveformModel>(*session, theme);
+        model = std::make_unique<WaveformModel>(*session);
     }
 
     SignalInfo infoFor(const QString& scope, const QString& name) {
@@ -441,7 +441,7 @@ protected:
         SessionFixture::SetUp();
 
         theme.loadBuiltIn();
-        model = std::make_unique<WaveformModel>(*session, theme);
+        model = std::make_unique<WaveformModel>(*session);
 
         treeView = std::make_unique<QTreeView>();
         treeView->setModel(model.get());
@@ -519,45 +519,6 @@ TEST_F(WaveformViewTest, TracesArePaintedInTheThemeColour) {
         << "the traces were not drawn in the theme's trace colour";
     EXPECT_GT(countOf(counts, theme.color(enzan::gui::ThemeColor::WaveRulerBackground)), 100)
         << "the ruler was not drawn";
-}
-
-TEST_F(WaveformViewTest, AHighlightedRowsNamesAreInTheThemesColourForThem) {
-    // Drawn rather than asked of the model, because what a model offers a view can still be
-    // overruled on the way to the screen: by a style sheet, or by a style that ignores it.
-    showEverythingAndRun(50);
-    QString error;
-    ASSERT_TRUE(theme.evaluate(QStringLiteral("theme wave.highlight.text #ff00ff"), error))
-        << error.toStdString();
-    const int first = model->rowIdOf(model->index(0, 0));
-
-    // Text is antialiased, so its pixels are blends of its colour and the background rather than
-    // the colour itself. Magenta is counted by its shape instead, because nothing else in the
-    // list comes near it.
-    const auto magenta = [this] {
-        QCoreApplication::processEvents();
-        const QImage drawn =
-            treeView->viewport()->grab().toImage().convertToFormat(QImage::Format_RGB32);
-        int count = 0;
-        for (int y = 0; y < drawn.height(); ++y) {
-            for (int x = 0; x < drawn.width(); ++x) {
-                const QColor pixel = drawn.pixelColor(x, y);
-                if (pixel.red() > 150 && pixel.green() < 100 && pixel.blue() > 150) ++count;
-            }
-        }
-        return count;
-    };
-
-    model->setHighlight(first, 1);
-    EXPECT_GT(magenta(), 10) << "the highlighted row's name was not drawn in wave.highlight.text";
-
-    // Selected, the row's text is the selection's, as its background is.
-    treeView->selectionModel()->select(model->index(0, 0), QItemSelectionModel::ClearAndSelect
-                                                               | QItemSelectionModel::Rows);
-    EXPECT_EQ(magenta(), 0) << "a selected row kept the highlight's text colour";
-    treeView->selectionModel()->clearSelection();
-
-    model->setHighlight(first, 0);
-    EXPECT_EQ(magenta(), 0) << "a row with no highlight still had the highlight's text colour";
 }
 
 TEST_F(WaveformViewTest, ANewThemeReachesTracesAlreadyDrawn) {
@@ -691,6 +652,43 @@ TEST_F(WaveformViewTest, RenderingCostDoesNotGrowWithTheTransitionsInView) {
     EXPECT_GT(countOf(wide, theme.color(enzan::gui::ThemeColor::WaveTrace)), 200);
 }
 
+TEST_F(WaveformViewTest, SemanticColoursOverrideAHighlight) {
+    SignalInfo signal;
+    for (const SignalInfo& info : objectsOf(QStringLiteral("/tb/u_dut"))) {
+        if (info.name == QStringLiteral("q")) signal = info;
+    }
+    ASSERT_GT(signal.width, 1U);
+    const int whole = model->addSignal(signal);
+    const int row = model->addSlice(whole, 0, 0);
+    ASSERT_GE(row, 0);
+    model->removeRow(whole);
+    model->setHighlight(row, 3);
+    session->subscribe({signal.signalIndex});
+
+    session->deposit(signal.signalIndex,
+                     enzan::eir::BitVector::filled(signal.width, enzan::eir::Logic::Zero));
+    session->run(20);
+    ASSERT_TRUE(pumpUntilCaughtUp(20));
+    session->deposit(signal.signalIndex,
+                     enzan::eir::BitVector::filled(signal.width, enzan::eir::Logic::Unknown));
+    session->run(100);
+    ASSERT_TRUE(pumpUntilCaughtUp(120));
+    session->deposit(signal.signalIndex,
+                     enzan::eir::BitVector::filled(signal.width, enzan::eir::Logic::HighZ));
+    session->run(100);
+    ASSERT_TRUE(pumpUntilCaughtUp(220));
+
+    view->axis().setExtent(session->latestTime());
+    view->axis().setRange(0, 220);
+    const std::map<QRgb, int> counts = colourHistogram(render());
+    EXPECT_GT(countOf(counts, theme.color(enzan::gui::highlightColor(3))), 20)
+        << "known levels did not keep the row's highlight colour";
+    EXPECT_GT(countOf(counts, theme.color(enzan::gui::ThemeColor::WaveUnknown)), 0)
+        << "an X was replaced by the row's highlight colour";
+    EXPECT_GT(countOf(counts, theme.color(enzan::gui::ThemeColor::WaveHighImpedance)), 0)
+        << "a Z was replaced by the row's highlight colour";
+}
+
 TEST_F(WaveformViewTest, ABusyStretchIsUnknownOnlyWhereTheValueWas) {
     // Zoomed out, a bus changing in every pixel column is drawn as one filled band, red where its
     // value was unknown. The band took the colour of its first column, so one unknown column at
@@ -700,7 +698,8 @@ TEST_F(WaveformViewTest, ABusyStretchIsUnknownOnlyWhereTheValueWas) {
         if (info.name == QStringLiteral("count")) count = info;
     }
     ASSERT_GT(count.width, 1U);
-    model->addSignal(count);
+    const int row = model->addSignal(count);
+    model->setHighlight(row, 4);
     session->subscribe({count.signalIndex});
 
     // Counting, then unknown for a moment, then counting again: the clock ticks every ten units,
@@ -715,7 +714,7 @@ TEST_F(WaveformViewTest, ABusyStretchIsUnknownOnlyWhereTheValueWas) {
     session->run(19'900);
     ASSERT_TRUE(pumpUntilCaughtUp(40'000));
 
-    const QColor fill = theme.color(enzan::gui::ThemeColor::WaveTraceFill);
+    const QColor fill = theme.color(enzan::gui::highlightFillColor(4));
     const QColor unknown = theme.color(enzan::gui::ThemeColor::WaveUnknown);
     const auto columnHas = [](const QImage& image, int x, const QColor& colour) {
         for (int y = 0; y < image.height(); ++y) {
