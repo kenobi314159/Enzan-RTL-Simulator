@@ -129,3 +129,13 @@ set_tests_properties(golden.mixed.top_overrides.vhdl_top golden.mixed.top_overri
 add_test(NAME golden.mixed.top_overrides.without_top COMMAND enzan -GDEPTH=5 ${overrides})
 set_tests_properties(golden.mixed.top_overrides.without_top
                      PROPERTIES PASS_REGULAR_EXPRESSION "needs --top to say which unit")
+
+# Both frontend-specific analysis forms and their linked EIR specialisations in one library.
+add_test(NAME golden.mixed.library
+         COMMAND "${CMAKE_CURRENT_SOURCE_DIR}/run-library-check.sh" $<TARGET_FILE:enzan>
+                 "${CMAKE_CURRENT_SOURCE_DIR}")
+set_tests_properties(
+  golden.mixed.library
+  PROPERTIES PASS_REGULAR_EXPRESSION "PASS mixed library"
+             FAIL_REGULAR_EXPRESSION "FAIL mixed library"
+             TIMEOUT 120)

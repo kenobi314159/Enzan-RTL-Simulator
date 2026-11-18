@@ -345,6 +345,7 @@ void writeSubprogram(Writer& out, NameTable& names, const Subprogram& subprogram
 void writeModule(Writer& out, NameTable& names, const ModuleDefinition& definition) {
     out.text(definition.name);
     out.text(definition.sourceName);
+    out.text(definition.library);
     out.boolean(definition.isPackage);
     out.u8(static_cast<std::uint8_t>(definition.language));
     out.text(definition.architecture);
@@ -686,6 +687,7 @@ ModuleDefinition readModule(Reader& in, BufferResolver& buffers) {
     ModuleDefinition definition;
     definition.name = in.text();
     definition.sourceName = in.text();
+    definition.library = in.text();
     definition.isPackage = in.boolean();
     definition.language = static_cast<Language>(in.u8());
     definition.architecture = in.text();
@@ -895,6 +897,9 @@ std::string encodeContent(const ModuleDefinition& definition, const SourceManage
         encodeModules(std::span(&definition, 1), sources),
         [](std::string_view) { return BufferId(); }, located);
     ENZAN_ALWAYS_ASSERT(decoded && located.size() == 1, "a unit did not survive its own encoding");
+    // A definition's logical owner chooses how its name is resolved, not what the definition is.
+    // Copies held by two libraries are still one unit when every HDL property agrees.
+    located.front().library.clear();
     return encodeModules(located, sources);
 }
 

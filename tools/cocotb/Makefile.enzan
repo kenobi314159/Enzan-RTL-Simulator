@@ -13,7 +13,7 @@
 # ENZAN_BIN_DIR names the directory holding `enzan` when it is not on the PATH.
 #
 # This makefile is for cocotb 2.1, which tests/conformance/cocotb/requirements.txt pins. Later
-# cocotb versions may carryry a Makefile.enzan of their own, which loads cocotb as those releases
+# cocotb versions may carry a Makefile.enzan of their own, which loads cocotb as those releases
 # do, through its bootstrap library and GPI_IMPL, where this one uses --lib-name-path and
 # GPI_EXTRA, which they removed. With one of them `make SIM=enzan` needs no copy, and makefiles.sh
 # keeps cocotb's own.
@@ -60,14 +60,56 @@ ifdef RTL_LIBRARY
 else
     TOPLEVEL_LIBRARY ?= work
 endif
-ifneq ($(strip $(VHDL_SOURCES)),)
+ifeq ($(TOPLEVEL_LANG),vhdl)
     ENZAN_WORK := --work $(TOPLEVEL_LIBRARY)
 endif
 
-# Each library VHDL_LIB_ORDER names is analysed from its VHDL_SOURCES_<library> into an Enzan
-# library of its own, in that order and against those before it, and the run reads them all.
-ENZAN_LIBRARIES := $(SIM_BUILD)/enzan-libraries
-ENZAN_IN_LIBS := $(foreach LIB,$(VHDL_LIB_ORDER),--in-lib $(ENZAN_LIBRARIES)/$(LIB))
+# Libraries are opt-in, as they are on Enzan's command line. ENZAN_INPUT_LIBRARIES names existing
+# libraries in search order, each as a path or name=path. VHDL_LIB_ORDER asks this makefile to build
+# cocotb's named VHDL libraries under ENZAN_LIBRARY_ROOT. ENZAN_OUT_LIB asks it to analyse the main
+# sources into that library before the run; without it the main sources stay in the one-shot flow.
+ENZAN_LIBRARY_ROOT ?= $(SIM_BUILD)/enzan-libraries
+ENZAN_INPUT_LIBRARIES ?=
+ENZAN_CONTEXT_SOURCES ?=
+ENZAN_OUT_LIB ?=
+
+ENZAN_INPUT_LIBRARY_ARGS = $(foreach LIB,$(ENZAN_INPUT_LIBRARIES),--in-lib $(LIB))
+ENZAN_VHDL_LIBRARY_ARGS = $(foreach LIB,$(VHDL_LIB_ORDER),--in-lib $(ENZAN_LIBRARY_ROOT)/$(LIB))
+ENZAN_OUTPUT_LIBRARY_ARG = $(if $(strip $(ENZAN_OUT_LIB)),--in-lib $(ENZAN_OUT_LIB))
+ENZAN_CONTEXT_ARGS = $(foreach SOURCE,$(ENZAN_CONTEXT_SOURCES),--context $(SOURCE))
+
+# Stamps and dependency files make each VHDL library an independent incremental target. A library
+# depends on every one before it because VHDL_LIB_ORDER is both its analysis and search order.
+ENZAN_VHDL_LIBRARY_STAMPS :=
+ENZAN_PREVIOUS_VHDL_LIBRARY_ARGS := $(ENZAN_INPUT_LIBRARY_ARGS)
+ENZAN_PREVIOUS_VHDL_LIBRARY_STAMPS :=
+
+define enzan_vhdl_library
+$(ENZAN_LIBRARY_ROOT)/$(1)/.stamp: $$(VHDL_SOURCES_$(1)) $$(CUSTOM_COMPILE_DEPS) $(ENZAN_PREVIOUS_VHDL_LIBRARY_STAMPS) | $(SIM_BUILD) enzan-check-vhdl-libraries
+	@if test ! -f $(ENZAN_LIBRARY_ROOT)/$(1)/enzan.lib; then \
+		$$(CMD) lib create --name $(1) $(ENZAN_LIBRARY_ROOT)/$(1) >/dev/null; \
+	fi
+	$$(CMD) analyse --out-lib $(ENZAN_LIBRARY_ROOT)/$(1) \
+		$(ENZAN_PREVIOUS_VHDL_LIBRARY_ARGS) $$(COMPILE_ARGS) \
+		--depfile $(ENZAN_LIBRARY_ROOT)/$(1)/deps.d --depfile-target $$@ \
+		$$(VHDL_SOURCES_$(1))
+	@touch $$@
+
+ENZAN_VHDL_LIBRARY_STAMPS += $(ENZAN_LIBRARY_ROOT)/$(1)/.stamp
+ENZAN_PREVIOUS_VHDL_LIBRARY_STAMPS += $(ENZAN_LIBRARY_ROOT)/$(1)/.stamp
+ENZAN_PREVIOUS_VHDL_LIBRARY_ARGS += --in-lib $(ENZAN_LIBRARY_ROOT)/$(1)
+endef
+
+$(foreach LIB,$(VHDL_LIB_ORDER),$(eval $(call enzan_vhdl_library,$(LIB))))
+
+# Dependency files appear only after the first analysis. The next make reads them and learns every
+# source, included header and context file that Enzan read.
+-include $(wildcard $(ENZAN_LIBRARY_ROOT)/*/deps.d)
+ifneq ($(strip $(ENZAN_OUT_LIB)),)
+-include $(wildcard $(ENZAN_OUT_LIB)/deps.d)
+else
+-include $(wildcard $(SIM_BUILD)/enzan.d)
+endif
 
 TOPLEVELS := $(call deprecate,TOPLEVEL,COCOTB_TOPLEVEL)
 ifneq ($(words $(TOPLEVELS)),0)
@@ -88,6 +130,15 @@ ifdef VERILOG_INCLUDE_DIRS
     COMPILE_ARGS += $(addprefix -I ,$(VERILOG_INCLUDE_DIRS))
 endif
 
+ifneq ($(strip $(ENZAN_OUT_LIB)),)
+ifeq ($(strip $(VERILOG_SOURCES) $(VHDL_SOURCES)),)
+    $(error ENZAN_OUT_LIB was given, but there are no VERILOG_SOURCES or VHDL_SOURCES to analyse into it)
+endif
+ifneq ($(filter $(TOPLEVEL_LIBRARY),$(VHDL_LIB_ORDER)),)
+    $(error TOPLEVEL_LIBRARY=$(TOPLEVEL_LIBRARY) is also in VHDL_LIB_ORDER; the main and auxiliary libraries need distinct logical names)
+endif
+endif
+
 # Its own variable rather than SIM_ARGS, which a make command line giving SIM_ARGS replaces.
 ifeq ($(WAVES),1)
     ENZAN_WAVES := --fst $(SIM_BUILD)/$(TOPLEVELS).fst
@@ -100,38 +151,79 @@ ifeq ($(GUI),1)
     ENZAN_GUI := --gui
 endif
 
-ENZAN_ARGS = $(TOPMODULE_ARG) --timescale $(ENZAN_TIMESCALE) $(ENZAN_PLI) $(ENZAN_WORK) \
-             $(ENZAN_IN_LIBS) $(ENZAN_WAVES) $(ENZAN_GUI) $(COMPILE_ARGS) $(SIM_ARGS) \
-             $(EXTRA_ARGS) $(VERILOG_SOURCES) $(VHDL_SOURCES) \
-             $(call deprecate,PLUSARGS,COCOTB_PLUSARGS)
-
-# The libraries VHDL_LIB_ORDER names, analysed afresh, each against those analysed before it.
-# cocotb's own checks come first: each library it names has sources, and each VHDL_SOURCES_<lib>
-# is a library it names, so that none is left out unnoticed.
-ifneq ($(strip $(VHDL_LIB_ORDER)),)
-define enzan_analyse_libraries
-	$(RM) -r $(ENZAN_LIBRARIES)
-	set -e; against=""; $(foreach LIB,$(VHDL_LIB_ORDER),$(CMD) lib create --name $(LIB) $(ENZAN_LIBRARIES)/$(LIB) >/dev/null; $(CMD) analyse --out-lib $(ENZAN_LIBRARIES)/$(LIB) $$against $(COMPILE_ARGS) $(VHDL_SOURCES_$(LIB)); against="$$against --in-lib $(ENZAN_LIBRARIES)/$(LIB)";) true
-endef
-endif
-
-# Analysis, elaboration and the run are one process, so there is no compiled image to keep and
-# the results file is the only target.
-$(COCOTB_RESULTS_FILE): $(VERILOG_SOURCES) $(VHDL_SOURCES) $(CUSTOM_COMPILE_DEPS) $(CUSTOM_SIM_DEPS) | $(SIM_BUILD)
-	$(RM) $(COCOTB_RESULTS_FILE)
+# cocotb's own consistency checks run before any VHDL library is analysed. An order-only
+# prerequisite keeps the checks from making an otherwise current stamp rebuild on every make.
+.PHONY: enzan-check-vhdl-libraries
+enzan-check-vhdl-libraries:
 	$(foreach LIB, $(VHDL_LIB_ORDER), $(check_vhdl_sources))
 	$(foreach SOURCES_VAR, $(filter VHDL_SOURCES_%, $(.VARIABLES)), $(check_lib_order))
-	$(enzan_analyse_libraries)
+
+# ENZAN_OUT_LIB is the explicit switch from the one-shot flow to separate analysis and execution.
+# Its logical name is TOPLEVEL_LIBRARY, independent of where its directory is placed.
+ENZAN_ANALYSIS_STAMPS := $(ENZAN_VHDL_LIBRARY_STAMPS)
+ifneq ($(strip $(ENZAN_OUT_LIB)),)
+ENZAN_MAIN_LIBRARY_STAMP := $(ENZAN_OUT_LIB)/.stamp
+ENZAN_ANALYSIS_STAMPS += $(ENZAN_MAIN_LIBRARY_STAMP)
+
+$(ENZAN_MAIN_LIBRARY_STAMP): $(VERILOG_SOURCES) $(VHDL_SOURCES) $(ENZAN_CONTEXT_SOURCES) \
+                              $(CUSTOM_COMPILE_DEPS) $(ENZAN_VHDL_LIBRARY_STAMPS) \
+                              | $(SIM_BUILD) enzan-check-vhdl-libraries
+	@if test ! -f $(ENZAN_OUT_LIB)/enzan.lib; then \
+		$(CMD) lib create --name $(TOPLEVEL_LIBRARY) $(ENZAN_OUT_LIB) >/dev/null; \
+	fi
+	$(CMD) analyse $(TOPMODULE_ARG) --timescale $(ENZAN_TIMESCALE) \
+		--out-lib $(ENZAN_OUT_LIB) $(ENZAN_WORK) \
+		$(ENZAN_INPUT_LIBRARY_ARGS) $(ENZAN_VHDL_LIBRARY_ARGS) \
+		$(ENZAN_CONTEXT_ARGS) $(COMPILE_ARGS) $(EXTRA_ARGS) \
+		--depfile $(ENZAN_OUT_LIB)/deps.d --depfile-target $@ \
+		$(VERILOG_SOURCES) $(VHDL_SOURCES)
+	@touch $@
+endif
+
+.PHONY: analyse
+analyse: enzan-check-vhdl-libraries $(ENZAN_ANALYSIS_STAMPS)
+
+# With a stored main library, or with no direct sources, an explicit `run` reads libraries only.
+# Otherwise the shorthand command analyses the direct sources and runs them in one process. Its
+# dependency file attaches included headers to the results target for incremental `regression`.
+ifneq ($(strip $(ENZAN_OUT_LIB)),)
+ENZAN_SUBCOMMAND := run
+ENZAN_RUN_ANALYSIS_ARGS :=
+ENZAN_RUN_SOURCES :=
+else ifeq ($(strip $(VERILOG_SOURCES) $(VHDL_SOURCES)),)
+ENZAN_SUBCOMMAND := run
+ENZAN_RUN_ANALYSIS_ARGS :=
+ENZAN_RUN_SOURCES :=
+else
+ENZAN_SUBCOMMAND :=
+ENZAN_RUN_ANALYSIS_ARGS = $(ENZAN_CONTEXT_ARGS) $(COMPILE_ARGS) \
+                          --depfile $(SIM_BUILD)/enzan.d \
+                          --depfile-target $(COCOTB_RESULTS_FILE)
+ENZAN_RUN_SOURCES = $(VERILOG_SOURCES) $(VHDL_SOURCES)
+endif
+
+ENZAN_ARGS = $(ENZAN_SUBCOMMAND) $(TOPMODULE_ARG) --timescale $(ENZAN_TIMESCALE) \
+             $(ENZAN_PLI) $(ENZAN_WORK) $(ENZAN_INPUT_LIBRARY_ARGS) \
+             $(ENZAN_VHDL_LIBRARY_ARGS) $(ENZAN_OUTPUT_LIBRARY_ARG) $(ENZAN_WAVES) \
+             $(ENZAN_GUI) $(ENZAN_RUN_ANALYSIS_ARGS) $(SIM_ARGS) $(EXTRA_ARGS) \
+             $(ENZAN_RUN_SOURCES) $(call deprecate,PLUSARGS,COCOTB_PLUSARGS)
+
+ENZAN_RESULTS_DEPS := $(ENZAN_ANALYSIS_STAMPS) $(CUSTOM_SIM_DEPS)
+ifeq ($(strip $(ENZAN_OUT_LIB)),)
+ENZAN_RESULTS_DEPS += $(VERILOG_SOURCES) $(VHDL_SOURCES) $(ENZAN_CONTEXT_SOURCES) \
+                      $(CUSTOM_COMPILE_DEPS)
+endif
+
+$(COCOTB_RESULTS_FILE): $(ENZAN_RESULTS_DEPS) | $(SIM_BUILD) enzan-check-vhdl-libraries
+	$(RM) $(COCOTB_RESULTS_FILE)
 
 	GPI_EXTRA=$(GPI_EXTRA) $(COCOTB_ENV) $(SIM_CMD_PREFIX) $(CMD) $(ENZAN_ARGS) $(SIM_CMD_SUFFIX)
 
 	$(call check_results)
 
-debug: $(VERILOG_SOURCES) $(VHDL_SOURCES) $(CUSTOM_COMPILE_DEPS) $(CUSTOM_SIM_DEPS) | $(SIM_BUILD)
+.PHONY: debug
+debug: $(ENZAN_RESULTS_DEPS) | $(SIM_BUILD) enzan-check-vhdl-libraries
 	$(RM) $(COCOTB_RESULTS_FILE)
-	$(foreach LIB, $(VHDL_LIB_ORDER), $(check_vhdl_sources))
-	$(foreach SOURCES_VAR, $(filter VHDL_SOURCES_%, $(.VARIABLES)), $(check_lib_order))
-	$(enzan_analyse_libraries)
 
 	GPI_EXTRA=$(GPI_EXTRA) $(COCOTB_ENV) $(SIM_CMD_PREFIX) gdb --args $(CMD) $(ENZAN_ARGS) $(SIM_CMD_SUFFIX)
 

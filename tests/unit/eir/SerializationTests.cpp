@@ -516,6 +516,15 @@ TEST_F(SerializationTest, SeveralModulesRoundTripInOrder) {
     EXPECT_EQ(decoded[2].name, "third");
 }
 
+TEST_F(SerializationTest, AModulesLogicalLibraryRoundTrips) {
+    ModuleDefinition definition = richModule(buffer);
+    definition.library = "vendor";
+
+    const std::vector<ModuleDefinition> decoded = roundTrip({definition});
+    ASSERT_EQ(decoded.size(), 1U);
+    EXPECT_EQ(decoded.front().library, "vendor");
+}
+
 TEST_F(SerializationTest, ALocationInAFileThatCannotBeResolvedBecomesInvalid) {
     const BufferId other = sources.addBuffer("header.svh", "`define W 8\n");
     ModuleDefinition definition;
@@ -562,6 +571,15 @@ TEST_F(SerializationTest, ContentDiffersWhenTheUnitDoes) {
     other.objects[1].type = Type::bits(9, true, true);
 
     EXPECT_NE(enzan::eir::encodeContent(one, sources), enzan::eir::encodeContent(other, sources));
+}
+
+TEST_F(SerializationTest, ContentDoesNotDifferOnlyByLogicalLibrary) {
+    ModuleDefinition one = richModule(buffer);
+    one.library = "one";
+    ModuleDefinition other = one;
+    other.library = "other";
+
+    EXPECT_EQ(enzan::eir::encodeContent(one, sources), enzan::eir::encodeContent(other, sources));
 }
 
 // ---------------------------------------------------------------------------
