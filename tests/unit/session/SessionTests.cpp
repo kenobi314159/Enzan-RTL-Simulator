@@ -11,6 +11,7 @@
 #include "common/SourceManager.h"
 #include "eir/BitVector.h"
 #include "eir/Design.h"
+#include "eir/Library.h"
 #include "eir/Module.h"
 #include "eir/Type.h"
 #include "runtime/Kernel.h"
@@ -972,10 +973,20 @@ TEST_F(BothLanguagesTest, AComponentNoEntityBindsIsBoundToAModuleOfALibraryDirec
     EXPECT_NE(session.findSignal("/tb/u/u/o"), Session::NoSignal);
 }
 
-TEST_F(BothLanguagesTest, ADesignOfBothLanguagesIsNotStoredInALibraryYet) {
+TEST_F(BothLanguagesTest, ADesignOfBothLanguagesIsStoredInOneLibrary) {
     ASSERT_TRUE(session.openOutputLibrary(workspace / "work")) << firstMessage();
-    EXPECT_FALSE(analyseBoth("tb"));
-    EXPECT_TRUE(reported(DiagCode::NotYetImplemented));
+    ASSERT_TRUE(analyseBoth("tb")) << firstMessage();
+
+    enzan::eir::Library stored;
+    ASSERT_TRUE(stored.open(workspace / "work", engine)) << firstMessage();
+    EXPECT_TRUE(stored.holdsVhdl());
+    ASSERT_EQ(stored.sources().size(), 1U);
+    EXPECT_EQ(stored.sources().front(), workspace / "m.sv");
+
+    enzan::eir::Design cached;
+    const std::vector<std::string> tops{"tb"};
+    ASSERT_TRUE(stored.loadSpecialization(tops, {}, cached));
+    EXPECT_NE(cached.findModule("work.tb"), nullptr);
 }
 #else
 TEST_F(BothLanguagesTest, ADesignOfBothLanguagesNeedsABuildWithBothFrontends) {

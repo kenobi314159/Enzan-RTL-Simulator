@@ -247,15 +247,20 @@ bool Session::analyse(const AnalysisRequest& request) {
     if (!searchLibraries()) return false;
 #endif
 
-    // A run given only libraries whose VHDL declares its top translates it from them.
-    if (files.empty() && hasVhdlLibraries() && !request.top.empty()) return analyseVhdl(request);
+    // A run given only VHDL libraries translates its top from them. A library that also records
+    // SystemVerilog sources goes through the mixed path, which can load its linked EIR
+    // specialisation or rebuild one from those sources and VHDL's analysed units.
+    if (files.empty() && libraryFiles.empty() && hasVhdlLibraries() && !request.top.empty())
+        return analyseVhdl(request);
 
-    if (files.empty()) {
+    if (files.empty() && libraryFiles.empty()) {
         diagnostics.report(DiagCode::NoInputFiles, SourceLocation());
         return false;
     }
 
-    if (std::ranges::any_of(files, isVhdlSource)) {
+    const bool hasVhdlSources = std::ranges::any_of(files, isVhdlSource);
+    const bool mixedLibraries = files.empty() && !libraryFiles.empty() && hasVhdlLibraries();
+    if (hasVhdlSources || mixedLibraries) {
         // A design of VHDL alone with a library search may bind components to modules it finds.
         const bool onlyVhdl = std::ranges::all_of(files, isVhdlSource) && contextFiles.empty()
                               && libraryFiles.empty() && searchFiles.empty()
@@ -704,28 +709,98 @@ bool Session::searchLibraries() {
 #endif
 
 bool Session::analyseMixed(const AnalysisRequest& request) {
-    // Every source is read first, so that one that cannot be is reported as that, whatever its
-    // name says it holds, rather than as a design of two languages. A context or library source is
-    // SystemVerilog, as only SystemVerilog has them.
-    std::vector<std::pair<std::filesystem::path, BufferId>> read;
+    // Every named source is read before a missing-frontend diagnostic, so an unreadable file is
+    // reported as that regardless of what language its extension suggests. The reads themselves
+    // follow the source-free specialisation lookup below, which deliberately needs no sources.
+    std::vector<std::pair<std::filesystem::path, BufferId>> readFiles;
+    std::vector<eir::LibrarySource> storedSystemVerilog;
+    std::vector<eir::LibrarySource> storedVhdl;
     std::set<std::filesystem::path> seen;
-    for (const std::vector<std::filesystem::path>* list : {&contextFiles, &libraryFiles, &files}) {
-        for (const std::filesystem::path& file : *list) {
-            std::error_code failure;
-            std::filesystem::path key = std::filesystem::weakly_canonical(file, failure);
-            if (failure) key = file;
-            if (!seen.insert(std::move(key)).second) continue;
+    const auto read = [&](const std::filesystem::path& file,
+                          std::vector<eir::LibrarySource>* stored) {
+        std::error_code failure;
+        std::filesystem::path key = std::filesystem::weakly_canonical(file, failure);
+        if (failure) key = file;
+        if (!seen.insert(std::move(key)).second) return true;
 
-            const std::optional<BufferId> buffer = readOnce(file);
-            if (!buffer) return false;
-            read.emplace_back(file, *buffer);
+        const std::optional<BufferId> buffer = readOnce(file);
+        if (!buffer) return false;
+        readFiles.emplace_back(file, *buffer);
+        if (stored != nullptr) stored->push_back({.path = file, .buffer = *buffer});
+        return true;
+    };
+
+#if defined(ENZAN_WITH_SYSTEMVERILOG) && defined(ENZAN_WITH_VHDL)
+    // `-G` sets the top level's parameters or generics, so it goes to the top's language, which
+    // is known before analysis only when the top is named.
+    if (!parameters.empty() && request.top.empty()) {
+        diagnostics.report(DiagCode::MixedOverridesWithoutTop, SourceLocation());
+        return false;
+    }
+
+    const std::vector<std::string> tops = analysisTops(request);
+
+    // A linked specialisation is the frontend-independent layer of a mixed library. Consult it
+    // before opening the SystemVerilog sources: an already materialised top needs neither slang
+    // nor NVC again. NVC's library options are retained for resolution functions that elaboration
+    // discovers later.
+    if (files.empty() && !tops.empty()) {
+        auto cached = std::make_unique<eir::Design>();
+        const eir::Library* owner = nullptr;
+        for (const eir::Library& input : inputLibraries) {
+            if (!input.loadSpecialization(tops, parameters, *cached)) continue;
+            owner = &input;
+            break;
         }
+        if (owner != nullptr) {
+            std::string_view simpleTop = request.top;
+            if (const std::size_t dot = simpleTop.find('.'); dot != std::string_view::npos)
+                simpleTop.remove_prefix(dot + 1);
+            const std::vector<std::uint32_t> specialisations =
+                cached->findSpecialisations(simpleTop);
+            const bool svTop =
+                specialisations.size() == 1
+                && cached->module(specialisations.front()).language == eir::Language::SystemVerilog;
+
+            frontend::vhdl::DesignOptions cachedOptions;
+            std::string unusedKeyOptions;
+            if (!setVhdlOptions(request, svTop || request.top.empty(), cachedOptions,
+                                unusedKeyOptions))
+                return false;
+            if (svTop) {
+                cachedOptions.top.clear();
+                cachedOptions.onlyRequested = true;
+            } else {
+                cachedOptions.generics = parameters;
+            }
+
+            design = std::move(cached);
+            loadedFromLibrary = true;
+            vhdlOptions = std::make_unique<frontend::vhdl::DesignOptions>(std::move(cachedOptions));
+            resolutionAnswers.clear();
+            lastFilesRead.clear();
+            return true;
+        }
+    }
+#endif
+
+    // Context remains unstored; SystemVerilog sources from input libraries join this library's
+    // own sources because a cache miss may need to specialise them, while VHDL sources are
+    // recorded separately beside NVC's analysed units.
+    for (const std::filesystem::path& file : contextFiles)
+        if (!read(file, nullptr)) return false;
+    for (const std::filesystem::path& file : libraryFiles)
+        if (!read(file, isVhdlSource(file) ? nullptr : &storedSystemVerilog)) return false;
+    for (const std::filesystem::path& file : files) {
+        std::vector<eir::LibrarySource>* stored =
+            isVhdlSource(file) ? &storedVhdl : &storedSystemVerilog;
+        if (!read(file, stored)) return false;
     }
 
 #if defined(ENZAN_WITH_SYSTEMVERILOG) && defined(ENZAN_WITH_VHDL)
     frontend::vhdl::DesignOptions options;
     frontend::sv::Options svOptions;
-    for (const auto& [file, buffer] : read) {
+    for (const auto& [file, buffer] : readFiles) {
         if (isVhdlSource(file)) {
             options.units.sources.push_back(buffer);
         } else {
@@ -733,18 +808,6 @@ bool Session::analyseMixed(const AnalysisRequest& request) {
             svOptions.buffers.push_back(buffer);
             if (suppliedFiles.contains(file)) svOptions.libraryUnits.push_back(buffer);
         }
-    }
-
-    if (library.isOpen()) {
-        diagnostics.report(DiagCode::NotYetImplemented, SourceLocation(),
-                           "storing a design of both VHDL and SystemVerilog in a library");
-        return false;
-    }
-    // `-G` sets the top level's parameters or generics, so it goes to the top's language, which
-    // is known before analysis only when the top is named.
-    if (!parameters.empty() && request.top.empty()) {
-        diagnostics.report(DiagCode::MixedOverridesWithoutTop, SourceLocation());
-        return false;
     }
 
     // The modules the SystemVerilog declares are what a component no entity is bound to may be
@@ -772,7 +835,8 @@ bool Session::analyseMixed(const AnalysisRequest& request) {
     }
 
     std::string keyOptions;
-    if (!setVhdlOptions(request, true, options, keyOptions)) return false;
+    const bool vhdlSourcesGiven = !options.units.sources.empty() || svTop || request.top.empty();
+    if (!setVhdlOptions(request, vhdlSourcesGiven, options, keyOptions)) return false;
     options.modules = names.declared;
     // A component no entity binds to may bind to a module `-v` or `-y` holds, which is then
     // analysed with the sources.
@@ -932,6 +996,45 @@ bool Session::analyseMixed(const AnalysisRequest& request) {
     }
 
     loadedFromLibrary = false;
+
+    // The two frontend layers share one library directory: NVC's generic VHDL units remain the
+    // reusable analysis form, source-indexed SystemVerilog definitions remain reusable for new
+    // parameterisations, and the linked EIR closure is the common form for this exact top and
+    // its overrides.
+    if (library.isOpen()) {
+        bool storedVhdlUnits = true;
+        if (!storedVhdl.empty()) {
+            std::vector<std::vector<std::string>> declared;
+            declared.reserve(storedVhdl.size());
+            for (const eir::LibrarySource& source : storedVhdl)
+                declared.push_back(frontend::vhdl::declaredUnits(source.buffer, sources));
+            storedVhdlUnits =
+                library.storeVhdl(storedVhdl, sources, keyOptions, declared, diagnostics);
+        }
+
+        library.setOptions(defines, includeDirectories, parameters, scale.precisionExponent());
+        std::set<std::string, std::less<>> alreadyElsewhere;
+        for (const eir::Library& input : inputLibraries) {
+            for (const std::string& unit : input.unitNames()) alreadyElsewhere.insert(unit);
+        }
+
+        std::set<std::filesystem::path> named;
+        for (const auto& [file, buffer] : readFiles) {
+            static_cast<void>(buffer);
+            named.insert(file);
+        }
+        std::vector<std::filesystem::path> dependencies;
+        for (const std::filesystem::path& file : svFilesRead) {
+            if (!named.contains(file)) dependencies.push_back(file);
+        }
+
+        const bool storedSystemVerilogUnits = library.store(
+            storedSystemVerilog, sources, *design, diagnostics, alreadyElsewhere, dependencies);
+        if (storedVhdlUnits && storedSystemVerilogUnits && !tops.empty())
+            static_cast<void>(
+                library.storeSpecialization(tops, parameters, *design, sources, diagnostics));
+    }
+
     vhdlOptions = std::make_unique<frontend::vhdl::DesignOptions>(std::move(options));
     resolutionAnswers.clear();
     lastFilesRead.assign(files.begin(), files.end());
@@ -941,7 +1044,6 @@ bool Session::analyseMixed(const AnalysisRequest& request) {
     return true;
 #else
     static_cast<void>(request);
-    static_cast<void>(read);
 #ifdef ENZAN_WITH_VHDL
     const char* missing = "SYSTEMVERILOG";
 #else

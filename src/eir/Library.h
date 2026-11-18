@@ -156,8 +156,9 @@ public:
 
     /// Stores the EIR specialisation of `tops` for `parameters`.
     ///
-    /// Only units owned by this library are stored. Units from an input library are loaded from
-    /// that input again when this specialisation is used, keeping one owner for every unit.
+    /// The linked closure is stored, including materialised VHDL units from input libraries:
+    /// unlike source-indexed SystemVerilog EIR, NVC's generic units cannot be loaded directly by
+    /// the elaborator. Serialization preserves every definition's logical owner.
     bool storeSpecialization(std::span<const std::string> tops,
                              std::span<const std::string> parameters, const Design& design,
                              const SourceManager& sourceManager,

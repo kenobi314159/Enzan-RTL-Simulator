@@ -1053,18 +1053,12 @@ bool writeDependencyFile(const Invocation& invocation, const enzan::session::Ses
     return false;
 }
 
-/// Analyses, without elaborating, and writes the dependency file `--depfile` asks for. Returns
-/// false having reported.
-bool analyseOnly(const Invocation& invocation, enzan::session::Session& session,
-                 enzan::SourceManager& sources, enzan::DiagnosticEngine& diagnostics) {
-    if (!openLibraries(invocation, session)) return false;
-
-    enzan::session::Session::AnalysisRequest request;
-    if (!collectSources(invocation, sources, diagnostics, request)) return false;
-
-    // An input library's own sources supply the declarations this analysis instantiates, which
-    // is what lets those units be instantiated with whatever parameters are wanted here rather
-    // than only the ones the library stored.
+/// Adds the source context an input library records to an analysis request.
+void addInputLibraryContext(enzan::session::Session& session,
+                            enzan::session::Session::AnalysisRequest& request) {
+    // An input library's own SystemVerilog sources supply the declarations this analysis
+    // instantiates. VHDL is supplied by NVC's analysed units instead, so it is deliberately not
+    // among the paths a library records here.
     request.libraryFiles = session.inputLibrarySources();
 
     // Ahead of this analysis's own, so that a library's own include path and macros are what
@@ -1077,6 +1071,18 @@ bool analyseOnly(const Invocation& invocation, enzan::session::Session& session,
     std::vector<std::string> defines = session.inputLibraryDefines();
     for (const std::string& define : request.defines) defines.push_back(define);
     request.defines = std::move(defines);
+}
+
+/// Analyses, without elaborating, and writes the dependency file `--depfile` asks for. Returns
+/// false having reported.
+bool analyseOnly(const Invocation& invocation, enzan::session::Session& session,
+                 enzan::SourceManager& sources, enzan::DiagnosticEngine& diagnostics) {
+    if (!openLibraries(invocation, session)) return false;
+
+    enzan::session::Session::AnalysisRequest request;
+    if (!collectSources(invocation, sources, diagnostics, request)) return false;
+
+    addInputLibraryContext(session, request);
 
     // Written even when the analysis failed, so that fixing the header it failed on rebuilds
     // rather than being invisible to the build.
@@ -1116,6 +1122,7 @@ ExitStatus prepare(const Invocation& invocation, enzan::session::Session& sessio
         enzan::session::Session::AnalysisRequest request;
         if (!collectSources(invocation, sources, diagnostics, request))
             return ExitStatus::AnalysisFailed;
+        addInputLibraryContext(session, request);
         if (!session.analyse(request)) return ExitStatus::AnalysisFailed;
     }
 
