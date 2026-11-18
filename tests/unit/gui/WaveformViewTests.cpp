@@ -18,6 +18,7 @@
 
 #include <gtest/gtest.h>
 
+#include <QHeaderView>
 #include <QImage>
 #include <QItemSelectionModel>
 #include <QPixmap>
@@ -25,6 +26,7 @@
 #include <QTreeView>
 #include <cstdio>
 
+#include <algorithm>
 #include <map>
 #include <optional>
 
@@ -519,6 +521,42 @@ TEST_F(WaveformViewTest, TracesArePaintedInTheThemeColour) {
         << "the traces were not drawn in the theme's trace colour";
     EXPECT_GT(countOf(counts, theme.color(enzan::gui::ThemeColor::WaveRulerBackground)), 100)
         << "the ruler was not drawn";
+}
+
+TEST_F(WaveformViewTest, EverySelectedSignalListRowIsTintedBesideItsTrace) {
+    showEverythingAndRun(200);
+
+    const QModelIndex first = model->index(0, WaveformModel::NameColumn);
+    const QModelIndex second = model->index(1, WaveformModel::NameColumn);
+    const QModelIndex unselected = model->index(2, WaveformModel::NameColumn);
+    ASSERT_TRUE(first.isValid());
+    ASSERT_TRUE(second.isValid());
+    ASSERT_TRUE(unselected.isValid());
+
+    // This is the state Ctrl- or Shift-selection leaves behind: one current row and another
+    // selected row. The canvas must mirror all of the list's selected rows, not only current.
+    QItemSelectionModel* selection = treeView->selectionModel();
+    selection->select(first, QItemSelectionModel::ClearAndSelect | QItemSelectionModel::Rows);
+    selection->setCurrentIndex(first, QItemSelectionModel::NoUpdate);
+    selection->select(second, QItemSelectionModel::Select | QItemSelectionModel::Rows);
+
+    const QImage rendered = render();
+    const QRgb selected = theme.color(enzan::gui::ThemeColor::WaveSelectedRow).rgb();
+    const auto selectedPixelsIn = [this, &rendered, selected](const QModelIndex& index) {
+        const QRect row = treeView->visualRect(index);
+        const int top = treeView->header()->height() + row.top();
+        int pixels = 0;
+        for (int y = std::max(0, top); y < std::min(rendered.height(), top + row.height()); ++y) {
+            for (int x = 0; x < rendered.width(); ++x) {
+                if (rendered.pixel(x, y) == selected) ++pixels;
+            }
+        }
+        return pixels;
+    };
+
+    EXPECT_GT(selectedPixelsIn(first), 100);
+    EXPECT_GT(selectedPixelsIn(second), 100);
+    EXPECT_EQ(selectedPixelsIn(unselected), 0);
 }
 
 TEST_F(WaveformViewTest, ANewThemeReachesTracesAlreadyDrawn) {

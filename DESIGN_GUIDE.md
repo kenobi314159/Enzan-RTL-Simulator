@@ -1387,7 +1387,8 @@ they are decided here.
 - A row may be **highlighted** with one of five trace colours from the theme. The colour applies
   to known wave lines and dense-activity fills; semantic colours such as an unknown value's red
   and a high-impedance bit's blue take precedence. Highlighting does not colour the row's name or
-  background, leaving the background tint to show which row is selected.
+  background, leaving the background tint to show the rows selected in the signal list. Every
+  selected row is tinted beside its trace; the current row remains the one cursor commands use.
 
 ### 10.8 Signal list files
 

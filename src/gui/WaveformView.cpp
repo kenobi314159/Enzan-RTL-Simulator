@@ -631,11 +631,14 @@ void WaveformView::paintEvent(QPaintEvent* event) {
     }
 
     // Selection backgrounds first and unclipped, including the part of a selected row the
-    // design has not been simulated to yet.
+    // design has not been simulated to yet. The current row remains the one cursor commands
+    // act on, but every row in the shared list selection gets the same tint on its trace.
     const QRect area = traceArea();
+    const int currentRow = selectedRow();
     painter.save();
     painter.setClipRect(area);
-    for (const RowGeometry& geometry : visible) paintRowBackground(painter, geometry, area);
+    for (const RowGeometry& geometry : visible)
+        paintRowBackground(painter, geometry, area, currentRow);
     painter.restore();
 
     // A parameter is not clipped at the recorded extent the way a trace is. A trace stopping
@@ -668,13 +671,16 @@ void WaveformView::paintEvent(QPaintEvent* event) {
 }
 
 void WaveformView::paintRowBackground(QPainter& painter, const RowGeometry& geometry,
-                                      const QRect& area) {
+                                      const QRect& area, int currentRow) {
     const QRect rowRect(area.left(), geometry.top, area.width(), geometry.height);
     if (rowRect.bottom() < area.top() || rowRect.top() > area.bottom()) return;
 
-    // The selected row is tinted because it is what Tab steps along and what a click just
-    // picked: a reader has to be able to see which one that is.
-    if (geometry.rowId == selectedRow()) {
+    // The current row is what Tab steps along, while the selection model also holds the rows
+    // picked with Ctrl or Shift. Both are visible in the list, so both must be visible beside
+    // their traces as well.
+    const QItemSelectionModel* selection = rows != nullptr ? rows->selectionModel() : nullptr;
+    const QModelIndex index = waveModel->indexOfRow(geometry.rowId);
+    if (geometry.rowId == currentRow || (selection != nullptr && selection->isSelected(index))) {
         painter.fillRect(rowRect, theme->color(ThemeColor::WaveSelectedRow));
     }
 }
