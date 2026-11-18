@@ -129,6 +129,13 @@ protected:
         return nullptr;
     }
 
+    [[nodiscard]] QDockWidget* dock(const QString& name) const {
+        for (QDockWidget* candidate : window->findChildren<QDockWidget*>()) {
+            if (candidate->objectName() == name) return candidate;
+        }
+        return nullptr;
+    }
+
     /// Selects `scope` in the Structure window and triggers its menu entry `label`.
     void insert(const QString& scope, const QString& label) {
         QTreeView* tree = structure();
@@ -225,6 +232,33 @@ protected:
     Theme theme;
     std::unique_ptr<MainWindow> window;
 };
+
+// ---------------------------------------------------------------------------
+// The default layout
+// ---------------------------------------------------------------------------
+
+TEST_F(MainWindowTest, TheDefaultLayoutLeavesTheWaveFullWidthAboveTheContextPanes) {
+    window->show();
+    QCoreApplication::processEvents();
+
+    QDockWidget* structureDock = dock(QStringLiteral("structure"));
+    QDockWidget* objectsDock = dock(QStringLiteral("objects"));
+    QDockWidget* transcriptDock = dock(QStringLiteral("transcript"));
+    QTreeView* rows = waveRows();
+    ASSERT_NE(structureDock, nullptr);
+    ASSERT_NE(objectsDock, nullptr);
+    ASSERT_NE(transcriptDock, nullptr);
+    ASSERT_NE(rows, nullptr);
+
+    EXPECT_EQ(window->dockWidgetArea(structureDock), Qt::BottomDockWidgetArea);
+    EXPECT_EQ(window->dockWidgetArea(objectsDock), Qt::BottomDockWidgetArea);
+    EXPECT_EQ(window->dockWidgetArea(transcriptDock), Qt::BottomDockWidgetArea);
+    EXPECT_EQ(structureDock->geometry().top(), objectsDock->geometry().top());
+    EXPECT_EQ(objectsDock->geometry().top(), transcriptDock->geometry().top());
+
+    const QRect waveRowsRect(rows->mapTo(window.get(), QPoint()), rows->size());
+    EXPECT_LT(waveRowsRect.bottom(), structureDock->geometry().top());
+}
 
 // ---------------------------------------------------------------------------
 // Grouped

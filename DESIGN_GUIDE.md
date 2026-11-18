@@ -1224,7 +1224,9 @@ The layout follows Modelsim, which is what users expect:
 | Processes | active processes and their state |
 
 Docking uses `QDockWidget`, and the layout is kept in the configuration directory (10.9). Wave and
-Source share the central area as tabs, since each wants the whole width.
+Source share the central area as tabs, since each wants the whole width. The default keeps that
+width for Wave: Structure, Objects and Transcript share the row below it, with Structure and
+Objects each as wide as Wave's Signal and Value columns together.
 
 **A served kernel's own output is part of its transcript.** A VPI application prints to standard
 output, never through Enzan, so while serving a front end the kernel captures its standard output,
