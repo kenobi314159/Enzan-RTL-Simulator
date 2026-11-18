@@ -379,7 +379,7 @@ bool Session::analyse(const AnalysisRequest& request) {
     options.timeUnitExponent = defaultScale.precisionExponent();
     options.refineTimeUnit = !scaleChosen && !library.isOpen();
     options.runTimeUnit = &runTimeUnit;
-    options.topModules = requestedTops;
+    if (files.empty()) options.topModules = requestedTops;
     options.parameterOverrides = parameters;
 
     std::unique_ptr<eir::Design> analysed = frontend::sv::analyse(options, sources, diagnostics);
