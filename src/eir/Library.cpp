@@ -126,6 +126,14 @@ constexpr std::string_view VhdlEntryMagic = "enzan-vhdl-entry\n";
 /// whose presence says the library holds delays counted in its time unit.
 constexpr std::string_view VhdlEntryExtension = ".vhdlentry";
 
+/// Prefixes a frontend-independent EIR specialisation. The key follows on its own line, then the
+/// ordinary EIR encoding of its units.
+constexpr std::string_view SpecializationMagic = "enzan-specialization\n";
+
+constexpr std::string_view SpecializationExtension = ".eirspec";
+
+constexpr std::string_view SpecializationDirectory = "eir";
+
 /// A VHDL source's entry: its key and the units it declares.
 struct VhdlEntry {
     std::string key;
@@ -541,6 +549,119 @@ bool Library::store(std::span<const LibrarySource> sources, const SourceManager&
     return allWritten;
 }
 
+std::string Library::analysisStamp() const {
+    if (!opened) return {};
+
+    // The paths distinguish two sources whose keys happened to be alike, and sorting keeps the
+    // stamp independent of directory iteration order.
+    std::vector<std::pair<std::filesystem::path, std::string>> entries;
+    std::error_code failure;
+    for (const auto& item : std::filesystem::directory_iterator(directory, failure)) {
+        if (failure) return {};
+
+        const std::filesystem::path extension = item.path().extension();
+        if (extension != EntryExtension && extension != VhdlEntryExtension) continue;
+        const std::optional<std::string> contents = readWholeFile(item.path());
+        if (!contents.has_value()) continue;
+        if (extension == EntryExtension) {
+            const std::optional<EntryHeader> header = readEntryHeader(*contents);
+            if (!header.has_value() || contents->size() < header->keyOffset + DigestHexLength)
+                continue;
+            entries.emplace_back(item.path().filename(),
+                                 contents->substr(header->keyOffset, DigestHexLength));
+        } else {
+            const std::optional<VhdlEntry> entry = readVhdlEntry(*contents);
+            if (entry.has_value()) entries.emplace_back(item.path().filename(), entry->key);
+        }
+    }
+    if (entries.empty()) return {};
+    std::ranges::sort(entries);
+
+    Digest digest;
+    for (const auto& [path, key] : entries) {
+        digest.add(path.string());
+        digest.add(key);
+    }
+    return digest.hex();
+}
+
+std::string Library::specializationKey(std::span<const std::string> tops,
+                                       std::span<const std::string> parameters) const {
+    const std::string stamp = analysisStamp();
+    if (stamp.empty() || tops.empty()) return {};
+
+    Digest digest;
+    digest.add(std::to_string(SerializationFormatVersion));
+    digest.add(versionLine());
+    digest.add(logicalName);
+    digest.add(stamp);
+    for (const std::string& top : tops) digest.add("top " + top);
+    for (const std::string& parameter : parameters) digest.add("parameter " + parameter);
+    return digest.hex();
+}
+
+std::filesystem::path Library::specializationPath(std::string_view key) const {
+    return directory / SpecializationDirectory
+           / (std::string(key) + std::string(SpecializationExtension));
+}
+
+bool Library::loadSpecialization(std::span<const std::string> tops,
+                                 std::span<const std::string> parameters, Design& design) const {
+    if (!opened) return false;
+    const std::string key = specializationKey(tops, parameters);
+    if (key.empty()) return false;
+
+    const std::optional<std::string> contents = readWholeFile(specializationPath(key));
+    if (!contents.has_value() || !contents->starts_with(SpecializationMagic)) return false;
+    const std::size_t keyOffset = SpecializationMagic.size();
+    if (contents->size() < keyOffset + DigestHexLength
+        || contents->compare(keyOffset, DigestHexLength, key) != 0)
+        return false;
+
+    const auto noBuffers = [](std::string_view) { return BufferId(); };
+    std::vector<ModuleDefinition> decoded;
+    if (!decodeModules(std::string_view(*contents).substr(keyOffset + DigestHexLength), noBuffers,
+                       decoded))
+        return false;
+
+    for (ModuleDefinition& definition : decoded) {
+        definition.library = logicalName;
+        design.addModule(std::move(definition));
+    }
+    return true;
+}
+
+bool Library::storeSpecialization(std::span<const std::string> tops,
+                                  std::span<const std::string> parameters, const Design& design,
+                                  const SourceManager& sourceManager,
+                                  DiagnosticEngine& diagnostics) const {
+    if (!opened) return false;
+    const std::string key = specializationKey(tops, parameters);
+    if (key.empty()) return false;
+
+    // A specialisation may have been produced against input libraries. Their units remain owned
+    // by those libraries and are loaded from them again; only this library's own units belong in
+    // this cache entry. A freshly translated unit has no library stamped on it yet.
+    std::vector<ModuleDefinition> owned;
+    for (const ModuleDefinition& definition : design.modules()) {
+        if (definition.library.empty() || definition.library == logicalName)
+            owned.push_back(definition);
+    }
+
+    std::error_code failure;
+    std::filesystem::create_directories(directory / SpecializationDirectory, failure);
+    const std::filesystem::path target = specializationPath(key);
+    if (!failure) {
+        std::string payload(SpecializationMagic);
+        payload += key;
+        payload += encodeModules(owned, sourceManager);
+        if (writeWholeFile(target, payload)) return true;
+    }
+
+    diagnostics.report(DiagCode::LibraryWriteFailed, SourceLocation(), target.string());
+    return false;
+}
+
 std::optional<std::int8_t> Library::timeUnit() const {
     // A library emptied by `lib clean` keeps its index, and so the unit it last held; it holds
     // no units in it any more, so it can be filled in another.
@@ -761,6 +882,13 @@ std::size_t Library::clean() {
         if (extension != EntryExtension && extension != VhdlEntryExtension) continue;
         if (std::filesystem::remove(entry.path(), failure)) ++removed;
     }
+    for (const auto& entry :
+         std::filesystem::directory_iterator(directory / SpecializationDirectory, failure)) {
+        if (failure) break;
+        if (entry.path().extension() != SpecializationExtension) continue;
+        if (std::filesystem::remove(entry.path(), failure)) ++removed;
+    }
+    std::filesystem::remove_all(directory / SpecializationDirectory, failure);
     std::filesystem::remove_all(vhdlDirectory(), failure);
     return removed;
 }

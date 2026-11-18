@@ -662,6 +662,81 @@ TEST_F(StoredLibraryTest, TheVhdlStampChangesWhenItsVhdlIsAnalysedAgain) {
     EXPECT_NE(library.vhdlStamp(), first);
 }
 
+TEST_F(StoredLibraryTest, EirSpecializationsAreSharedByFrontendAnalysisEntries) {
+    const LibrarySource file = source("counter.vhd", "entity counter is end entity;\n");
+    analysedByNvc(library);
+    const std::vector<std::vector<std::string>> units{{"counter"}};
+    ASSERT_TRUE(library.storeVhdl({&file, 1}, sources, VhdlOptions, units, engine));
+
+    const std::vector<std::string> tops{"counter"};
+    const std::vector<std::string> four{"Width=4"};
+    ASSERT_TRUE(library.storeSpecialization(tops, four, designWith("counter$Width_4", file.buffer),
+                                            sources, engine));
+
+    Design loaded;
+    ASSERT_TRUE(library.loadSpecialization(tops, four, loaded));
+    ASSERT_EQ(loaded.size(), 1U);
+    EXPECT_EQ(loaded.module(0).name, "counter$Width_4");
+    EXPECT_EQ(loaded.module(0).library, "work");
+
+    const std::vector<std::string> eight{"Width=8"};
+    Design missing;
+    EXPECT_FALSE(library.loadSpecialization(tops, eight, missing));
+}
+
+TEST_F(StoredLibraryTest, VhdlEirSpecializationsAccumulateByGenericValues) {
+    const LibrarySource file = source("counter.vhd", "entity counter is end entity;\n");
+    analysedByNvc(library);
+    const std::vector<std::vector<std::string>> units{{"counter"}};
+    ASSERT_TRUE(library.storeVhdl({&file, 1}, sources, VhdlOptions, units, engine));
+
+    const std::vector<std::string> tops{"counter"};
+    const std::vector<std::string> four{"Width=4"};
+    const std::vector<std::string> eight{"Width=8"};
+    ASSERT_TRUE(library.storeSpecialization(tops, four, designWith("counter$Width_4", file.buffer),
+                                            sources, engine));
+    ASSERT_TRUE(library.storeSpecialization(tops, eight, designWith("counter$Width_8", file.buffer),
+                                            sources, engine));
+
+    Design loadedFour;
+    ASSERT_TRUE(library.loadSpecialization(tops, four, loadedFour));
+    EXPECT_NE(loadedFour.findModule("counter$Width_4"), nullptr);
+    Design loadedEight;
+    ASSERT_TRUE(library.loadSpecialization(tops, eight, loadedEight));
+    EXPECT_NE(loadedEight.findModule("counter$Width_8"), nullptr);
+}
+
+TEST_F(StoredLibraryTest, ReanalysisInvalidatesEirSpecializations) {
+    const LibrarySource before = source("counter.vhd", "entity counter is end entity;\n");
+    analysedByNvc(library);
+    const std::vector<std::vector<std::string>> units{{"counter"}};
+    ASSERT_TRUE(library.storeVhdl({&before, 1}, sources, VhdlOptions, units, engine));
+
+    const std::vector<std::string> tops{"counter"};
+    ASSERT_TRUE(library.storeSpecialization(tops, {}, designWith("counter", before.buffer), sources,
+                                            engine));
+
+    const LibrarySource after =
+        source("counter.vhd", "entity counter is port (q : out bit); end entity;\n");
+    ASSERT_TRUE(library.storeVhdl({&after, 1}, sources, VhdlOptions, units, engine));
+    Design stale;
+    EXPECT_FALSE(library.loadSpecialization(tops, {}, stale));
+}
+
+TEST_F(StoredLibraryTest, CleaningRemovesEirSpecializations) {
+    const LibrarySource file = source("counter.vhd", "entity counter is end entity;\n");
+    analysedByNvc(library);
+    const std::vector<std::vector<std::string>> units{{"counter"}};
+    ASSERT_TRUE(library.storeVhdl({&file, 1}, sources, VhdlOptions, units, engine));
+    const std::vector<std::string> tops{"counter"};
+    ASSERT_TRUE(
+        library.storeSpecialization(tops, {}, designWith("counter", file.buffer), sources, engine));
+
+    EXPECT_EQ(library.clean(), 2U);
+    Design loaded;
+    EXPECT_FALSE(library.loadSpecialization(tops, {}, loaded));
+}
+
 TEST_F(StoredLibraryTest, CleaningRemovesEveryEntryAndNvcsUnits) {
     const LibrarySource sv = source("a.sv", "module a; endmodule\n");
     library.setOptions({}, {}, {}, Picoseconds);

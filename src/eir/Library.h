@@ -143,6 +143,26 @@ public:
     /// The number of entries `load` found, for the transcript line that says so.
     [[nodiscard]] std::size_t entriesLoaded() const noexcept { return loadedCount; }
 
+    /// Loads the EIR specialisation of `tops` for `parameters`, or reports a cache miss by
+    /// returning false.
+    ///
+    /// A specialisation is common to every frontend: VHDL materialises one from NVC's generic
+    /// analysed units, while SystemVerilog materialises one through slang. Its key includes the
+    /// current analysis entries, so changing either frontend's inputs makes an older
+    /// specialisation unreachable without having to remove it first.
+    [[nodiscard]] bool loadSpecialization(std::span<const std::string> tops,
+                                          std::span<const std::string> parameters,
+                                          Design& design) const;
+
+    /// Stores the EIR specialisation of `tops` for `parameters`.
+    ///
+    /// Only units owned by this library are stored. Units from an input library are loaded from
+    /// that input again when this specialisation is used, keeping one owner for every unit.
+    bool storeSpecialization(std::span<const std::string> tops,
+                             std::span<const std::string> parameters, const Design& design,
+                             const SourceManager& sourceManager,
+                             DiagnosticEngine& diagnostics) const;
+
     /// Adds every unit this library holds to `design`, for a library being read rather than
     /// written (`--in-lib`).
     ///
@@ -257,6 +277,14 @@ private:
     /// The file `source`'s VHDL entry lives in: named as its EIR one would be, and kept apart
     /// from those, since it holds no units of EIR and no time unit.
     [[nodiscard]] std::filesystem::path vhdlEntryPath(const LibrarySource& source) const;
+
+    /// A digest of every frontend analysis entry this library currently holds.
+    [[nodiscard]] std::string analysisStamp() const;
+
+    /// The key and path of one EIR specialisation under the current analysis stamp.
+    [[nodiscard]] std::string specializationKey(std::span<const std::string> tops,
+                                                std::span<const std::string> parameters) const;
+    [[nodiscard]] std::filesystem::path specializationPath(std::string_view key) const;
 
     /// The staleness key for `source`'s VHDL entry.
     [[nodiscard]] static std::string vhdlEntryKey(const LibrarySource& source,
