@@ -269,6 +269,25 @@ bool Session::analyse(const AnalysisRequest& request) {
     }
 
 #ifdef ENZAN_WITH_SYSTEMVERILOG
+    // A parameterised SystemVerilog top explicitly materialised during library analysis uses the
+    // same frontend-independent EIR specialisation as VHDL and a mixed design. On a miss the
+    // source-backed path below remains available for a value the library has not seen.
+    const std::vector<std::string> requestedTops = analysisTops(request);
+    if (files.empty() && !requestedTops.empty()) {
+        auto cached = std::make_unique<eir::Design>();
+        for (const eir::Library& input : inputLibraries) {
+            if (!input.loadSpecialization(requestedTops, parameters, *cached)) continue;
+            design = std::move(cached);
+            loadedFromLibrary = true;
+#ifdef ENZAN_WITH_VHDL
+            vhdlOptions.reset();
+#endif
+            resolutionAnswers.clear();
+            lastFilesRead.clear();
+            return true;
+        }
+    }
+
     // Read here rather than by the frontend, so that each file has exactly one buffer: the
     // manager does not deduplicate, and a second buffer per file makes a location's identity
     // depend on which pass produced it.
@@ -360,6 +379,7 @@ bool Session::analyse(const AnalysisRequest& request) {
     options.timeUnitExponent = defaultScale.precisionExponent();
     options.refineTimeUnit = !scaleChosen && !library.isOpen();
     options.runTimeUnit = &runTimeUnit;
+    options.topModules = requestedTops;
     options.parameterOverrides = parameters;
 
     std::unique_ptr<eir::Design> analysed = frontend::sv::analyse(options, sources, diagnostics);

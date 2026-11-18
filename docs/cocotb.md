@@ -61,8 +61,10 @@ cocotb's standard `VHDL_LIB_ORDER` and `VHDL_SOURCES_<library>` variables build 
 libraries incrementally in the order given. Each one is analysed against `ENZAN_INPUT_LIBRARIES`
 and the VHDL libraries before it; the main library is analysed against all of them.
 
-`ENZAN_OUT_LIB` currently refuses a main design containing both languages, because Enzan cannot
-store a mixed-language design yet. Leave it unset for that design: auxiliary and input libraries
-remain available, while the main sources use the supported one-shot mixed-language flow.
+`ENZAN_OUT_LIB` also accepts a main design containing both languages. The library keeps each
+frontend's reusable analysis form and a linked EIR specialisation for the selected toplevel and its
+parameter or generic values. A later `make sim` of that same specialisation does not run either
+frontend again; a value not stored yet falls back to the recorded SystemVerilog sources and VHDL's
+analysed units.
 
 Other VPI applications load with `enzan --vpi <library>[:<entry>]`, and VHPI ones with `--vhpi`.

@@ -91,6 +91,14 @@ the other side's drivers through.
 A VHDL port that a SystemVerilog instance leaves unconnected keeps its default value, as a VHDL
 port left `open` does, and Enzan warns that it does (ENZ3019).
 
+## Libraries
+
+`--out-lib` stores a mixed-language design in one library. The container keeps SystemVerilog's
+source-indexed entries, VHDL's generic NVC units, and a linked EIR specialisation for the requested
+top and its overrides. An exact `run --in-lib` uses the EIR directly; a new specialisation reads the
+recorded SystemVerilog sources and reuses VHDL's analysed units. See [Libraries, file lists and
+building with make](libraries.md#mixed-language-libraries).
+
 ## What does not cross yet
 
 Each is refused by name rather than simulated wrongly:
@@ -101,7 +109,6 @@ Each is refused by name rather than simulated wrongly:
   from SystemVerilog, where nothing gives it bounds (ENZ2005);
 - `entity work.m` naming a SystemVerilog module: declare a component instead;
 - choosing an architecture other than the default from SystemVerilog;
-- storing a design of both languages in a library (`--out-lib`);
 - `-G` without `--top`, which it needs to tell which language's top level it sets (ENZ6034).
 
 ## VPI and VHPI

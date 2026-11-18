@@ -580,11 +580,23 @@ are analysed from NVC's sources when Enzan is built and found from the executabl
 (11.5), without being named, since `library ieee;` has to resolve with no flag. Nothing a user does
 writes to them. A library the user names `ieee` replaces them.
 
-**A library holds VHDL as NVC's analysed units, not as EIR.** A VHDL unit is analysed against the
-units analysed before it, which only NVC's units can serve, and a design is translated into EIR for
-the generic values its run gives it (5.2), which no library can know. An entry holds a source's key
-and the units it declares. As in NVC and GHDL, a library accumulates: analysing a source again
-replaces its units, and a unit no source declares any more stays until `lib clean`.
+**A library's reusable VHDL base is NVC's analysed units, not EIR.** A VHDL unit is analysed against
+the units analysed before it, which only NVC's units can serve, and a design is translated into EIR
+for the generic values its run gives it (5.2). An entry holds a source's key and the units it
+declares. As in NVC and GHDL, a library accumulates: analysing a source again replaces its units,
+and a unit no source declares any more stays until `lib clean`.
+
+**Materialised top-level specialisations are EIR for both frontends.** Their key includes the top
+levels, parameter or generic overrides, the EIR format and Enzan version, and a stamp of every
+SystemVerilog and VHDL analysis entry in the library. A hit therefore runs without either frontend;
+an edited entry or another override is a miss. The serialised closure carries every unit's logical
+library, including VHDL units materialised from an input library.
+
+**One library may hold both languages.** Its frontend-specific base layers remain what each
+frontend can reuse — source-indexed EIR for SystemVerilog and NVC units for VHDL — while its linked
+hierarchy is the common EIR specialisation above. An unseen mixed specialisation still reads the
+recorded SystemVerilog sources; source-free reuse for parameter values never materialised remains a
+separate feature.
 
 **A SystemVerilog hit is all or nothing**, a property of the frontend rather than of the store.
 Every source goes to one slang compilation, because a module cannot be type-checked without the
@@ -926,10 +938,12 @@ when it is one of the names above, so a source file called `run.sv` is still a s
 - **A top level's parameters and generics are set with `-G NAME=VALUE`**, or `-GNAME=VALUE`, the
   value read in the top's language: a SystemVerilog expression, or a VHDL value as NVC's and
   GHDL's `-g` read one, so that a makefile written for either passes the same text. slang applies
-  an override while analysing, so it is in a library entry's key; a VHDL generic is set where the
-  design is translated, so it is in no key, and a run from a library takes it. In a design of both
-  languages `-G` goes to the top's language, which `--top` has to name. One that names no
-  parameter or generic is reported, since a misspelt override is otherwise invisible.
+  an override while analysing, so it is in a SystemVerilog source entry's key; a VHDL generic is
+  set where the design is translated, so it is not in the VHDL source entry. Both are in the
+  frontend-independent EIR specialisation key, and a library-only run selects that exact
+  specialisation or materialises a new one from the reusable frontend layer. In a design of both
+  languages `-G` goes to the top's language, which `--top` has to name. One that names no parameter
+  or generic is reported, since a misspelt override is otherwise invisible.
 - **Random numbers are drawn from `--seed N`**, 0 by default (3.8). `$random` is IEEE 1364's
   reference generator, bit for bit, so a seed draws in Enzan what it draws elsewhere. `$urandom` and
   `$urandom_range` draw from a generator per process, derived from the seed and the process's name,
@@ -988,6 +1002,12 @@ enzan lib clean <dir>                 empties it, keeping the library
   and EIR does not feed back into it, so a library records the sources it was analysed from and a
   design analysed against it reads them again. **VHDL is the exception**: a VHDL library holds NVC's
   units, so `use uart.uart_pkg.all` resolves against `--in-lib` with no source read again.
+- **A top and its overrides are cached in frontend-independent EIR.** The key includes the current
+  entries of both languages. An exact mixed-language, VHDL or SystemVerilog specialisation therefore
+  runs without another frontend pass, while an unseen SystemVerilog parameterisation still needs
+  the recorded sources.
+- **One library can contain both languages.** It keeps both frontend-specific base forms and the
+  linked EIR closure; `lib list` and `lib clean` operate on the container as one library.
 - **A specialisation is created by the design that needs it**, from the sources it read, and stored
   in its own library unless an input library holds it. **Its name MUST be a function of its
   parameter values**, and of the interfaces its ports connect to, never a counter, which would give
@@ -1184,8 +1204,8 @@ the toplevel's language's library is loaded with `--vpi` or `--vhpi` and the oth
 `ENZAN_INPUT_LIBRARIES` names existing libraries in their search order. Each library
 `VHDL_LIB_ORDER` asks the makefile to build has a stamp and dependency file of its own, and is
 analysed against the libraries before it rather than rebuilt for every simulation. A main design of
-both languages remains in the one-shot flow: `ENZAN_OUT_LIB` refuses it until a library can store a
-mixed-language design (18).
+both languages uses the same `ENZAN_OUT_LIB` flow: its library keeps both frontend analysis forms
+and the linked EIR specialisation (4.4).
 
 ### 9.7 VHPI
 
@@ -2008,7 +2028,7 @@ mistranslated:
   run, and one held across a `wait`.
 - A port of a real, an enumeration other than `std_ulogic`, `bit` and `boolean`, or a physical type
   across the language boundary; a VHDL port of an unconstrained type instantiated from
-  SystemVerilog; storing a design of both languages in a library; a second top level of VHDL.
+  SystemVerilog; a second top level of VHDL.
 - Altera's models of Cyclone V and later families, `altera_lnsim.sv`, which M7.2 holds to no
   reference; among them `altera_pll`'s `string` arguments are refused.
 - In VPI, declared ranges (a vector reports `[width-1:0]`), integer atom types, reals and what

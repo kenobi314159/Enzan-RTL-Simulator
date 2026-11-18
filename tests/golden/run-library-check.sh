@@ -93,10 +93,29 @@ looped=$("$enzan" run --in-lib libs/kernel --timescale ns --delta-limit 5 loopin
 grep -q 'limit of 5' <<<"$looped" \
     || fail "a run from a library did not use its --delta-limit: $looped"
 
-# A macro, an include directory and a parameter override are the analysis's, so a run that
-# analyses nothing refuses them rather than running what the library holds as if taken.
-[[ $(status_of "$enzan" run --in-lib libs/kernel --timescale ns -G WIDTH=8 random_tb) -eq 1 ]] \
-    || fail "-G given to a run from a library was not refused"
+# A stored top-level specialisation takes its parameter override from the run. Hiding the source
+# proves an exact value comes from common EIR; another value misses instead of reusing it.
+cat >parameter.sv <<'EOF'
+module parameter_tb #(parameter int WIDTH = 1);
+    initial begin
+        if (WIDTH == 8) $display("PASS parameter library");
+        else $fatal(1, "WIDTH is %0d", WIDTH);
+    end
+endmodule
+EOF
+"$enzan" lib create libs/parameter >/dev/null || fail "libs/parameter could not be created"
+"$enzan" analyse --timescale ns --out-lib libs/parameter --top parameter_tb -GWIDTH=8 parameter.sv \
+    || fail "the parameterised top could not be stored"
+mv parameter.sv parameter.sv.saved
+parameter_run=$("$enzan" run --in-lib libs/parameter -GWIDTH=8 parameter_tb 2>&1) \
+    || fail "the stored parameterised top did not run: $parameter_run"
+grep -q 'PASS parameter library' <<<"$parameter_run" \
+    || fail "the parameter override did not reach the stored top: $parameter_run"
+[[ $(status_of "$enzan" run --in-lib libs/parameter -GWIDTH=9 parameter_tb) -eq 2 ]] \
+    || fail "a different parameter reused the stored specialisation"
+
+# Macros and include paths have no selected top-level EIR meaning, so a run that analyses no
+# sources refuses them rather than silently ignoring them.
 [[ $(status_of "$enzan" run --in-lib libs/kernel --timescale ns -D FAST random_tb) -eq 1 ]] \
     || fail "-D given to a run from a library was not refused"
 [[ $(status_of "$enzan" elaborate --in-lib libs/kernel --timescale ns +incdir+inc random_tb) -eq 1 ]] \

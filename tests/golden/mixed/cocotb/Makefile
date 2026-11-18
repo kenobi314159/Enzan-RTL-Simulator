@@ -16,4 +16,8 @@ else
 endif
 COCOTB_TEST_MODULES = test_mixed
 
+# Exercise the same separate analysis-library flow for a mixed main design that the two
+# single-language cocotb library tests use.
+ENZAN_OUT_LIB = $(SIM_BUILD)/enzan-libraries/work
+
 include $(shell cocotb-config --makefiles)/Makefile.sim

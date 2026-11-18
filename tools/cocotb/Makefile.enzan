@@ -130,17 +130,7 @@ ifdef VERILOG_INCLUDE_DIRS
     COMPILE_ARGS += $(addprefix -I ,$(VERILOG_INCLUDE_DIRS))
 endif
 
-# Storing both languages in one library is not supported yet. Their ordinary one-shot flow, and a
-# mixed design that reads separately analysed libraries, remain supported when ENZAN_OUT_LIB is
-# unset.
-ENZAN_VERILOG_INPUTS := $(strip $(VERILOG_SOURCES) $(ENZAN_CONTEXT_SOURCES))
-ENZAN_VHDL_INPUTS := $(strip $(VHDL_SOURCES) $(VHDL_LIB_ORDER))
 ifneq ($(strip $(ENZAN_OUT_LIB)),)
-ifneq ($(ENZAN_VERILOG_INPUTS),)
-ifneq ($(ENZAN_VHDL_INPUTS),)
-    $(error ENZAN_OUT_LIB cannot store a mixed-language design yet; leave it unset to use Enzan's one-shot mixed-language flow)
-endif
-endif
 ifeq ($(strip $(VERILOG_SOURCES) $(VHDL_SOURCES)),)
     $(error ENZAN_OUT_LIB was given, but there are no VERILOG_SOURCES or VHDL_SOURCES to analyse into it)
 endif

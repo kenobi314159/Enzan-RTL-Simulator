@@ -39,6 +39,12 @@ source text, the defines, the include path, the time unit and Enzan's version. A
 with anything different is analysed again. Entries are named after their source files, so a build
 can name them, and editing a file rewrites its entry rather than adding another.
 
+**A selected top also has a common EIR specialisation.** Its key includes the top levels, their
+parameter or generic overrides, and the current SystemVerilog and VHDL analysis entries. Once that
+exact hierarchy has been materialised, either language can run it without invoking its frontend
+again. Changing an analysis entry or an override selects another specialisation instead of trusting
+stale EIR.
+
 **A name two libraries both define is an error.** The message names both libraries, and the fix
 is to qualify the name, as in `uart.fifo`. Two copies of the same unit, analysed from the same
 source with the same options, are one unit and not a conflict.
@@ -70,13 +76,27 @@ names it, and appears in its dependency file.
 
 ### VHDL in libraries
 
-A VHDL library holds the units as VHDL analyses them, so one VHDL source can use a unit from
-another library without re-reading its source: `use uart.uart_pkg.all` resolves against the
-library on `--in-lib`. Sources analysed with `--out-lib` go into that library under its name, which
-`library uart;` and `work.` both refer to. A `--work` naming another library is an error.
-Analysing a source again replaces its units, and units that no source declares any more stay until
-`lib clean`. A run given only libraries finds a VHDL top in whichever library declares it, or in
-the one `lib.top` names.
+A VHDL library holds NVC's generic analysed units as its reusable base, so one VHDL source can use
+a unit from another library without re-reading its source: `use uart.uart_pkg.all` resolves against
+the library on `--in-lib`. Translation for a top and its generic values is cached as the same EIR
+specialisation used for SystemVerilog. Sources analysed with `--out-lib` go into that library under
+its name, which `library uart;` and `work.` both refer to. A `--work` naming another library is an
+error. Analysing a source again replaces its units, and units that no source declares any more stay
+until `lib clean`. A run given only libraries finds a VHDL top in whichever library declares it, or
+in the one `lib.top` names.
+
+### Mixed-language libraries
+
+One library can contain both languages. It stores SystemVerilog's source-indexed EIR entries,
+VHDL's NVC units and VHDL source keys, and the linked EIR closure for every top and override set
+that was requested. `lib list` reports units from both base layers, and `lib clean` removes both
+layers and the linked specialisations.
+
+An exact specialisation is source-independent. A cache miss still needs the recorded
+SystemVerilog sources to create an unseen parameterisation, while VHDL can create an unseen generic
+specialisation from NVC's units. This is the same limitation SystemVerilog libraries have when used
+across any library boundary; storing the linked hierarchy does not turn slang's source syntax into
+a generic frontend input.
 
 ## File lists
 

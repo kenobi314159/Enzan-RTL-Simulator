@@ -1108,17 +1108,11 @@ ExitStatus prepare(const Invocation& invocation, enzan::session::Session& sessio
         return ExitStatus::AnalysisFailed;
     if (!hasSources && !openLibraries(invocation, session)) return ExitStatus::AnalysisFailed;
 
-    // A parameter override applies while SystemVerilog is analysed, and a run from libraries
-    // alone analyses none of it.
-    if (!hasSources && !session.hasVhdlLibraries() && !invocation.parameters.empty()) {
-        std::cerr << "enzan: '-G' applies while sources are analysed, and this analyses none; "
-                     "give it to the analysis that stores the top level\n";
-        return ExitStatus::Usage;
-    }
-
-    // A VHDL design is translated for the run that needs it, so a run given only libraries
-    // holding VHDL translates its top from them, with the generics `-G` sets.
-    if (!hasSources && session.hasVhdlLibraries()) {
+    // A VHDL design is translated for the run that needs it. A SystemVerilog parameter override
+    // likewise selects a stored EIR specialisation, or reads the library's recorded sources to
+    // materialise an unseen one. With neither need, elaboration loads the ordinary EIR entries.
+    const bool needsLibraryAnalysis = session.hasVhdlLibraries() || !invocation.parameters.empty();
+    if (!hasSources && needsLibraryAnalysis) {
         enzan::session::Session::AnalysisRequest request;
         if (!collectSources(invocation, sources, diagnostics, request))
             return ExitStatus::AnalysisFailed;
