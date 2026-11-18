@@ -784,6 +784,7 @@ bool WaveformView::sampleInto(int rowId, int columns, std::vector<wavedb::Sample
                        wavedb::Sample{.startTime = timeAxis.start(),
                                       .transitions = 0,
                                       .changeIndex = 0,
+                                      .valueRun = 0,
                                       .anyUnknown = waveRow->constantValue->ref().hasUnknown()});
             return true;
         }
@@ -826,21 +827,20 @@ bool WaveformView::sampleInto(int rowId, int columns, std::vector<wavedb::Sample
             out[column].transitions += child[column].transitions;
             out[column].anyUnknown = out[column].anyUnknown || child[column].anyUnknown;
 
-            if (child[column].changeIndex == wavedb::NoChange) missing[column] = 1;
-            if (column > 0 && child[column].changeIndex != child[column - 1].changeIndex) {
+            if (child[column].valueRun == wavedb::NoChange) missing[column] = 1;
+            if (column > 0 && child[column].valueRun != child[column - 1].valueRun) {
                 boundary[column] = 1;
             }
         }
         started = true;
     }
 
-    // The change index of a merged row is a run number rather than an index into anything: it
-    // only has to differ between columns that show different values, which is what the painter
-    // uses it for.
+    // A merged row has no source change index. Its run only has to differ between columns that
+    // show different values, which is what the painter uses it for.
     std::uint64_t run = 0;
     for (std::size_t column = 0; column < out.size(); ++column) {
         if (column > 0 && boundary[column] != 0) ++run;
-        out[column].changeIndex = missing[column] != 0 ? wavedb::NoChange : run;
+        out[column].valueRun = missing[column] != 0 ? wavedb::NoChange : run;
     }
 
     return true;
@@ -1011,7 +1011,7 @@ void WaveformView::paintOneBitTrace(QPainter& painter, const QRect& area, int ro
             continue;
         }
 
-        if (sample.changeIndex == wavedb::NoChange) {
+        if (sample.valueRun == wavedb::NoChange) {
             previousY = -1;
             ++column;
             continue;
@@ -1019,7 +1019,7 @@ void WaveformView::paintOneBitTrace(QPainter& painter, const QRect& area, int ro
 
         std::size_t run = column;
         while (run < samples.size() && samples[run].transitions == 0
-               && samples[run].changeIndex == sample.changeIndex) {
+               && samples[run].valueRun == sample.valueRun) {
             ++run;
         }
 
@@ -1102,14 +1102,14 @@ void WaveformView::paintBusTrace(QPainter& painter, const QRect& area, int rowId
             continue;
         }
 
-        if (sample.changeIndex == wavedb::NoChange) {
+        if (sample.valueRun == wavedb::NoChange) {
             ++column;
             continue;
         }
 
         std::size_t run = column;
         while (run < samples.size() && samples[run].transitions == 0
-               && samples[run].changeIndex == sample.changeIndex) {
+               && samples[run].valueRun == sample.valueRun) {
             ++run;
         }
 

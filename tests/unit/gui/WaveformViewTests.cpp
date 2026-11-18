@@ -27,6 +27,7 @@
 #include <cstdio>
 
 #include <algorithm>
+#include <cmath>
 #include <map>
 #include <optional>
 
@@ -629,6 +630,56 @@ TEST_F(WaveformViewTest, AConstantBitOfABusyBusIsDrawnAsALevelAndNotAsABusyBar) 
     EXPECT_GT(busy, 0) << "the bit that changes every count should be busy";
     EXPECT_LT(constant * 4, busy) << "a constant bit was filled like a busy one: " << constant
                                   << " against " << busy;
+}
+
+TEST_F(WaveformViewTest, AConstantBusSliceDoesNotDrawItsParentSignalsEdges) {
+    // A bit row happened to hide this defect: redrawing its horizontal level at every parent
+    // change does not make an edge. A multi-bit slice has bus shoulders, though, so grouping it
+    // by the parent's change index drew a shoulder each time any other bit changed. The high
+    // nibble of this counter stays zero for the first fifteen counts while the complete counter
+    // changes on every rising clock edge.
+    SignalInfo count;
+    for (const SignalInfo& info : objectsOf(QStringLiteral("/tb"))) {
+        if (info.name == QStringLiteral("count")) count = info;
+    }
+    ASSERT_EQ(count.width, 8U) << "the fixture's counter is not the width this test assumes";
+
+    const int whole = model->addSignal(count);
+    const int highNibble = model->addSlice(whole, 7, 4);
+    ASSERT_GE(highNibble, 0);
+    model->removeRow(whole);
+    session->subscribe({count.signalIndex});
+
+    constexpr std::uint64_t Duration = 150;
+    session->run(Duration);
+    ASSERT_TRUE(pumpUntilCaughtUp(Duration));
+
+    // The test looks in the middle of a bus row at a time where the high nibble is still zero.
+    // Its horizontal rails are above and below this point. Therefore a trace-coloured pixel here
+    // can only be a spurious vertical bus edge.
+    view->axis().setRange(0, Duration);
+    QCoreApplication::processEvents();
+    const QImage rendered = render();
+    const QModelIndex index = model->indexOfRow(highNibble);
+    ASSERT_TRUE(index.isValid());
+    const QRect listRow = treeView->visualRect(index);
+    ASSERT_TRUE(listRow.isValid());
+
+    const int top = treeView->header()->height() + listRow.top();
+    const int middle = top + (listRow.height() / 2);
+    const QRgb trace = theme.color(enzan::gui::ThemeColor::WaveTrace).rgb();
+    const auto hasVerticalTraceAt = [&](enzan::runtime::SimTime time) {
+        const int x = static_cast<int>(std::lround(view->axis().xOf(time)));
+        for (int dx = -1; dx <= 1; ++dx) {
+            for (int y = middle - 2; y <= middle + 2; ++y) {
+                if (rendered.valid(x + dx, y) && rendered.pixel(x + dx, y) == trace) return true;
+            }
+        }
+        return false;
+    };
+
+    EXPECT_FALSE(hasVerticalTraceAt(75))
+        << "the high nibble did not change at this clock edge, but its bus row drew one";
 }
 
 TEST_F(WaveformViewTest, TheActiveCursorIsPainted) {

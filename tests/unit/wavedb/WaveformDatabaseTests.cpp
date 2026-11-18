@@ -218,9 +218,12 @@ TEST(WaveformDatabaseTests, ABitThatNeverChangesSummarisesToNoTransitions) {
     std::vector<Sample> columns(4);
     database.sample(signal, 5, 205, 3, 2, columns);
 
+    const std::uint64_t run = columns.front().valueRun;
     for (const Sample& column : columns) {
         EXPECT_EQ(column.transitions, 0U) << "a constant bit range is drawn as a level";
         EXPECT_NE(column.changeIndex, enzan::wavedb::NoChange);
+        EXPECT_EQ(column.valueRun, run)
+            << "changes elsewhere in the bus do not end this range's displayed run";
     }
 
     // And the bus itself is busy across the same columns, which is the contrast the row was
