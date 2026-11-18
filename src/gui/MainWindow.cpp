@@ -57,6 +57,17 @@ namespace {
 constexpr const char* GeometryKey = "layout/geometry";
 constexpr const char* WindowStateKey = "layout/state";
 
+/// The width which gives a wave's names and values room to be read together. The Structure and
+/// Objects docks start at that same width below them. They almost never line up due to them
+/// being different from the names and values part in that they stretch dynamically.
+constexpr int DefaultWaveListWidth = 400;
+
+/// The transcript takes the vast majority of the bottom of the default window.
+constexpr int DefaultTranscriptWidth = 1600;
+
+/// The lower panes are useful context, but the waveform is the primary working area.
+constexpr int DefaultBottomPaneHeight = 280;
+
 /// Radix names, in the order the menus offer them. Hexadecimal is first because it is the
 /// default for multi-bit values.
 struct RadixChoice {
@@ -241,7 +252,7 @@ MainWindow::MainWindow(KernelSession& kernelSession, const Theme& initialTheme,
 
     designModel = new DesignTreeModel(this);
     objectsModel = new ObjectsModel(*session, this);
-    waveModel = new WaveformModel(*session, theme, this);
+    waveModel = new WaveformModel(*session, this);
 
     buildDocks();
     buildToolBar();
@@ -322,10 +333,10 @@ void MainWindow::buildDocks() {
         scopeTo(action, structureView);
     }
 
-    auto* structureDock = new Dock(tr("Structure"), this);
+    structureDock = new Dock(tr("Structure"), this);
     structureDock->setObjectName(QStringLiteral("structure"));
     structureDock->setWidget(structureView);
-    addDockWidget(Qt::LeftDockWidgetArea, structureDock);
+    addDockWidget(Qt::BottomDockWidgetArea, structureDock);
 
     // --- Objects -----------------------------------------------------------
 
@@ -366,10 +377,10 @@ void MainWindow::buildDocks() {
     connect(releaseAction, &QAction::triggered, this, &MainWindow::releaseSelectedObjects);
     objectsView->addAction(releaseAction);
 
-    auto* objectsDock = new Dock(tr("Objects"), this);
+    objectsDock = new Dock(tr("Objects"), this);
     objectsDock->setObjectName(QStringLiteral("objects"));
     objectsDock->setWidget(objectsView);
-    addDockWidget(Qt::LeftDockWidgetArea, objectsDock);
+    addDockWidget(Qt::BottomDockWidgetArea, objectsDock);
 
     // --- Wave --------------------------------------------------------------
     //
@@ -418,7 +429,7 @@ void MainWindow::buildDocks() {
     waveTab->addWidget(waveView);
     waveTab->setStretchFactor(0, 0);
     waveTab->setStretchFactor(1, 1);
-    waveTab->setSizes({340, 900});
+    waveTab->setSizes({DefaultWaveListWidth, 600});
 
     // Wave and Source are tabs of the central area rather than a dock beside it, which is what
     // Modelsim does and what the two need: each wants the whole width. A waveform squeezed
@@ -483,7 +494,7 @@ void MainWindow::buildDocks() {
         connect(entry, &QAction::triggered, this, [this, slot] { setSelectedHighlight(slot); });
         highlightActions.at(static_cast<std::size_t>(slot - 1)) = entry;
     }
-    connect(highlightMenu->addAction(tr("None")), &QAction::triggered, this,
+    connect(highlightMenu->addAction(tr("Default")), &QAction::triggered, this,
             [this] { setSelectedHighlight(0); });
     waveRowsView->addAction(highlightMenu->menuAction());
     addWaveSeparator();
@@ -496,10 +507,16 @@ void MainWindow::buildDocks() {
 
     transcriptView = new TranscriptView(theme, this);
 
-    auto* transcriptDock = new Dock(tr("Transcript"), this);
+    transcriptDock = new Dock(tr("Transcript"), this);
     transcriptDock->setObjectName(QStringLiteral("transcript"));
     transcriptDock->setWidget(transcriptView);
     addDockWidget(Qt::BottomDockWidgetArea, transcriptDock);
+
+    // The waveform is the centre of the window. The context panes therefore share the bottom
+    // row instead of taking a permanent strip from its right, and Structure and Objects each
+    // start as wide as the wave's signal-and-value list.
+    splitDockWidget(structureDock, objectsDock, Qt::Horizontal);
+    splitDockWidget(objectsDock, transcriptDock, Qt::Horizontal);
 }
 
 void MainWindow::setTheme(const Theme& replacement) {
@@ -541,8 +558,7 @@ void MainWindow::applyTheme() {
         highlightActions.at(static_cast<std::size_t>(slot - 1))->setIcon(QIcon(swatch));
     }
 
-    // A highlighted name is the model's background, read as the list paints, and a trace is a
-    // picture the canvas keeps; each is told to look again.
+    // A trace is a picture the canvas keeps, so it has to be told to use the new theme.
     waveRowsView->viewport()->update();
     waveView->themeChanged();
     transcriptView->applyTheme();
@@ -1545,6 +1561,17 @@ void MainWindow::updateActions() {
 // Layout
 // ---------------------------------------------------------------------------
 
+void MainWindow::sizeDefaultDocks() {
+    // Do this after the default window size is set: resizeDocks takes pixels, and applying it
+    // while a not-yet-restored window is tiny would turn these into proportions of that size.
+    resizeDocks({structureDock, objectsDock, transcriptDock},
+                {DefaultWaveListWidth, DefaultWaveListWidth, DefaultTranscriptWidth},
+                Qt::Horizontal);
+    resizeDocks({structureDock, objectsDock, transcriptDock},
+                {DefaultBottomPaneHeight, DefaultBottomPaneHeight, DefaultBottomPaneHeight},
+                Qt::Vertical);
+}
+
 void MainWindow::restoreLayout() {
     // From the configuration directory. A window with none opens at its first size, which is
     // also what a test's window does, whoever runs it.
@@ -1561,7 +1588,10 @@ void MainWindow::restoreLayout() {
     else
         resize(1400, 900);
 
-    if (!state.isEmpty()) restoreState(state);
+    if (!state.isEmpty())
+        restoreState(state);
+    else
+        sizeDefaultDocks();
 }
 
 void MainWindow::saveLayout() {

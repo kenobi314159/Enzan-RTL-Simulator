@@ -28,7 +28,7 @@ enum class ThemeColor : std::uint8_t {
 /// Returns the theme-script key for `color`, for example `"wave.trace"`.
 [[nodiscard]] const char* themeKey(ThemeColor color) noexcept;
 
-/// How many backgrounds a wave row may be highlighted with.
+/// How many trace colours a wave row may be highlighted with.
 constexpr int HighlightSlots = 5;
 
 /// Returns the colour of highlight slot `slot`, which must be 1 through `HighlightSlots`.
@@ -36,6 +36,11 @@ constexpr int HighlightSlots = 5;
 /// Reached by adding to the first slot rather than through a table, which is why the catalogue
 /// requires the five to stay adjacent and in order.
 [[nodiscard]] ThemeColor highlightColor(int slot) noexcept;
+
+/// Returns the dense-activity fill for highlight slot `slot`.
+///
+/// Reached by adding to the first fill slot, as `highlightColor` reaches the line colours.
+[[nodiscard]] ThemeColor highlightFillColor(int slot) noexcept;
 
 /// How many colours a terminal's colour codes name: eight, and eight bright ones.
 constexpr int TerminalColors = 16;

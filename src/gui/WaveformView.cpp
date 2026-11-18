@@ -630,12 +630,15 @@ void WaveformView::paintEvent(QPaintEvent* event) {
         anchorTop = visible.front().top;
     }
 
-    // Backgrounds first and unclipped: a highlight marks the whole row, including the part of
-    // it the design has not been simulated to yet.
+    // Selection backgrounds first and unclipped, including the part of a selected row the
+    // design has not been simulated to yet. The current row remains the one cursor commands
+    // act on, but every row in the shared list selection gets the same tint on its trace.
     const QRect area = traceArea();
+    const int currentRow = selectedRow();
     painter.save();
     painter.setClipRect(area);
-    for (const RowGeometry& geometry : visible) paintRowBackground(painter, geometry, area);
+    for (const RowGeometry& geometry : visible)
+        paintRowBackground(painter, geometry, area, currentRow);
     painter.restore();
 
     // A parameter is not clipped at the recorded extent the way a trace is. A trace stopping
@@ -668,20 +671,16 @@ void WaveformView::paintEvent(QPaintEvent* event) {
 }
 
 void WaveformView::paintRowBackground(QPainter& painter, const RowGeometry& geometry,
-                                      const QRect& area) {
-    const WaveRow* waveRow = waveModel->row(geometry.rowId);
-    if (waveRow == nullptr) return;
-
+                                      const QRect& area, int currentRow) {
     const QRect rowRect(area.left(), geometry.top, area.width(), geometry.height);
     if (rowRect.bottom() < area.top() || rowRect.top() > area.bottom()) return;
 
-    if (waveRow->highlight > 0) {
-        painter.fillRect(rowRect, theme->color(highlightColor(waveRow->highlight)));
-    }
-
-    // The selected row is tinted too, because it is what Tab steps along and what a click just
-    // picked: a reader has to be able to see which one that is.
-    if (geometry.rowId == selectedRow()) {
+    // The current row is what Tab steps along, while the selection model also holds the rows
+    // picked with Ctrl or Shift. Both are visible in the list, so both must be visible beside
+    // their traces as well.
+    const QItemSelectionModel* selection = rows != nullptr ? rows->selectionModel() : nullptr;
+    const QModelIndex index = waveModel->indexOfRow(geometry.rowId);
+    if (geometry.rowId == currentRow || (selection != nullptr && selection->isSelected(index))) {
         painter.fillRect(rowRect, theme->color(ThemeColor::WaveSelectedRow));
     }
 }
@@ -785,6 +784,7 @@ bool WaveformView::sampleInto(int rowId, int columns, std::vector<wavedb::Sample
                        wavedb::Sample{.startTime = timeAxis.start(),
                                       .transitions = 0,
                                       .changeIndex = 0,
+                                      .valueRun = 0,
                                       .anyUnknown = waveRow->constantValue->ref().hasUnknown()});
             return true;
         }
@@ -827,21 +827,20 @@ bool WaveformView::sampleInto(int rowId, int columns, std::vector<wavedb::Sample
             out[column].transitions += child[column].transitions;
             out[column].anyUnknown = out[column].anyUnknown || child[column].anyUnknown;
 
-            if (child[column].changeIndex == wavedb::NoChange) missing[column] = 1;
-            if (column > 0 && child[column].changeIndex != child[column - 1].changeIndex) {
+            if (child[column].valueRun == wavedb::NoChange) missing[column] = 1;
+            if (column > 0 && child[column].valueRun != child[column - 1].valueRun) {
                 boundary[column] = 1;
             }
         }
         started = true;
     }
 
-    // The change index of a merged row is a run number rather than an index into anything: it
-    // only has to differ between columns that show different values, which is what the painter
-    // uses it for.
+    // A merged row has no source change index. Its run only has to differ between columns that
+    // show different values, which is what the painter uses it for.
     std::uint64_t run = 0;
     for (std::size_t column = 0; column < out.size(); ++column) {
         if (column > 0 && boundary[column] != 0) ++run;
-        out[column].changeIndex = missing[column] != 0 ? wavedb::NoChange : run;
+        out[column].valueRun = missing[column] != 0 ? wavedb::NoChange : run;
     }
 
     return true;
@@ -978,7 +977,8 @@ void WaveformView::paintOneBitTrace(QPainter& painter, const QRect& area, int ro
     const int bottom = area.bottom();
     const int middle = (top + bottom) / 2;
 
-    painter.setPen(theme->color(ThemeColor::WaveTrace));
+    const QColor normal = traceColor(rowId);
+    painter.setPen(normal);
 
     // Columns are walked in runs rather than one at a time, for the same reason the bus
     // painter does it: within a run of columns showing the same change, the value is the same,
@@ -1005,14 +1005,13 @@ void WaveformView::paintOneBitTrace(QPainter& painter, const QRect& area, int ro
             }
 
             painter.fillRect(QRect(x, top, static_cast<int>(run - column), bottom - top + 1),
-                             sample.anyUnknown ? theme->color(ThemeColor::WaveUnknown)
-                                               : theme->color(ThemeColor::WaveTrace));
+                             sample.anyUnknown ? theme->color(ThemeColor::WaveUnknown) : normal);
             previousY = -1;
             column = run;
             continue;
         }
 
-        if (sample.changeIndex == wavedb::NoChange) {
+        if (sample.valueRun == wavedb::NoChange) {
             previousY = -1;
             ++column;
             continue;
@@ -1020,7 +1019,7 @@ void WaveformView::paintOneBitTrace(QPainter& painter, const QRect& area, int ro
 
         std::size_t run = column;
         while (run < samples.size() && samples[run].transitions == 0
-               && samples[run].changeIndex == sample.changeIndex) {
+               && samples[run].valueRun == sample.valueRun) {
             ++run;
         }
 
@@ -1043,11 +1042,11 @@ void WaveformView::paintOneBitTrace(QPainter& painter, const QRect& area, int ro
         switch (bit) {
         case eir::Logic::Zero:
             y = bottom;
-            pen = theme->color(ThemeColor::WaveTrace);
+            pen = normal;
             break;
         case eir::Logic::One:
             y = top;
-            pen = theme->color(ThemeColor::WaveTrace);
+            pen = normal;
             break;
         case eir::Logic::HighZ:
             y = middle;
@@ -1075,6 +1074,8 @@ void WaveformView::paintBusTrace(QPainter& painter, const QRect& area, int rowId
     const int top = area.top();
     const int bottom = area.bottom();
     const QFontMetrics metrics(font());
+    const QColor normal = traceColor(rowId);
+    const QColor normalFill = traceFillColor(rowId);
 
     // Constant columns are coalesced into runs so that a bus segment is drawn once with its
     // value on it, rather than as a row of identical one-pixel slivers.
@@ -1096,19 +1097,19 @@ void WaveformView::paintBusTrace(QPainter& painter, const QRect& area, int rowId
             const int runWidth = static_cast<int>(run - column);
             painter.fillRect(QRect(x, top, runWidth, bottom - top + 1),
                              sample.anyUnknown ? theme->color(ThemeColor::WaveUnknown)
-                                               : theme->color(ThemeColor::WaveTraceFill));
+                                               : normalFill);
             column = run;
             continue;
         }
 
-        if (sample.changeIndex == wavedb::NoChange) {
+        if (sample.valueRun == wavedb::NoChange) {
             ++column;
             continue;
         }
 
         std::size_t run = column;
         while (run < samples.size() && samples[run].transitions == 0
-               && samples[run].changeIndex == sample.changeIndex) {
+               && samples[run].valueRun == sample.valueRun) {
             ++run;
         }
 
@@ -1119,8 +1120,8 @@ void WaveformView::paintBusTrace(QPainter& painter, const QRect& area, int rowId
             continue;
         }
 
-        const QColor pen = value.value().ref().hasUnknown() ? theme->color(ThemeColor::WaveUnknown)
-                                                            : theme->color(ThemeColor::WaveTrace);
+        const QColor pen =
+            value.value().ref().hasUnknown() ? theme->color(ThemeColor::WaveUnknown) : normal;
         painter.setPen(pen);
 
         // A bus segment: two horizontal rails with slanted shoulders where the value changes,
@@ -1159,6 +1160,19 @@ void WaveformView::paintBusTrace(QPainter& painter, const QRect& area, int rowId
 
         column = run;
     }
+}
+
+QColor WaveformView::traceColor(int rowId) const {
+    const WaveRow* waveRow = waveModel->row(rowId);
+    if (waveRow == nullptr || waveRow->highlight == 0) return theme->color(ThemeColor::WaveTrace);
+    return theme->color(highlightColor(waveRow->highlight));
+}
+
+QColor WaveformView::traceFillColor(int rowId) const {
+    const WaveRow* waveRow = waveModel->row(rowId);
+    if (waveRow == nullptr || waveRow->highlight == 0)
+        return theme->color(ThemeColor::WaveTraceFill);
+    return theme->color(highlightFillColor(waveRow->highlight));
 }
 
 // Fills in each cursor's label rectangle as it draws, which is what `cursorLabelAt` then hits

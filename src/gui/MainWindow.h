@@ -27,6 +27,7 @@
 class QAction;
 class QActionGroup;
 class QComboBox;
+class QDockWidget;
 class QLabel;
 class QLineEdit;
 class QMenu;
@@ -268,6 +269,7 @@ private:
     void buildMenus();
     void updateActions();
     void updateSubscription();
+    void sizeDefaultDocks();
     void restoreLayout();
     void saveLayout();
 
@@ -301,6 +303,10 @@ private:
     QTreeView* waveRowsView = nullptr;
     WaveformView* waveView = nullptr;
     TranscriptView* transcriptView = nullptr;
+
+    QDockWidget* structureDock = nullptr;
+    QDockWidget* objectsDock = nullptr;
+    QDockWidget* transcriptDock = nullptr;
 
     /// The Wave tab: the names and the traces beside them. Its keys are the wave window's,
     /// whichever of the two has the focus.

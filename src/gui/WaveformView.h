@@ -286,8 +286,15 @@ private:
                        std::span<const wavedb::Sample> samples);
     void paintCursors(QPainter& painter);
     void paintBeyondExtent(QPainter& painter);
-    void paintRowBackground(QPainter& painter, const RowGeometry& geometry, const QRect& area);
+    void paintRowBackground(QPainter& painter, const RowGeometry& geometry, const QRect& area,
+                            int currentRow);
     void paintZoomBand(QPainter& painter);
+
+    /// The colour of known wave lines on `rowId`, including its highlight choice.
+    [[nodiscard]] QColor traceColor(int rowId) const;
+
+    /// The colour of dense known activity on `rowId`, including its highlight choice.
+    [[nodiscard]] QColor traceFillColor(int rowId) const;
 
     /// The cache entry for `rowId`, with its summary filled in, or nullptr when there is
     /// nothing to draw. Valid until the next call.

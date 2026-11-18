@@ -90,7 +90,7 @@ struct WaveRow {
     std::uint32_t highBit = 0;
     std::uint32_t lowBit = 0;
 
-    /// Background slot 1 through `HighlightSlots`, or 0 for the default.
+    /// Trace-colour slot 1 through `HighlightSlots`, or 0 for the default.
     int highlight = 0;
 
     /// True once a signal row's elements, or its bits, have been created as children below it.
@@ -156,11 +156,8 @@ public:
     /// The row's highlight slot, for `data(..., HighlightRole)`.
     static constexpr int HighlightRole = Qt::UserRole + 2;
 
-    /// `session` and `theme` must both outlive the model.
-    ///
-    /// The theme is here because Qt asks a model for `Qt::BackgroundRole` and `Qt::ForegroundRole`,
-    /// and there is exactly one place for a colour to come from.
-    WaveformModel(const KernelSession& session, const Theme& theme, QObject* parent = nullptr);
+    /// `session` must outlive the model.
+    explicit WaveformModel(const KernelSession& session, QObject* parent = nullptr);
 
     /// A subtree not yet in the model: read off the clipboard, or out of a signal list.
     ///
@@ -257,7 +254,7 @@ public:
 
     void setLabel(int rowId, const QString& label);
 
-    /// Sets a row's background to highlight slot `slot`, or to the default with 0.
+    /// Sets a row's trace to highlight slot `slot`, or to the default with 0.
     void setHighlight(int rowId, int slot);
 
     /// True when a row shows more than one bit and has not been unpacked yet.
@@ -544,7 +541,6 @@ private:
     [[nodiscard]] bool writtenAsPacked(int rowId, const QSet<int>& openRows) const;
 
     const KernelSession* kernelSession;
-    const Theme* theme;
     QVector<WaveRow> rows;
     QVector<int> roots;
     runtime::SimTime cursorTime = 0;

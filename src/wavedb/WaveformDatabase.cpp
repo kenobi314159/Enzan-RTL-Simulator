@@ -651,6 +651,28 @@ void WaveformDatabase::sample(std::uint32_t recordIndex, runtime::SimTime from, 
             column.anyUnknown = column.anyUnknown || sliceUnknown(change);
         }
     }
+
+    // `changeIndex` remains an index into the source signal, because callers can use it to
+    // retrieve that complete value. It cannot identify a displayed run of this slice, though:
+    // an unrelated part of the source may have changed since the last change of these bits.
+    // Give the renderer a separate run identity, comparing only successive columns so this
+    // remains bounded by pixels rather than by changes in the trace.
+    std::uint64_t run = 0;
+    std::uint64_t previous = NoChange;
+    for (Sample& column : out) {
+        if (column.changeIndex == NoChange) {
+            column.valueRun = NoChange;
+            previous = NoChange;
+            continue;
+        }
+
+        if (previous != NoChange && previous != column.changeIndex
+            && !sliceEquals(previous, column.changeIndex)) {
+            ++run;
+        }
+        column.valueRun = run;
+        previous = column.changeIndex;
+    }
 }
 
 void WaveformDatabase::sample(std::uint32_t recordIndex, runtime::SimTime from, runtime::SimTime to,
@@ -694,6 +716,7 @@ void WaveformDatabase::sample(std::uint32_t recordIndex, runtime::SimTime from, 
             .startTime = start,
             .transitions = high - low,
             .changeIndex = low > 0 ? low - 1 : NoChange,
+            .valueRun = low > 0 ? low - 1 : NoChange,
             .anyUnknown = store.unknownPrefix[static_cast<std::size_t>(high)]
                           > store.unknownPrefix[static_cast<std::size_t>(base)],
         };

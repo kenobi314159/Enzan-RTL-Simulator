@@ -78,7 +78,7 @@ protected:
         SessionFixture::SetUp();
 
         theme.loadBuiltIn();
-        model = std::make_unique<WaveformModel>(*session, theme);
+        model = std::make_unique<WaveformModel>(*session);
 
         // A run behind the window, so that the rows have values to join.
         clock = infoFor(QStringLiteral("clk"));
@@ -1107,7 +1107,7 @@ protected:
     void SetUp() override {
         SessionFixture::SetUp();
         theme.loadBuiltIn();
-        model = std::make_unique<WaveformModel>(*session, theme);
+        model = std::make_unique<WaveformModel>(*session);
 
         QVector<std::uint32_t> indices;
         for (const SignalInfo& info : objectsOf(QStringLiteral("/tb"))) {

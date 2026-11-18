@@ -18,6 +18,7 @@
 
 #include <gtest/gtest.h>
 
+#include <QHeaderView>
 #include <QImage>
 #include <QItemSelectionModel>
 #include <QPixmap>
@@ -25,6 +26,8 @@
 #include <QTreeView>
 #include <cstdio>
 
+#include <algorithm>
+#include <cmath>
 #include <map>
 #include <optional>
 
@@ -63,7 +66,7 @@ protected:
     void SetUp() override {
         SessionFixture::SetUp();
         theme.loadBuiltIn();
-        model = std::make_unique<WaveformModel>(*session, theme);
+        model = std::make_unique<WaveformModel>(*session);
     }
 
     SignalInfo infoFor(const QString& scope, const QString& name) {
@@ -441,7 +444,7 @@ protected:
         SessionFixture::SetUp();
 
         theme.loadBuiltIn();
-        model = std::make_unique<WaveformModel>(*session, theme);
+        model = std::make_unique<WaveformModel>(*session);
 
         treeView = std::make_unique<QTreeView>();
         treeView->setModel(model.get());
@@ -521,43 +524,40 @@ TEST_F(WaveformViewTest, TracesArePaintedInTheThemeColour) {
         << "the ruler was not drawn";
 }
 
-TEST_F(WaveformViewTest, AHighlightedRowsNamesAreInTheThemesColourForThem) {
-    // Drawn rather than asked of the model, because what a model offers a view can still be
-    // overruled on the way to the screen: by a style sheet, or by a style that ignores it.
-    showEverythingAndRun(50);
-    QString error;
-    ASSERT_TRUE(theme.evaluate(QStringLiteral("theme wave.highlight.text #ff00ff"), error))
-        << error.toStdString();
-    const int first = model->rowIdOf(model->index(0, 0));
+TEST_F(WaveformViewTest, EverySelectedSignalListRowIsTintedBesideItsTrace) {
+    showEverythingAndRun(200);
 
-    // Text is antialiased, so its pixels are blends of its colour and the background rather than
-    // the colour itself. Magenta is counted by its shape instead, because nothing else in the
-    // list comes near it.
-    const auto magenta = [this] {
-        QCoreApplication::processEvents();
-        const QImage drawn =
-            treeView->viewport()->grab().toImage().convertToFormat(QImage::Format_RGB32);
-        int count = 0;
-        for (int y = 0; y < drawn.height(); ++y) {
-            for (int x = 0; x < drawn.width(); ++x) {
-                const QColor pixel = drawn.pixelColor(x, y);
-                if (pixel.red() > 150 && pixel.green() < 100 && pixel.blue() > 150) ++count;
+    const QModelIndex first = model->index(0, WaveformModel::NameColumn);
+    const QModelIndex second = model->index(1, WaveformModel::NameColumn);
+    const QModelIndex unselected = model->index(2, WaveformModel::NameColumn);
+    ASSERT_TRUE(first.isValid());
+    ASSERT_TRUE(second.isValid());
+    ASSERT_TRUE(unselected.isValid());
+
+    // This is the state Ctrl- or Shift-selection leaves behind: one current row and another
+    // selected row. The canvas must mirror all of the list's selected rows, not only current.
+    QItemSelectionModel* selection = treeView->selectionModel();
+    selection->select(first, QItemSelectionModel::ClearAndSelect | QItemSelectionModel::Rows);
+    selection->setCurrentIndex(first, QItemSelectionModel::NoUpdate);
+    selection->select(second, QItemSelectionModel::Select | QItemSelectionModel::Rows);
+
+    const QImage rendered = render();
+    const QRgb selected = theme.color(enzan::gui::ThemeColor::WaveSelectedRow).rgb();
+    const auto selectedPixelsIn = [this, &rendered, selected](const QModelIndex& index) {
+        const QRect row = treeView->visualRect(index);
+        const int top = treeView->header()->height() + row.top();
+        int pixels = 0;
+        for (int y = std::max(0, top); y < std::min(rendered.height(), top + row.height()); ++y) {
+            for (int x = 0; x < rendered.width(); ++x) {
+                if (rendered.pixel(x, y) == selected) ++pixels;
             }
         }
-        return count;
+        return pixels;
     };
 
-    model->setHighlight(first, 1);
-    EXPECT_GT(magenta(), 10) << "the highlighted row's name was not drawn in wave.highlight.text";
-
-    // Selected, the row's text is the selection's, as its background is.
-    treeView->selectionModel()->select(model->index(0, 0), QItemSelectionModel::ClearAndSelect
-                                                               | QItemSelectionModel::Rows);
-    EXPECT_EQ(magenta(), 0) << "a selected row kept the highlight's text colour";
-    treeView->selectionModel()->clearSelection();
-
-    model->setHighlight(first, 0);
-    EXPECT_EQ(magenta(), 0) << "a row with no highlight still had the highlight's text colour";
+    EXPECT_GT(selectedPixelsIn(first), 100);
+    EXPECT_GT(selectedPixelsIn(second), 100);
+    EXPECT_EQ(selectedPixelsIn(unselected), 0);
 }
 
 TEST_F(WaveformViewTest, ANewThemeReachesTracesAlreadyDrawn) {
@@ -632,6 +632,56 @@ TEST_F(WaveformViewTest, AConstantBitOfABusyBusIsDrawnAsALevelAndNotAsABusyBar) 
                                   << " against " << busy;
 }
 
+TEST_F(WaveformViewTest, AConstantBusSliceDoesNotDrawItsParentSignalsEdges) {
+    // A bit row happened to hide this defect: redrawing its horizontal level at every parent
+    // change does not make an edge. A multi-bit slice has bus shoulders, though, so grouping it
+    // by the parent's change index drew a shoulder each time any other bit changed. The high
+    // nibble of this counter stays zero for the first fifteen counts while the complete counter
+    // changes on every rising clock edge.
+    SignalInfo count;
+    for (const SignalInfo& info : objectsOf(QStringLiteral("/tb"))) {
+        if (info.name == QStringLiteral("count")) count = info;
+    }
+    ASSERT_EQ(count.width, 8U) << "the fixture's counter is not the width this test assumes";
+
+    const int whole = model->addSignal(count);
+    const int highNibble = model->addSlice(whole, 7, 4);
+    ASSERT_GE(highNibble, 0);
+    model->removeRow(whole);
+    session->subscribe({count.signalIndex});
+
+    constexpr std::uint64_t Duration = 150;
+    session->run(Duration);
+    ASSERT_TRUE(pumpUntilCaughtUp(Duration));
+
+    // The test looks in the middle of a bus row at a time where the high nibble is still zero.
+    // Its horizontal rails are above and below this point. Therefore a trace-coloured pixel here
+    // can only be a spurious vertical bus edge.
+    view->axis().setRange(0, Duration);
+    QCoreApplication::processEvents();
+    const QImage rendered = render();
+    const QModelIndex index = model->indexOfRow(highNibble);
+    ASSERT_TRUE(index.isValid());
+    const QRect listRow = treeView->visualRect(index);
+    ASSERT_TRUE(listRow.isValid());
+
+    const int top = treeView->header()->height() + listRow.top();
+    const int middle = top + (listRow.height() / 2);
+    const QRgb trace = theme.color(enzan::gui::ThemeColor::WaveTrace).rgb();
+    const auto hasVerticalTraceAt = [&](enzan::runtime::SimTime time) {
+        const int x = static_cast<int>(std::lround(view->axis().xOf(time)));
+        for (int dx = -1; dx <= 1; ++dx) {
+            for (int y = middle - 2; y <= middle + 2; ++y) {
+                if (rendered.valid(x + dx, y) && rendered.pixel(x + dx, y) == trace) return true;
+            }
+        }
+        return false;
+    };
+
+    EXPECT_FALSE(hasVerticalTraceAt(75))
+        << "the high nibble did not change at this clock edge, but its bus row drew one";
+}
+
 TEST_F(WaveformViewTest, TheActiveCursorIsPainted) {
     showEverythingAndRun(200);
 
@@ -691,6 +741,43 @@ TEST_F(WaveformViewTest, RenderingCostDoesNotGrowWithTheTransitionsInView) {
     EXPECT_GT(countOf(wide, theme.color(enzan::gui::ThemeColor::WaveTrace)), 200);
 }
 
+TEST_F(WaveformViewTest, SemanticColoursOverrideAHighlight) {
+    SignalInfo signal;
+    for (const SignalInfo& info : objectsOf(QStringLiteral("/tb/u_dut"))) {
+        if (info.name == QStringLiteral("q")) signal = info;
+    }
+    ASSERT_GT(signal.width, 1U);
+    const int whole = model->addSignal(signal);
+    const int row = model->addSlice(whole, 0, 0);
+    ASSERT_GE(row, 0);
+    model->removeRow(whole);
+    model->setHighlight(row, 3);
+    session->subscribe({signal.signalIndex});
+
+    session->deposit(signal.signalIndex,
+                     enzan::eir::BitVector::filled(signal.width, enzan::eir::Logic::Zero));
+    session->run(20);
+    ASSERT_TRUE(pumpUntilCaughtUp(20));
+    session->deposit(signal.signalIndex,
+                     enzan::eir::BitVector::filled(signal.width, enzan::eir::Logic::Unknown));
+    session->run(100);
+    ASSERT_TRUE(pumpUntilCaughtUp(120));
+    session->deposit(signal.signalIndex,
+                     enzan::eir::BitVector::filled(signal.width, enzan::eir::Logic::HighZ));
+    session->run(100);
+    ASSERT_TRUE(pumpUntilCaughtUp(220));
+
+    view->axis().setExtent(session->latestTime());
+    view->axis().setRange(0, 220);
+    const std::map<QRgb, int> counts = colourHistogram(render());
+    EXPECT_GT(countOf(counts, theme.color(enzan::gui::highlightColor(3))), 20)
+        << "known levels did not keep the row's highlight colour";
+    EXPECT_GT(countOf(counts, theme.color(enzan::gui::ThemeColor::WaveUnknown)), 0)
+        << "an X was replaced by the row's highlight colour";
+    EXPECT_GT(countOf(counts, theme.color(enzan::gui::ThemeColor::WaveHighImpedance)), 0)
+        << "a Z was replaced by the row's highlight colour";
+}
+
 TEST_F(WaveformViewTest, ABusyStretchIsUnknownOnlyWhereTheValueWas) {
     // Zoomed out, a bus changing in every pixel column is drawn as one filled band, red where its
     // value was unknown. The band took the colour of its first column, so one unknown column at
@@ -700,7 +787,8 @@ TEST_F(WaveformViewTest, ABusyStretchIsUnknownOnlyWhereTheValueWas) {
         if (info.name == QStringLiteral("count")) count = info;
     }
     ASSERT_GT(count.width, 1U);
-    model->addSignal(count);
+    const int row = model->addSignal(count);
+    model->setHighlight(row, 4);
     session->subscribe({count.signalIndex});
 
     // Counting, then unknown for a moment, then counting again: the clock ticks every ten units,
@@ -715,7 +803,7 @@ TEST_F(WaveformViewTest, ABusyStretchIsUnknownOnlyWhereTheValueWas) {
     session->run(19'900);
     ASSERT_TRUE(pumpUntilCaughtUp(40'000));
 
-    const QColor fill = theme.color(enzan::gui::ThemeColor::WaveTraceFill);
+    const QColor fill = theme.color(enzan::gui::highlightFillColor(4));
     const QColor unknown = theme.color(enzan::gui::ThemeColor::WaveUnknown);
     const auto columnHas = [](const QImage& image, int x, const QColor& colour) {
         for (int y = 0; y < image.height(); ++y) {

@@ -69,6 +69,12 @@ struct Sample {
     /// Index of the change in effect at `startTime`, or `NoChange` before the first one.
     std::uint64_t changeIndex = NoChange;
 
+    /// Identifier of the run holding the value at `startTime`, or `NoChange` before the first
+    /// one. It differs where adjacent columns begin with different values. A bit-range sample
+    /// keeps this separate from `changeIndex`: another part of the source signal can change
+    /// without ending the range's run.
+    std::uint64_t valueRun = NoChange;
+
     /// True when the value in effect anywhere in the column has an X or Z bit.
     bool anyUnknown = false;
 };

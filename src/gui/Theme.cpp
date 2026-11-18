@@ -132,6 +132,11 @@ ThemeColor highlightColor(int slot) noexcept {
     return static_cast<ThemeColor>(static_cast<int>(ThemeColor::WaveHighlight1) + slot - 1);
 }
 
+ThemeColor highlightFillColor(int slot) noexcept {
+    ENZAN_ASSERT(slot >= 1 && slot <= HighlightSlots, "no such highlight slot");
+    return static_cast<ThemeColor>(static_cast<int>(ThemeColor::WaveHighlightFill1) + slot - 1);
+}
+
 ThemeColor terminalColor(int index) noexcept {
     ENZAN_ASSERT(index >= 0 && index < TerminalColors, "no such terminal colour");
     return static_cast<ThemeColor>(static_cast<int>(ThemeColor::TranscriptTerminalBlack) + index);
