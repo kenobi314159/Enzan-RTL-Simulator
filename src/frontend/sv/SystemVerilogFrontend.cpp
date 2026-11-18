@@ -1416,8 +1416,8 @@ bool ModuleBuilder::translateModulePaths() {
 
         // A copy, since the objects added below may move the table.
         const eir::Object port = definitionValue.objects[output];
-        const bool hasDelay = std::ranges::any_of(arcsByBit, [&](const auto& entry) {
-            return std::ranges::any_of(entry.second,
+        const bool hasDelay = std::ranges::any_of(arcsByBit, [&](const auto& arcsEntry) {
+            return std::ranges::any_of(arcsEntry.second,
                                        [&](const Arc& arc) { return !zero(arc.delays); });
         });
         if (!hasDelay) continue;

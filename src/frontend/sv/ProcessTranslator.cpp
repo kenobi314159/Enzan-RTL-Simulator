@@ -3728,13 +3728,14 @@ bool ProcessTranslator::writeLocation(const ast::Expression& target, const Locat
         emit(eir::Instruction::make(
             eir::Opcode::LoadConstant, eir::Operand::reg(packed),
             eir::Operand::constant(addConstant(eir::BitVector::filled(128, eir::Logic::Zero)))));
-        const auto splice = [&](std::uint32_t value, std::uint64_t at) {
+        const auto splice = [&](std::uint32_t splicedValue, std::uint64_t at) {
             const std::uint32_t offset = newRegister(eir::Type::bits(32, false, false));
             emit(eir::Instruction::make(
                 eir::Opcode::LoadConstant, eir::Operand::reg(offset),
                 eir::Operand::constant(addConstant(eir::BitVector::fromUInt64(at, 32)))));
             emit(eir::Instruction::make(eir::Opcode::SplicePart, eir::Operand::reg(packed),
-                                        eir::Operand::reg(value), eir::Operand::reg(offset)));
+                                        eir::Operand::reg(splicedValue),
+                                        eir::Operand::reg(offset)));
         };
         const std::optional<std::uint32_t> delay =
             storeDelayFor(stored.reg, stored.type.bitWidth(), &target);
