@@ -684,6 +684,27 @@ TEST_F(StoredLibraryTest, EirSpecializationsAreSharedByFrontendAnalysisEntries) 
     EXPECT_FALSE(library.loadSpecialization(tops, eight, missing));
 }
 
+TEST_F(StoredLibraryTest, ASpecializationPreservesAnInputUnitsLogicalLibrary) {
+    const LibrarySource file = source("top.vhd", "entity top is end entity;\n");
+    analysedByNvc(library);
+    const std::vector<std::vector<std::string>> units{{"top"}};
+    ASSERT_TRUE(library.storeVhdl({&file, 1}, sources, VhdlOptions, units, engine));
+
+    Design specialized = designWith("top", file.buffer);
+    ModuleDefinition input;
+    input.name = "counter";
+    input.sourceName = "counter";
+    input.library = "ip";
+    specialized.addModule(std::move(input));
+    const std::vector<std::string> tops{"top"};
+    ASSERT_TRUE(library.storeSpecialization(tops, {}, specialized, sources, engine));
+
+    Design loaded;
+    ASSERT_TRUE(library.loadSpecialization(tops, {}, loaded));
+    ASSERT_NE(loaded.findModule("ip.counter"), nullptr);
+    EXPECT_EQ(loaded.findModule("ip.counter")->library, "ip");
+}
+
 TEST_F(StoredLibraryTest, VhdlEirSpecializationsAccumulateByGenericValues) {
     const LibrarySource file = source("counter.vhd", "entity counter is end entity;\n");
     analysedByNvc(library);

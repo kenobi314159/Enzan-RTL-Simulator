@@ -190,9 +190,17 @@ end architecture;
 EOF
 
 "$enzan" analyse --out-lib libs/tb gen_tb.vhd || fail "a testbench with a generic did not analyse"
+"$enzan" analyse --out-lib libs/tb --top gen_tb -G CYCLES=3 gen_tb.vhd \
+    || fail "the generic specialisation was not analysed into EIR"
+
+# NVC's generic units remain the reusable analysis layer, but a value translated already runs
+# from the common EIR specialisation cache. Hiding NVC's units proves this run does not translate
+# the VHDL again; a different value below still needs them.
+mv libs/tb/vhdl libs/tb/vhdl.saved
 generics=$("$enzan" run --in-lib libs/tb -G CYCLES=3 gen_tb 2>&1) \
     || fail "a run from a library setting its top's generic failed: $generics"
 grep -q 'PASS generics' <<<"$generics" || fail "-G did not reach the top run from a library"
+mv libs/tb/vhdl.saved libs/tb/vhdl
 [[ $(status_of "$enzan" run --in-lib libs/tb -G CYCLES=4 gen_tb) -eq 3 ]] \
     || fail "a second run from the library kept the first one's generic"
 [[ $(status_of "$enzan" analyse --out-lib libs/tb -G CYCLES=3 gen_tb.vhd) -eq 2 ]] \

@@ -48,6 +48,14 @@ bool isVhdlSource(const std::filesystem::path& file) {
     return extension == ".vhd" || extension == ".vhdl";
 }
 
+/// The top levels whose translation one analysis may cache, in command-line order.
+std::vector<std::string> analysisTops(const Session::AnalysisRequest& request) {
+    if (request.top.empty()) return {};
+    std::vector<std::string> tops{request.top};
+    tops.insert(tops.end(), request.otherTops.begin(), request.otherTops.end());
+    return tops;
+}
+
 #if defined(ENZAN_WITH_SYSTEMVERILOG) && defined(ENZAN_WITH_VHDL)
 /// Diagnostics held back, for an analysis that may be repeated and only its last run reported: a
 /// design of both languages is analysed in rounds (`Session::analyseMixed`).
@@ -371,8 +379,12 @@ bool Session::analyse(const AnalysisRequest& request) {
             if (!named.contains(file)) dependencies.push_back(file);
         }
 
-        static_cast<void>(
-            library.store(stored, sources, *design, diagnostics, alreadyElsewhere, dependencies));
+        const bool storedDesign =
+            library.store(stored, sources, *design, diagnostics, alreadyElsewhere, dependencies);
+        const std::vector<std::string> tops = analysisTops(request);
+        if (storedDesign && !tops.empty())
+            static_cast<void>(
+                library.storeSpecialization(tops, parameters, *design, sources, diagnostics));
     }
 
     return true;
@@ -419,6 +431,7 @@ bool Session::analyseVhdl(const AnalysisRequest& request) {
     std::string keyOptions;
     if (!setVhdlOptions(request, !read.empty(), options, keyOptions)) return false;
     const std::string& top = options.top;
+    const std::vector<std::string> tops = analysisTops(request);
 
     // Sources the library holds analysed already, with these options, are not analysed again:
     // the design under a named top is translated from NVC's units, parsing nothing. Without a
@@ -427,6 +440,29 @@ bool Session::analyseVhdl(const AnalysisRequest& request) {
     const bool reused =
         library.isOpen() && !top.empty() && library.vhdlCurrent(read, sources, keyOptions);
     if (reused) options.units.sources.clear();
+
+    // EIR is a common second layer over the frontend analysis. A VHDL library keeps NVC's units
+    // so it remains reusable for unseen generic values, and a translation already requested for
+    // these values comes straight from the same EIR cache SystemVerilog uses.
+    if (request.translateVhdl && !tops.empty()) {
+        auto cached = std::make_unique<eir::Design>();
+        bool loaded = reused && library.loadSpecialization(tops, parameters, *cached);
+        if (!loaded && read.empty()) {
+            for (const eir::Library& input : inputLibraries) {
+                if (!input.loadSpecialization(tops, parameters, *cached)) continue;
+                loaded = true;
+                break;
+            }
+        }
+        if (loaded) {
+            design = std::move(cached);
+            loadedFromLibrary = true;
+            vhdlOptions = std::make_unique<frontend::vhdl::DesignOptions>(std::move(options));
+            resolutionAnswers.clear();
+            lastFilesRead.clear();
+            return true;
+        }
+    }
 
     // Nothing asked for, and nothing else, is what an analysis that translates nothing asks of
     // the child.
@@ -456,6 +492,9 @@ bool Session::analyseVhdl(const AnalysisRequest& request) {
     lastFilesRead.assign(files.begin(), files.end());
     std::ranges::sort(lastFilesRead);
     lastFilesRead.erase(std::ranges::unique(lastFilesRead).begin(), lastFilesRead.end());
+    if (library.isOpen() && request.translateVhdl && !tops.empty())
+        static_cast<void>(
+            library.storeSpecialization(tops, parameters, *design, sources, diagnostics));
     return true;
 #else
     static_cast<void>(request);

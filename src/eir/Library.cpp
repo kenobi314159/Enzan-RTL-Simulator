@@ -625,7 +625,7 @@ bool Library::loadSpecialization(std::span<const std::string> tops,
         return false;
 
     for (ModuleDefinition& definition : decoded) {
-        definition.library = logicalName;
+        if (definition.library.empty()) definition.library = logicalName;
         design.addModule(std::move(definition));
     }
     return true;
@@ -639,22 +639,17 @@ bool Library::storeSpecialization(std::span<const std::string> tops,
     const std::string key = specializationKey(tops, parameters);
     if (key.empty()) return false;
 
-    // A specialisation may have been produced against input libraries. Their units remain owned
-    // by those libraries and are loaded from them again; only this library's own units belong in
-    // this cache entry. A freshly translated unit has no library stamped on it yet.
-    std::vector<ModuleDefinition> owned;
-    for (const ModuleDefinition& definition : design.modules()) {
-        if (definition.library.empty() || definition.library == logicalName)
-            owned.push_back(definition);
-    }
-
     std::error_code failure;
     std::filesystem::create_directories(directory / SpecializationDirectory, failure);
     const std::filesystem::path target = specializationPath(key);
     if (!failure) {
         std::string payload(SpecializationMagic);
         payload += key;
-        payload += encodeModules(owned, sourceManager);
+        // The closure is stored, including translated units from input VHDL libraries. Unlike a
+        // SystemVerilog EIR entry, NVC's generic units cannot be loaded by the elaborator; their
+        // materialised EIR has to travel with the specialisation. Serialization preserves each
+        // definition's logical owner so qualified names keep resolving to the input library.
+        payload += encodeModules(design.modules(), sourceManager);
         if (writeWholeFile(target, payload)) return true;
     }
 
