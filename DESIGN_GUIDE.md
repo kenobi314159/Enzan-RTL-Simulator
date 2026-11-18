@@ -1179,6 +1179,14 @@ the standard (9.7). `COCOTB_HDL_TIMEPRECISION` becomes `--timescale`. In a desig
 the toplevel's language's library is loaded with `--vpi` or `--vhpi` and the other through
 `GPI_EXTRA`, as cocotb does elsewhere.
 
+**The makefile keeps one-shot analysis as its default, because a library is opt-in** (4.4).
+`ENZAN_OUT_LIB` opts the main sources into a separate, dependency-file-backed analysis target, and
+`ENZAN_INPUT_LIBRARIES` names existing libraries in their search order. Each library
+`VHDL_LIB_ORDER` asks the makefile to build has a stamp and dependency file of its own, and is
+analysed against the libraries before it rather than rebuilt for every simulation. A main design of
+both languages remains in the one-shot flow: `ENZAN_OUT_LIB` refuses it until a library can store a
+mixed-language design (18).
+
 ### 9.7 VHPI
 
 VHPI is how cocotb reaches a VHDL toplevel. What it names that VPI does not is the VHDL type of

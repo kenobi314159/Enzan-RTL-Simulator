@@ -426,4 +426,21 @@ if(ENZAN_HAVE_COCOTB)
                FAIL_REGULAR_EXPRESSION "FAIL=[1-9]"
                TIMEOUT 300
                ENVIRONMENT_MODIFICATION "${ENZAN_COCOTB_ENVIRONMENT}")
+
+  add_test(
+    NAME golden.cocotb.library.verilog
+    COMMAND "${CMAKE_CURRENT_SOURCE_DIR}/run-cocotb-library-check.sh" $<TARGET_FILE:enzan>
+            "${ENZAN_COCOTB_PYTHON}" "${CMAKE_CURRENT_SOURCE_DIR}/cocotb-library-sv" verilog
+            include/expected.svh counter.sv)
+  add_test(
+    NAME golden.cocotb.library.vhdl
+    COMMAND "${CMAKE_CURRENT_SOURCE_DIR}/run-cocotb-library-check.sh" $<TARGET_FILE:enzan>
+            "${ENZAN_COCOTB_PYTHON}" "${CMAKE_CURRENT_SOURCE_DIR}/cocotb-library-vhdl" vhdl
+            top.vhd counter.vhd)
+  set_tests_properties(
+    golden.cocotb.library.verilog golden.cocotb.library.vhdl
+    PROPERTIES PASS_REGULAR_EXPRESSION "PASS cocotb library"
+               FAIL_REGULAR_EXPRESSION "FAIL cocotb library"
+               TIMEOUT 300
+               ENVIRONMENT_MODIFICATION "${ENZAN_COCOTB_ENVIRONMENT}")
 endif()
