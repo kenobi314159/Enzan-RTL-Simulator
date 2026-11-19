@@ -21,13 +21,16 @@ keyword, such as `logic`, `bit`, `int` or `final`, which then has to be renamed.
   streaming concatenations, `{<<{...}}` and `{>>{...}}`.
 - Nets of every kind with several drivers, resolved by their kind, at strong and weak strengths;
   gates, MOS switches and user-defined primitives; specify blocks' module path delays.
-- Delays, event controls, named events, `wait`, `force` and `release`, `assign` and `deassign`.
+- Delays, event controls on signals and expressions, named events, `wait`, `force` and `release`,
+  `assign` and `deassign`; delayed writes to a whole signal or a selected part.
 - Immediate assertions, and concurrent assertions declared in a module: `assert`, `assume` and
   `cover property` of booleans joined by fixed delays (`a ##2 b`) and consecutive repetitions
   (`b[*3]`), with one `|->` or `|=>`, `disable iff`, a default clocking block, named properties
   and sequences, and `$past`, `$rose`, `$fell`, `$stable`, `$changed` and `$sampled`.
-- `$display` and its family, files written and read, `$readmemh` and `$readmemb`, `$random` and
-  `$urandom`, and `$finish`, `$stop`, `$fatal`, `$error`, `$warning` and `$info`.
+- `$display` and its family, files written and read, `$readmemh` and `$readmemb`, `$random`,
+  `$urandom` and `$urandom_range`; `$time`, `$stime`, `$realtime`, `$bits`, `$clog2`,
+  `$isunknown`, `$countones`, `$onehot`, `$onehot0` and the integer/real conversion functions; and
+  `$finish`, `$stop`, `$fatal`, `$error`, `$warning` and `$info`.
 - VPI, as cocotb uses it.
 
 ### Not yet
@@ -40,13 +43,12 @@ keyword, such as `logic`, `bit`, `int` or `final`, which then has to be renamed.
   non-consecutive repetitions, the property operators (`not`, `and`, `until`, `s_eventually` and
   the rest), local variables, `restrict`, and a concurrent assertion inside a procedure; deferred
   assertions (`assert #0`, `assert final`).
-- An event control on an expression other than a signal or a constant select of one.
-- A delayed write to part of a signal, separate rise, fall and turn-off delays on a vector, and a
-  delay on a net.
+- An event control whose expression reads a variable local to the process or subprogram, or has a
+  side effect.
+- Separate rise, fall and turn-off delays on a vector, and a delay on a net.
 - `trireg`, `interconnect`, user-defined nettypes, `highz` strengths, and the resistive and
   bidirectional switches.
-- Most system functions beyond those above; any slang computes while analysing, such as `$bits`
-  and `$clog2`, works.
+- Most system functions beyond those above; any slang computes while analysing works too.
 
 ## VHDL
 

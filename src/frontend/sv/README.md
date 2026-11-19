@@ -134,18 +134,21 @@ Reported as `ENZ1004` with the construct named, rather than mistranslated:
   `disable iff`, a default clocking block and `$past`, `$rose`, `$fell`, `$stable`, `$changed` and
   `$sampled` (`Assertions.cpp`). A range of delays, `##[1:3]`, any other repetition, any other
   property operator, and a concurrent assertion inside a procedure are refused;
-- every system function but `$time`, `$signed`, `$unsigned`, `$bits`, `$clog2`, `$isunknown`,
-  `$countones`, `$onehot`, `$onehot0`, `$random`, `$urandom`, `$urandom_range`, `$fopen` and
-  `$fgetc`, and those slang folds to a constant. Files are written, with `$fdisplay`, `$fwrite`,
-  `$fflush` and `$fclose`, and read a byte at a time by `$fgetc` and whole by `$readmemh` and
-  `$readmemb`, into a memory of one unpacked dimension;
+- every system function but `$time`, `$stime`, `$realtime`, `$signed`, `$unsigned`, `$bits`,
+  `$clog2`, `$isunknown`, `$countones`, `$onehot`, `$onehot0`, `$random`, `$urandom`,
+  `$urandom_range`, `$fopen`, `$fgetc`, `$rtoi`, `$itor`, `$realtobits` and `$bitstoreal`, and
+  those slang folds to a constant. Files are written, with `$fdisplay`, `$fwrite`, `$fflush` and
+  `$fclose`, and read a byte at a time by `$fgetc` and whole by `$readmemh` and `$readmemb`, into a
+  memory of one unpacked dimension;
 - a tolerance range in an `inside` set, such as `[value +/- tolerance]`;
-- an event control on an expression other than a signal or a constant select of one, such
-  as `@(a & b)` or `@(posedge clk[i])` with `i` a variable;
-- an event control on a nonblocking assignment, such as `a <= @(posedge clk) b`, a delayed
-  write to part of a signal, such as `a[3:0] <= #5 b`, separate rise, fall and turn-off
-  delays, and a delay on a net, such as `wire #5 w`. Intra-assignment delays on whole
-  signals and single delays on continuous assignments work, the latter inertially;
+- an event control whose expression reads a variable local to its process or subprogram, or changes
+  something. Other expressions, such as `@(a & b)` and `@(posedge clk[i])` with `i` a signal,
+  wait on an object holding the expression's value;
+- an event control on a nonblocking assignment, such as `a <= @(posedge clk) b`, separate rise,
+  fall and turn-off delays on a vector, separate delays known only while the design runs, and a
+  delay on a net, such as `wire #5 w`. Intra-assignment delays on whole signals and selected parts
+  work, and so do single delays and scalar transition delays on continuous assignments and gates,
+  inertially;
 - `trireg`, `interconnect` and user-defined nettypes, which have no resolution table;
-- a drive strength other than strong, such as `assign (weak0, weak1) w = a`, because
-  resolution has no strength model;
+- `highz` strengths, and the resistive and bidirectional switches; strong and weak strengths and
+  the unidirectional MOS switches work.
