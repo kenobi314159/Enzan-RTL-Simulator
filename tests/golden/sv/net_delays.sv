@@ -5,6 +5,14 @@
 
 `timescale 1ns / 1ns
 
+module delayed_ports(input_value, output_value);
+    input input_value;
+    output output_value;
+    wire #5 input_value;
+    wire #7 output_value;
+    assign output_value = input_value;
+endmodule
+
 module tb;
     logic high = 1'b0, low = 1'b0;
     tri #5 resolved;
@@ -18,6 +26,10 @@ module tb;
     logic declaration_driver = 1'b0, immediate_driver = 1'bz;
     wire #5 declaration_delayed = declaration_driver;
     assign declaration_delayed = immediate_driver;
+
+    logic port_driver = 1'b0;
+    wire port_delayed;
+    delayed_ports ports(.input_value(port_driver), .output_value(port_delayed));
 
     initial begin
         #1 if (resolved !== 1'bz) $fatal(1, "net did not begin undriven: %b", resolved);
@@ -57,6 +69,14 @@ module tb;
         #9 declaration_driver = 1'b1;
         #4 if (declaration_delayed !== 1'b0) $fatal(1, "early declaration assignment");
         #2 if (declaration_delayed !== 1'b1) $fatal(1, "late declaration assignment");
+    end
+
+    initial begin
+        #11 if (port_delayed !== 1'bz) $fatal(1, "early delay through ports");
+        #1 if (port_delayed !== 1'b0) $fatal(1, "initial delay through ports");
+        #8 port_driver = 1'b1;
+        #11 if (port_delayed !== 1'b0) $fatal(1, "early changed delay through ports");
+        #1 if (port_delayed !== 1'b1) $fatal(1, "changed delay through ports");
     end
 
     initial begin
