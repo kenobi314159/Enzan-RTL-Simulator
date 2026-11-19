@@ -502,8 +502,13 @@ private:
     std::array<std::uint32_t, 4> branchOnTruth(const Value& condition);
 
     /// Emits a store of `reg` to the whole of `objectIndex`, in the form `nonBlocking` and
-    /// `storeDelay` call for. False, having reported, when `storeDelayFor` refuses the delay.
+    /// `storeDelay` call for.
     bool emitWholeStore(std::uint32_t objectIndex, std::uint32_t reg, bool nonBlocking);
+
+    /// Emits a delayed store of `stored` to the part of `objectIndex` beginning at `low`, packing
+    /// the offset and `delay` as StorePartDelayed requires.
+    void emitDelayedPartStore(std::uint32_t objectIndex, std::uint32_t stored, const Value& low,
+                              std::uint32_t delay, bool nonBlocking);
 
     /// Reports a delayed write to something a delayed store cannot address, and returns true,
     /// when an assignment delay is in effect; returns false otherwise.
@@ -702,12 +707,11 @@ private:
     /// assignment's or a gate's `delay`. False having reported.
     bool setContinuousDelay(const slang::ast::TimingControl& delay);
 
-    /// The register holding the delay of a store of `stored`, a value of `width` bits: the one
-    /// delay, or of separate ones what the value calls for (IEEE 1800 section 28.16), the rise to
-    /// 1, the fall to 0, the turn-off to z and the smallest to x. Nothing, having reported, for
-    /// separate delays of a vector, whose bits may each call for another.
-    std::optional<std::uint32_t> storeDelayFor(std::uint32_t stored, std::uint32_t width,
-                                               const slang::ast::Expression* target);
+    /// The register holding the transition delay of `stored` (IEEE 1800 sections 10.3.3 and
+    /// 28.16). A scalar takes the rise to 1, fall to 0, turn-off to z and smallest to x. A vector
+    /// takes the fall when becoming zero, the turn-off when becoming all z, and rise otherwise.
+    /// When there are no separate transition delays, this is `storeDelay`.
+    std::optional<std::uint32_t> storeDelayFor(std::uint32_t stored, std::uint32_t width);
 
     /// Where `continue` and `break` go in each enclosing loop, innermost last.
     struct LoopTargets {

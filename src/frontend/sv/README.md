@@ -144,11 +144,10 @@ Reported as `ENZ1004` with the construct named, rather than mistranslated:
 - an event control whose expression reads a variable local to its process or subprogram, or changes
   something. Other expressions, such as `@(a & b)` and `@(posedge clk[i])` with `i` a signal,
   wait on an object holding the expression's value;
-- an event control on a nonblocking assignment, such as `a <= @(posedge clk) b`, separate rise,
-  fall and turn-off delays on a vector, separate delays known only while the design runs, and a
-  delay on a net, such as `wire #5 w`. Intra-assignment delays on whole signals and selected parts
-  work, and so do single delays and scalar transition delays on continuous assignments and gates,
-  inertially;
+- an event control on a nonblocking assignment, such as `a <= @(posedge clk) b`, separate delays
+  known only while the design runs, and a delay on a net, such as `wire #5 w`. Intra-assignment
+  delays on whole signals and selected parts work, and so do single and scalar or vector transition
+  delays on continuous assignments and gates, inertially;
 - `trireg`, `interconnect` and user-defined nettypes, which have no resolution table;
 - `highz` strengths, and the resistive and bidirectional switches; strong and weak strengths and
   the unidirectional MOS switches work.

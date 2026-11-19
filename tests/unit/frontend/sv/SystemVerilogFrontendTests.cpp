@@ -1906,26 +1906,35 @@ TEST_F(FrontendTest, ADelayedWriteToPartOfASignalWritesOnlyThatPart) {
     }));
 }
 
-TEST_F(FrontendTest, ReportsSeparateRiseAndFallDelaysOnAVector) {
-    // One bit's are chosen by the value it takes; a vector's bits may each call for another.
-    EXPECT_NE(analyse(R"(
-        module m;
-            logic a;
-            wire  y;
-            assign #(1, 2) y = a;
-        endmodule
-    )"),
-              nullptr)
-        << consumer.messages.front();
-    EXPECT_EQ(analyse(R"(
+TEST_F(FrontendTest, SeparateTransitionDelaysSelectOneDelayForAWholeVector) {
+    // A whole vector remains a whole delayed store, and a vector part remains one delayed part
+    // store: the standard selects a delay for the vector rather than for each of its bits.
+    const std::unique_ptr<Design> design = analyse(R"(
         module m;
             logic [1:0] a;
-            wire  [1:0] y;
-            assign #(1, 2) y = a;
+            wire  [1:0] whole;
+            wire  [3:0] part;
+            assign #(1, 2, 3) whole = a;
+            assign #(1, 2, 3) part[2:1] = a;
         endmodule
-    )"),
-              nullptr);
-    EXPECT_TRUE(reported("separate rise, fall and turn-off delays on a vector"));
+    )");
+    ASSERT_NE(design, nullptr) << consumer.messages.front();
+    EXPECT_TRUE(enzan::eir::verify(*design, engine)) << consumer.messages.front();
+
+    std::ptrdiff_t delayedParts = 0;
+    std::ptrdiff_t delayedWholes = 0;
+    for (const enzan::eir::Process& process : design->findModule("m")->processes) {
+        for (const enzan::eir::BasicBlock& block : process.blocks) {
+            delayedParts +=
+                std::ranges::count(block.instructions, enzan::eir::Opcode::StorePartDelayed,
+                                   &enzan::eir::Instruction::opcode);
+            delayedWholes +=
+                std::ranges::count(block.instructions, enzan::eir::Opcode::StoreDelayed,
+                                   &enzan::eir::Instruction::opcode);
+        }
+    }
+    EXPECT_EQ(delayedParts, 1U);
+    EXPECT_EQ(delayedWholes, 1U);
 }
 
 TEST_F(FrontendTest, ReportsReadingAMemoryOfTwoDimensions) {

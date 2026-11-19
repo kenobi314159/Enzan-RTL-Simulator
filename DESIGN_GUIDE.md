@@ -649,7 +649,9 @@ floor.
   what the switch passed would be whichever driver decides the input at the time. **A user-defined
   primitive is one too**, by its table, which the frontend encodes as a constant and the runtime
   matches by the layout `eir/Udp.h` gives both. Inputs changing together are a race the standard
-  leaves open, and Enzan takes them in port order.
+  leaves open, and Enzan takes them in port order. A continuous assignment's separate rise, fall
+  and turn-off delays select one delay for a vector: fall when it becomes zero, turn-off when it
+  becomes all z, and rise otherwise (IEEE 1800 section 10.3.3).
 - **A real is a double**, `shortreal` without its reduced precision.
 - **A named event is a bit its trigger toggles**, so that what waits on it sees it change.
 - **An event control on an expression waits on an object a continuous assignment keeps at the

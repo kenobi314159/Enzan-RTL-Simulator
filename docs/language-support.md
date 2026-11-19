@@ -45,7 +45,7 @@ keyword, such as `logic`, `bit`, `int` or `final`, which then has to be renamed.
   assertions (`assert #0`, `assert final`).
 - An event control whose expression reads a variable local to the process or subprogram, or has a
   side effect.
-- Separate rise, fall and turn-off delays on a vector, and a delay on a net.
+- A delay on a net declaration, such as `wire #5 w`.
 - `trireg`, `interconnect`, user-defined nettypes, `highz` strengths, and the resistive and
   bidirectional switches.
 - Most system functions beyond those above; any slang computes while analysing works too.
