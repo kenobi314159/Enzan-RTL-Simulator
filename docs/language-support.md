@@ -29,8 +29,8 @@ keyword, such as `logic`, `bit`, `int` or `final`, which then has to be renamed.
   and sequences, and `$past`, `$rose`, `$fell`, `$stable`, `$changed` and `$sampled`.
 - `$display` and its family, files written and read, `$readmemh` and `$readmemb`, `$random`,
   `$urandom` and `$urandom_range`; `$time`, `$stime`, `$realtime`, `$bits`, `$clog2`,
-  `$isunknown`, `$countones`, `$onehot`, `$onehot0` and the integer/real conversion functions; and
-  `$finish`, `$stop`, `$fatal`, `$error`, `$warning` and `$info`.
+  `$isunknown`, `$countones`, `$onehot`, `$onehot0`, the integer/real conversion functions and all
+  real math functions; and `$finish`, `$stop`, `$fatal`, `$error`, `$warning` and `$info`.
 - VPI, as cocotb uses it.
 
 ### Not yet

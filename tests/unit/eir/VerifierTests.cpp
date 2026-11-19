@@ -560,6 +560,37 @@ TEST_F(VerifierTest, RejectsARealPowerWithABitsOperand) {
     EXPECT_TRUE(reported("mixes reals with bits"));
 }
 
+TEST_F(VerifierTest, RejectsARealMathFunctionOutsideTheCatalogue) {
+    ModuleDefinition definition = makeValidModule();
+    Process& process = definition.processes[0];
+    process.registerTypes.push_back(Type::real());
+    process.registerTypes.push_back(Type::real());
+
+    auto& instructions = process.blocks[0].instructions;
+    instructions.insert(instructions.begin() + 1,
+                        Instruction::make(Opcode::RealUnaryMath, Operand::reg(2), Operand::reg(1),
+                                          Operand::immediate(999)));
+
+    EXPECT_FALSE(check(definition));
+    EXPECT_TRUE(reported("names no one-argument real math function"));
+}
+
+TEST_F(VerifierTest, RejectsARealBinaryMathFunctionOutsideTheCatalogue) {
+    ModuleDefinition definition = makeValidModule();
+    Process& process = definition.processes[0];
+    process.registerTypes.push_back(Type::real());
+    process.registerTypes.push_back(Type::real());
+    process.registerTypes.push_back(Type::real());
+
+    auto& instructions = process.blocks[0].instructions;
+    instructions.insert(instructions.begin() + 1,
+                        Instruction::make(Opcode::RealBinaryMath, Operand::reg(3), Operand::reg(1),
+                                          Operand::reg(2), Operand::immediate(999)));
+
+    EXPECT_FALSE(check(definition));
+    EXPECT_TRUE(reported("names no two-argument real math function"));
+}
+
 TEST_F(VerifierTest, RejectsAConversionWithARealOnNeitherSide) {
     ModuleDefinition definition = makeValidModule();
     Process& process = definition.processes[0];

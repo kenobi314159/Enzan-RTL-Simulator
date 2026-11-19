@@ -237,6 +237,13 @@ ENZAN_OPCODE(Power, "pow", true, 3,
 ENZAN_OPCODE(RealPower, "rpow", true, 2,
              "llvm.pow on the aval planes interpreted as doubles; real values have no bval "
              "plane")
+ENZAN_OPCODE(RealUnaryMath, "rmath1", true, 2,
+             "the second, immediate operand selects llvm.log, llvm.log10, llvm.exp, llvm.sqrt, "
+             "llvm.floor, llvm.ceil, llvm.sin or llvm.cos where applicable, and the matching "
+             "libm call for the other IEEE 1800 real math functions")
+ENZAN_OPCODE(RealBinaryMath, "rmath2", true, 3,
+             "the third, immediate operand selects llvm.pow or the libm atan2 or hypot call on "
+             "the first two operands as doubles")
 
 // --- Shifts ----------------------------------------------------------------
 

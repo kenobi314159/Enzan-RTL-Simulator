@@ -137,9 +137,9 @@ Reported as `ENZ1004` with the construct named, rather than mistranslated:
 - every system function but `$time`, `$stime`, `$realtime`, `$signed`, `$unsigned`, `$bits`,
   `$clog2`, `$isunknown`, `$countones`, `$onehot`, `$onehot0`, `$random`, `$urandom`,
   `$urandom_range`, `$fopen`, `$fgetc`, `$rtoi`, `$itor`, `$realtobits` and `$bitstoreal`, and
-  those slang folds to a constant. Files are written, with `$fdisplay`, `$fwrite`, `$fflush` and
-  `$fclose`, and read a byte at a time by `$fgetc` and whole by `$readmemh` and `$readmemb`, into a
-  memory of one unpacked dimension;
+  all one- and two-argument real math functions, and those slang folds to a constant. Files are
+  written, with `$fdisplay`, `$fwrite`, `$fflush` and `$fclose`, and read a byte at a time by
+  `$fgetc` and whole by `$readmemh` and `$readmemb`, into a memory of one unpacked dimension;
 - a tolerance range in an `inside` set, such as `[value +/- tolerance]`;
 - an event control whose expression reads a variable local to its process or subprogram, or changes
   something. Other expressions, such as `@(a & b)` and `@(posedge clk[i])` with `i` a signal,

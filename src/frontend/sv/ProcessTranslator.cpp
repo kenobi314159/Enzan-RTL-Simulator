@@ -147,14 +147,24 @@ bool hasSideEffects(const ast::Expression& expression) {
                          },
                          [&found](auto& visitor, const ast::CallExpression& call) {
                              static constexpr std::array PureFunctions{
-                                 std::string_view("$bits"),      std::string_view("$clog2"),
-                                 std::string_view("$signed"),    std::string_view("$unsigned"),
-                                 std::string_view("$countones"), std::string_view("$onehot"),
-                                 std::string_view("$onehot0"),   std::string_view("$isunknown"),
-                                 std::string_view("$time"),      std::string_view("$stime"),
-                                 std::string_view("$realtime"),  std::string_view("$rtoi"),
-                                 std::string_view("$itor"),      std::string_view("$realtobits"),
-                                 std::string_view("$bitstoreal")};
+                                 std::string_view("$bits"),       std::string_view("$clog2"),
+                                 std::string_view("$signed"),     std::string_view("$unsigned"),
+                                 std::string_view("$countones"),  std::string_view("$onehot"),
+                                 std::string_view("$onehot0"),    std::string_view("$isunknown"),
+                                 std::string_view("$time"),       std::string_view("$stime"),
+                                 std::string_view("$realtime"),   std::string_view("$rtoi"),
+                                 std::string_view("$itor"),       std::string_view("$realtobits"),
+                                 std::string_view("$bitstoreal"), std::string_view("$ln"),
+                                 std::string_view("$log10"),      std::string_view("$exp"),
+                                 std::string_view("$sqrt"),       std::string_view("$floor"),
+                                 std::string_view("$ceil"),       std::string_view("$sin"),
+                                 std::string_view("$cos"),        std::string_view("$tan"),
+                                 std::string_view("$asin"),       std::string_view("$acos"),
+                                 std::string_view("$atan"),       std::string_view("$sinh"),
+                                 std::string_view("$cosh"),       std::string_view("$tanh"),
+                                 std::string_view("$asinh"),      std::string_view("$acosh"),
+                                 std::string_view("$atanh"),      std::string_view("$pow"),
+                                 std::string_view("$atan2"),      std::string_view("$hypot")};
                              if (!call.isSystemCall()
                                  || std::ranges::find(PureFunctions, call.getSubroutineName())
                                         == PureFunctions.end()) {
@@ -3929,6 +3939,58 @@ ProcessTranslator::translateCall(const ast::Expression& expression) {
             emit(eir::Instruction::make(coarser > 0 ? eir::Opcode::Divide : eir::Opcode::Multiply,
                                         eir::Operand::reg(result), eir::Operand::reg(time.reg),
                                         eir::Operand::reg(factor.reg)));
+            return Value{.reg = result, .type = eir::Type::real()};
+        }
+
+        const auto unaryMath = [&]() -> std::optional<eir::RealUnaryFunction> {
+            if (name == "$ln") return eir::RealUnaryFunction::Ln;
+            if (name == "$log10") return eir::RealUnaryFunction::Log10;
+            if (name == "$exp") return eir::RealUnaryFunction::Exp;
+            if (name == "$sqrt") return eir::RealUnaryFunction::Sqrt;
+            if (name == "$floor") return eir::RealUnaryFunction::Floor;
+            if (name == "$ceil") return eir::RealUnaryFunction::Ceil;
+            if (name == "$sin") return eir::RealUnaryFunction::Sin;
+            if (name == "$cos") return eir::RealUnaryFunction::Cos;
+            if (name == "$tan") return eir::RealUnaryFunction::Tan;
+            if (name == "$asin") return eir::RealUnaryFunction::Asin;
+            if (name == "$acos") return eir::RealUnaryFunction::Acos;
+            if (name == "$atan") return eir::RealUnaryFunction::Atan;
+            if (name == "$sinh") return eir::RealUnaryFunction::Sinh;
+            if (name == "$cosh") return eir::RealUnaryFunction::Cosh;
+            if (name == "$tanh") return eir::RealUnaryFunction::Tanh;
+            if (name == "$asinh") return eir::RealUnaryFunction::Asinh;
+            if (name == "$acosh") return eir::RealUnaryFunction::Acosh;
+            if (name == "$atanh") return eir::RealUnaryFunction::Atanh;
+            return std::nullopt;
+        }();
+        if (unaryMath.has_value() && call.arguments().size() == 1) {
+            const std::optional<Value> argument = translateExpression(*call.arguments()[0]);
+            if (!argument.has_value()) return std::nullopt;
+            const Value real = coerce(*argument, eir::Type::real());
+            const std::uint32_t result = newRegister(eir::Type::real());
+            emit(eir::Instruction::make(
+                eir::Opcode::RealUnaryMath, eir::Operand::reg(result), eir::Operand::reg(real.reg),
+                eir::Operand::immediate(static_cast<std::uint32_t>(*unaryMath))));
+            return Value{.reg = result, .type = eir::Type::real()};
+        }
+
+        const auto binaryMath = [&]() -> std::optional<eir::RealBinaryFunction> {
+            if (name == "$pow") return eir::RealBinaryFunction::Pow;
+            if (name == "$atan2") return eir::RealBinaryFunction::Atan2;
+            if (name == "$hypot") return eir::RealBinaryFunction::Hypot;
+            return std::nullopt;
+        }();
+        if (binaryMath.has_value() && call.arguments().size() == 2) {
+            const std::optional<Value> left = translateExpression(*call.arguments()[0]);
+            const std::optional<Value> right = translateExpression(*call.arguments()[1]);
+            if (!left.has_value() || !right.has_value()) return std::nullopt;
+            const Value a = coerce(*left, eir::Type::real());
+            const Value b = coerce(*right, eir::Type::real());
+            const std::uint32_t result = newRegister(eir::Type::real());
+            emit(eir::Instruction::make(
+                eir::Opcode::RealBinaryMath, eir::Operand::reg(result), eir::Operand::reg(a.reg),
+                eir::Operand::reg(b.reg),
+                eir::Operand::immediate(static_cast<std::uint32_t>(*binaryMath))));
             return Value{.reg = result, .type = eir::Type::real()};
         }
 

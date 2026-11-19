@@ -2693,6 +2693,48 @@ TEST(Kernel, RealsComputeAsDoublesAndRoundHalfwayAwayFromZero) {
     EXPECT_EQ(simulation.value("/tb/e", Radix::Decimal), "1");
 }
 
+TEST(Kernel, RealMathFunctionsUseTheirSelectedOperation) {
+    ProcessBuilder builder(ProcessKind::Initial, "real_math");
+    const Type real = Type::real();
+    const Type integer = Type::bits(32, true, false);
+    const std::uint32_t three = builder.reg(real);
+    const std::uint32_t four = builder.reg(real);
+    const std::uint32_t nine = builder.reg(real);
+    const std::uint32_t root = builder.reg(real);
+    const std::uint32_t hypotenuse = builder.reg(real);
+    const std::uint32_t rootInteger = builder.reg(integer);
+    const std::uint32_t hypotenuseInteger = builder.reg(integer);
+
+    builder.block("entry");
+    builder.emit(Instruction::make(Opcode::LoadConstant, Operand::reg(three),
+                                   Operand::constant(builder.constant("64'h4008000000000000"))));
+    builder.emit(Instruction::make(Opcode::LoadConstant, Operand::reg(four),
+                                   Operand::constant(builder.constant("64'h4010000000000000"))));
+    builder.emit(Instruction::make(Opcode::LoadConstant, Operand::reg(nine),
+                                   Operand::constant(builder.constant("64'h4022000000000000"))));
+    builder.emit(Instruction::make(
+        Opcode::RealUnaryMath, Operand::reg(root), Operand::reg(nine),
+        Operand::immediate(static_cast<std::uint32_t>(enzan::eir::RealUnaryFunction::Sqrt))));
+    builder.emit(Instruction::make(
+        Opcode::RealBinaryMath, Operand::reg(hypotenuse), Operand::reg(three), Operand::reg(four),
+        Operand::immediate(static_cast<std::uint32_t>(enzan::eir::RealBinaryFunction::Hypot))));
+    builder.emit(Instruction::make(Opcode::Convert, Operand::reg(rootInteger), Operand::reg(root)));
+    builder.emit(Instruction::make(Opcode::Convert, Operand::reg(hypotenuseInteger),
+                                   Operand::reg(hypotenuse)));
+    builder.store(0, rootInteger);
+    builder.store(1, hypotenuseInteger);
+    builder.emit(Instruction::make(Opcode::Return));
+
+    ModuleDefinition definition =
+        makeTop({builder.finish()}, {Object{.name = "root", .type = integer},
+                                     Object{.name = "hypotenuse", .type = integer}});
+    Simulation simulation(designOf(std::move(definition)), "tb");
+    ASSERT_TRUE(simulation.ready()) << reportedMessages(simulation);
+    EXPECT_EQ(simulation.run(), RunStatus::Quiescent);
+    EXPECT_EQ(simulation.value("/tb/root", Radix::Decimal), "3");
+    EXPECT_EQ(simulation.value("/tb/hypotenuse", Radix::Decimal), "5");
+}
+
 TEST(Kernel, CodesArePresentedAsBitsAndBitsEncodedAsCodes) {
     // What crosses a language boundary: std_ulogic's '1', '0', 'H' and 'Z' as the bits 1 0 1 z,
     // and the bits 1 0 x z as std_ulogic's '1', '0', 'X' and 'Z' and as bits' 1, 0, 0 and 0; and

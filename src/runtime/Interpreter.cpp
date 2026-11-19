@@ -49,6 +49,35 @@ bool runReal(const codegen::Instruction& instruction, const Registers& reg) {
         return true;
     }
     case eir::Opcode::RealPower: result(std::pow(a(), b())); return true;
+    case eir::Opcode::RealUnaryMath:
+        switch (static_cast<eir::RealUnaryFunction>(instruction.b)) {
+        case eir::RealUnaryFunction::Ln: result(std::log(a())); return true;
+        case eir::RealUnaryFunction::Log10: result(std::log10(a())); return true;
+        case eir::RealUnaryFunction::Exp: result(std::exp(a())); return true;
+        case eir::RealUnaryFunction::Sqrt: result(std::sqrt(a())); return true;
+        case eir::RealUnaryFunction::Floor: result(std::floor(a())); return true;
+        case eir::RealUnaryFunction::Ceil: result(std::ceil(a())); return true;
+        case eir::RealUnaryFunction::Sin: result(std::sin(a())); return true;
+        case eir::RealUnaryFunction::Cos: result(std::cos(a())); return true;
+        case eir::RealUnaryFunction::Tan: result(std::tan(a())); return true;
+        case eir::RealUnaryFunction::Asin: result(std::asin(a())); return true;
+        case eir::RealUnaryFunction::Acos: result(std::acos(a())); return true;
+        case eir::RealUnaryFunction::Atan: result(std::atan(a())); return true;
+        case eir::RealUnaryFunction::Sinh: result(std::sinh(a())); return true;
+        case eir::RealUnaryFunction::Cosh: result(std::cosh(a())); return true;
+        case eir::RealUnaryFunction::Tanh: result(std::tanh(a())); return true;
+        case eir::RealUnaryFunction::Asinh: result(std::asinh(a())); return true;
+        case eir::RealUnaryFunction::Acosh: result(std::acosh(a())); return true;
+        case eir::RealUnaryFunction::Atanh: result(std::atanh(a())); return true;
+        }
+        ENZAN_UNREACHABLE("a verified one-argument real math function is out of range");
+    case eir::Opcode::RealBinaryMath:
+        switch (static_cast<eir::RealBinaryFunction>(instruction.c)) {
+        case eir::RealBinaryFunction::Pow: result(std::pow(a(), b())); return true;
+        case eir::RealBinaryFunction::Atan2: result(std::atan2(a(), b())); return true;
+        case eir::RealBinaryFunction::Hypot: result(std::hypot(a(), b())); return true;
+        }
+        ENZAN_UNREACHABLE("a verified two-argument real math function is out of range");
     case eir::Opcode::Equal: truth(a() == b()); return true;
     case eir::Opcode::NotEqual: truth(a() != b()); return true;
     case eir::Opcode::LessThan: truth(a() < b()); return true;
@@ -699,6 +728,10 @@ ExecutionResult Interpreter::execute(std::uint32_t processIndex, Activation curr
 
         case eir::Opcode::RealPower:
             ENZAN_UNREACHABLE("a real power was not run as an operation on reals");
+
+        case eir::Opcode::RealUnaryMath:
+        case eir::Opcode::RealBinaryMath:
+            ENZAN_UNREACHABLE("a real math function was not run as an operation on reals");
 
         case eir::Opcode::CaseZMatch:
             bitops::caseZMatch(reg(instruction.dst, instruction.dstWidth),
