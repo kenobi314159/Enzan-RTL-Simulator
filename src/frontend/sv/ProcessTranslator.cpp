@@ -667,7 +667,9 @@ bool ProcessTranslator::translateBody(const ast::Statement& body) {
 }
 
 bool ProcessTranslator::translateExpressionInto(std::uint32_t objectIndex,
-                                                const ast::Expression& expression) {
+                                                const ast::Expression& expression,
+                                                const ast::TimingControl* delay) {
+    if (delay != nullptr && !setContinuousDelay(*delay)) return false;
     const std::optional<Value> value = translateExpression(expression);
     if (!value.has_value()) return false;
 
@@ -676,8 +678,7 @@ bool ProcessTranslator::translateExpressionInto(std::uint32_t objectIndex,
     const Value stored = coerceState(widened, objectType);
 
     noteWholeWrite(objectIndex);
-    emit(eir::Instruction::make(eir::Opcode::Store, {}, eir::Operand::object(objectIndex),
-                                eir::Operand::reg(stored.reg)));
+    if (!emitWholeStore(objectIndex, stored.reg, false)) return false;
 
     if (!currentBlockTerminated()) emit(eir::Instruction::make(eir::Opcode::Return));
 

@@ -652,6 +652,11 @@ floor.
   leaves open, and Enzan takes them in port order. A continuous assignment's separate rise, fall
   and turn-off delays select one delay for a vector: fall when it becomes zero, turn-off when it
   becomes all z, and rise otherwise (IEEE 1800 section 10.3.3).
+- **A net declaration delay follows resolution.** The declared object is the visible net, a hidden
+  net receives and resolves every driver, and one continuous assignment delays the resolved value
+  between them. An input port exposes the hidden side to its connection; an output exposes the
+  visible side. In `wire #5 w = expression`, by contrast, the delay belongs only to that declaration
+  assignment, as IEEE 1800 section 10.3.3 requires.
 - **A real is a double**, `shortreal` without its reduced precision.
 - **A named event is a bit its trigger toggles**, so that what waits on it sees it change.
 - **An event control on an expression waits on an object a continuous assignment keeps at the

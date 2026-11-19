@@ -247,8 +247,10 @@ public:
     bool translateConcurrentAssertion(const slang::ast::Statement& statement,
                                       const slang::ast::Scope& scope);
 
-    /// Copies `source` into `target` whole, as a continuous assignment would.
-    bool translateCopyInto(std::uint32_t target, std::uint32_t source);
+    /// Copies `source` into `target` whole, as a continuous assignment would, after `delay` when
+    /// one is given.
+    bool translateCopyInto(std::uint32_t target, std::uint32_t source,
+                           const slang::ast::TimingControl* delay = nullptr);
 
     /// Translates `expression` and stores its value into `objectIndex`.
     ///
@@ -257,7 +259,8 @@ public:
     /// names an object, so the expression becomes a real assignment in the EIR rather than
     /// something the elaborator has to understand.
     bool translateExpressionInto(std::uint32_t objectIndex,
-                                 const slang::ast::Expression& expression);
+                                 const slang::ast::Expression& expression,
+                                 const slang::ast::TimingControl* delay = nullptr);
 
     /// Reads `objectIndex` and assigns it to whatever `target` designates.
     ///

@@ -19,8 +19,9 @@ keyword, such as `logic`, `bit`, `int` or `final`, which then has to be renamed.
   assignments, and tasks and functions.
 - Four-state values, packed and unpacked arrays and structs of fixed size, enumerations and reals,
   including powers with real exponents; streaming concatenations, `{<<{...}}` and `{>>{...}}`.
-- Nets of every kind with several drivers, resolved by their kind, at strong and weak strengths;
-  gates, MOS switches and user-defined primitives; specify blocks' module path delays.
+- Nets of every kind with several drivers, resolved by their kind, at strong and weak strengths,
+  including declaration delays after resolution; gates, MOS switches and user-defined primitives;
+  specify blocks' module path delays.
 - Delays, event controls on signals and expressions, named events, `wait`, `force` and `release`,
   `assign` and `deassign`; delayed writes to a whole signal or a selected part.
 - Immediate assertions, and concurrent assertions declared in a module: `assert`, `assume` and
@@ -45,7 +46,7 @@ keyword, such as `logic`, `bit`, `int` or `final`, which then has to be renamed.
   assertions (`assert #0`, `assert final`).
 - An event control whose expression reads a variable local to the process or subprogram, or has a
   side effect.
-- A delay on a net declaration, such as `wire #5 w`.
+- A net declaration delay on an `inout` port, or combined with a module path delay.
 - `trireg`, `interconnect`, user-defined nettypes, `highz` strengths, and the resistive and
   bidirectional switches.
 - Most system functions beyond those above; any slang computes while analysing works too.

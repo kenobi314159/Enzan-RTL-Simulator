@@ -166,6 +166,11 @@ enzan_add_golden_test(rise_fall)
 # apply the standard's rise choice to a mixed 0-to-1/x/z transition, so this case checks itself.
 enzan_add_golden_test(vector_transition_delays NO_DIFFERENTIAL)
 
+# A delay after all drivers of a net resolve, including transition delays, and the distinct delay
+# of the continuous assignment written inside a net declaration. Icarus Verilog diagnoses net
+# delays as unsupported, so the case checks itself.
+enzan_add_golden_test(net_delays NO_DIFFERENTIAL)
+
 # Delayed writes to part of a signal: a memory word at an index known as the design runs, a bit of
 # a vector, and a continuous assignment of one bit that rejects a pulse shorter than its delay.
 enzan_add_golden_test(delayed_parts)

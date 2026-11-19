@@ -145,9 +145,10 @@ Reported as `ENZ1004` with the construct named, rather than mistranslated:
   something. Other expressions, such as `@(a & b)` and `@(posedge clk[i])` with `i` a signal,
   wait on an object holding the expression's value;
 - an event control on a nonblocking assignment, such as `a <= @(posedge clk) b`, separate delays
-  known only while the design runs, and a delay on a net, such as `wire #5 w`. Intra-assignment
-  delays on whole signals and selected parts work, and so do single and scalar or vector transition
-  delays on continuous assignments and gates, inertially;
+  known only while the design runs, and a net declaration delay on an `inout` port or combined with
+  a module path delay. Intra-assignment delays on whole signals and selected parts work, as do net
+  declaration delays after resolution, and single and scalar or vector transition delays on
+  continuous assignments and gates, inertially;
 - `trireg`, `interconnect` and user-defined nettypes, which have no resolution table;
 - `highz` strengths, and the resistive and bidirectional switches; strong and weak strengths and
   the unidirectional MOS switches work.

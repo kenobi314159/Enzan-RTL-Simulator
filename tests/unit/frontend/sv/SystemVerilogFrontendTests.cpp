@@ -660,12 +660,13 @@ TEST_F(FrontendTest, ANetWithNoResolutionTableIsReported) {
 }
 
 TEST_F(FrontendTest, ANetDeclarationAssignmentIsAContinuousAssignment) {
-    // `wire w = a & b;` drives the net for the whole run, not only at time zero.
+    // `wire #5 w = a & b;` drives the net for the whole run, not only at time zero, and its
+    // delay belongs to this assignment rather than delaying every driver of the net.
     const std::unique_ptr<Design> design = analyse(R"(
         module top;
             logic [3:0] a;
             logic [3:0] b;
-            wire  [3:0] w = a & b;
+            wire [3:0] #5 w = a & b;
         endmodule
     )");
     ASSERT_NE(design, nullptr) << consumer.messages.front();
@@ -677,6 +678,12 @@ TEST_F(FrontendTest, ANetDeclarationAssignmentIsAContinuousAssignment) {
     EXPECT_FALSE(top.objects[w].initialValue.has_value());
     ASSERT_EQ(top.processes.size(), 1U);
     EXPECT_EQ(top.processes[0].kind, enzan::eir::ProcessKind::ContinuousAssign);
+    EXPECT_TRUE(std::ranges::any_of(top.processes[0].blocks, [](const auto& block) {
+        return std::ranges::any_of(block.instructions, [](const auto& instruction) {
+            return instruction.opcode == enzan::eir::Opcode::StoreDelayed;
+        });
+    }));
+    EXPECT_FALSE(top.findObject("w$undelayed").has_value());
     EXPECT_EQ(extentsOf(top, "w"),
               (std::vector<std::vector<WriteExtent>>{{extent(top, "w", 0, 4)}}));
 }
@@ -1491,16 +1498,82 @@ TEST_F(FrontendTest, RefusesADefparamSlangWouldReadAtItsDefaultsWidth) {
     EXPECT_TRUE(reported("a defparam setting the untyped parameter 'mode' to 104 bits"));
 }
 
-TEST_F(FrontendTest, ReportsADelayOnANet) {
-    EXPECT_EQ(analyse(R"(
+TEST_F(FrontendTest, ANetDelayFollowsResolutionOfAllItsDrivers) {
+    const std::unique_ptr<Design> design = analyse(R"(
         module m;
-            logic a;
-            wire #5 w;
+            logic a, b;
+            tri #5 w;
             assign w = a;
+            assign w = b;
+        endmodule
+    )");
+    ASSERT_NE(design, nullptr) << consumer.messages.front();
+    EXPECT_TRUE(enzan::eir::verify(*design, engine)) << consumer.messages.front();
+    const ModuleDefinition* found = design->findModule("m");
+    ASSERT_NE(found, nullptr);
+    const std::uint32_t visible = require(found->findObject("w"));
+    const std::uint32_t undelayed = require(found->findObject("w$undelayed"));
+    EXPECT_EQ(found->objects[visible].netKind, enzan::eir::NetKind::Tri);
+    EXPECT_EQ(found->objects[undelayed].netKind, enzan::eir::NetKind::Tri);
+
+    ASSERT_EQ(found->processes.size(), 3U);
+    const auto delayProcess = std::ranges::find_if(found->processes, [](const auto& process) {
+        return process.name.starts_with("netdelay@");
+    });
+    ASSERT_NE(delayProcess, found->processes.end());
+    EXPECT_TRUE(std::ranges::binary_search(delayProcess->readSet, undelayed));
+    EXPECT_TRUE(enzan::eir::writesObject(delayProcess->writeSet, visible));
+    EXPECT_TRUE(std::ranges::any_of(delayProcess->blocks, [](const auto& block) {
+        return std::ranges::any_of(block.instructions, [](const auto& instruction) {
+            return instruction.opcode == enzan::eir::Opcode::StoreDelayed;
+        });
+    }));
+
+    for (const enzan::eir::Process& process : found->processes) {
+        if (&process == &*delayProcess) continue;
+        EXPECT_TRUE(enzan::eir::writesObject(process.writeSet, undelayed));
+        EXPECT_FALSE(enzan::eir::writesObject(process.writeSet, visible));
+    }
+}
+
+TEST_F(FrontendTest, NetDelaysOnInputAndOutputPortsFaceTheRightWay) {
+    const std::unique_ptr<Design> design = analyse(R"(
+        module m (i, q);
+            input  i;
+            output q;
+            wire #5 i;
+            wire #7 q;
+            assign q = i;
+        endmodule
+    )");
+    ASSERT_NE(design, nullptr) << consumer.messages.front();
+    EXPECT_TRUE(enzan::eir::verify(*design, engine)) << consumer.messages.front();
+    const ModuleDefinition* found = design->findModule("m");
+    ASSERT_NE(found, nullptr);
+
+    const auto input = std::ranges::find(found->ports, "i", &enzan::eir::Port::name);
+    const auto output = std::ranges::find(found->ports, "q", &enzan::eir::Port::name);
+    ASSERT_NE(input, found->ports.end());
+    ASSERT_NE(output, found->ports.end());
+    EXPECT_EQ(input->objectIndex, require(found->findObject("i$undelayed")));
+    EXPECT_EQ(output->objectIndex, require(found->findObject("q")));
+
+    const std::uint32_t undelayedOutput = require(found->findObject("q$undelayed"));
+    const auto assignment = std::ranges::find_if(
+        found->processes, [](const auto& process) { return process.name.starts_with("assign@"); });
+    ASSERT_NE(assignment, found->processes.end());
+    EXPECT_TRUE(enzan::eir::writesObject(assignment->writeSet, undelayedOutput));
+}
+
+TEST_F(FrontendTest, ReportsANetDelayOnAnInoutPort) {
+    EXPECT_EQ(analyse(R"(
+        module m (p);
+            inout p;
+            wire #5 p;
         endmodule
     )"),
               nullptr);
-    EXPECT_TRUE(reported("a delay on a net"));
+    EXPECT_TRUE(reported("a delay on the inout net 'p'"));
 }
 
 TEST_F(FrontendTest, ReportsAnInoutConnectedToASignalOfAnotherWidth) {
