@@ -36,8 +36,8 @@ keyword, such as `logic`, `bit`, `int` or `final`, which then has to be renamed.
 ### Not yet
 
 - Classes, and what is built on them: UVM, `randomize` and constraints, covergroups.
-- `string` variables and ports, real ports, dynamic and associative arrays, queues and unpacked
-  unions.
+- `string` variables and ports, ports holding aggregates of reals, dynamic and associative arrays,
+  queues and unpacked unions.
 - `fork`, a recursive function, `ref` arguments and DPI.
 - Concurrent assertions beyond the subset above: a range of delays (`##[1:3]`), goto and
   non-consecutive repetitions, the property operators (`not`, `and`, `until`, `s_eventually` and

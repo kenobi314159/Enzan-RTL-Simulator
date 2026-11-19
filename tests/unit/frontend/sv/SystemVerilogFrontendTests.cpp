@@ -2283,14 +2283,23 @@ TEST_F(FrontendTest, ARealIsADouble) {
     EXPECT_TRUE(enzan::eir::verify(*design, engine)) << consumer.messages.front();
 }
 
-TEST_F(FrontendTest, ReportsARealPortByName) {
-    EXPECT_EQ(analyse(R"(
-        module m (input real level);
+TEST_F(FrontendTest, ARealPortKeepsItsRealEncoding) {
+    const std::unique_ptr<Design> design = analyse(R"(
+        module m (input real level, output real result);
+            always_comb result = level * 2.0;
         endmodule
     )",
-                      "m"),
-              nullptr);
-    EXPECT_TRUE(reported("the real port 'level'"));
+                                                   "m");
+    ASSERT_NE(design, nullptr) << consumer.messages.front();
+    const ModuleDefinition* found = design->findModule("m");
+    ASSERT_NE(found, nullptr);
+    ASSERT_EQ(found->ports.size(), 2);
+    for (const enzan::eir::Port& port : found->ports) {
+        const enzan::eir::Object& object = found->objects[port.objectIndex];
+        EXPECT_TRUE(object.type.isReal());
+        EXPECT_EQ(object.encoding, enzan::eir::Encoding::Real);
+    }
+    EXPECT_TRUE(enzan::eir::verify(*design, engine)) << consumer.messages.front();
 }
 
 TEST_F(FrontendTest, ReportsAPortHoldingRealsByName) {

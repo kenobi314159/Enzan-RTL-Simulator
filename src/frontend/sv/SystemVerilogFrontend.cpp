@@ -492,9 +492,10 @@ private:
     /// when the type is not an enumeration.
     std::uint32_t enumFor(const ast::Type& type);
 
-    /// True when `type` is as wide as `port`, so that elaboration can collapse the port onto a
-    /// signal of it. A port whose type does not convert is left to the connection to report.
-    bool hasPortWidth(const ast::PortSymbol& port, const eir::Type& type);
+    /// True when `type` has the width and real encoding of `port`, so that elaboration can collapse
+    /// the port onto a signal of it. A port whose type does not convert is left to the connection
+    /// to report.
+    bool hasPortStorage(const ast::PortSymbol& port, const eir::Type& type);
 
     /// Creates an intermediate object plus a continuous assignment for a port connection
     /// that is an expression rather than a plain signal.
@@ -1537,10 +1538,6 @@ bool ModuleBuilder::collectDeclarations() {
         const std::optional<std::uint32_t> objectIndex =
             objectFor(port.internalSymbol->as<ast::ValueSymbol>());
         if (!objectIndex.has_value()) continue;
-        if (definitionValue.objects[*objectIndex].type.isReal()) {
-            reportUnsupported(port.location, std::format("the real port '{}'", port.name));
-            continue;
-        }
         if (definitionValue.objects[*objectIndex].holdsReals) {
             reportUnsupported(port.location,
                               std::format("the port '{}', which holds reals,", port.name));
@@ -2097,12 +2094,13 @@ ModuleBuilder::extractSensitivity(ProcessTranslator& translator, const ast::Timi
     }
 }
 
-bool ModuleBuilder::hasPortWidth(const ast::PortSymbol& port, const eir::Type& type) {
+bool ModuleBuilder::hasPortStorage(const ast::PortSymbol& port, const eir::Type& type) {
     if (port.internalSymbol == nullptr || !ast::ValueSymbol::isKind(port.internalSymbol->kind))
         return true;
     const std::optional<eir::Type> portType =
         convertType(port.internalSymbol->as<ast::ValueSymbol>().getType());
-    return !portType.has_value() || portType->bitWidth() == type.bitWidth();
+    return !portType.has_value()
+           || (portType->bitWidth() == type.bitWidth() && portType->isReal() == type.isReal());
 }
 
 std::optional<std::uint32_t>
@@ -2136,6 +2134,7 @@ ModuleBuilder::materialiseConnection(const ast::InstanceSymbol& instance,
     eir::Object object;
     object.name = uniqueObjectName(std::format("{}${}", instance.name, port.name));
     object.type = *type;
+    if (type->isReal()) object.encoding = eir::Encoding::Real;
     object.kind = eir::ObjectKind::Variable;
     if (port.internalSymbol->kind == slang::ast::SymbolKind::Net) {
         const std::optional<eir::NetKind> netKind =
@@ -2220,7 +2219,7 @@ bool ModuleBuilder::addInstance(
             // (IEEE 1800 section 23.3.3.7).
             if (objectIndex.has_value()
                 && (!definitionValue.objects[*objectIndex].hierarchicalPath.empty()
-                    || !hasPortWidth(port, definitionValue.objects[*objectIndex].type)))
+                    || !hasPortStorage(port, definitionValue.objects[*objectIndex].type)))
                 objectIndex = materialiseConnection(instance, port, reference);
         } else {
             objectIndex = materialiseConnection(instance, port, reference);

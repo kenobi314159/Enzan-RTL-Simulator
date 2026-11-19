@@ -115,7 +115,7 @@ Reported as `ENZ1004` with the construct named, rather than mistranslated:
 
 - dynamic and associative arrays, queues, unpacked unions, `string` and class types (packed
   vectors, structs and arrays, enums, reals, and fixed-size unpacked arrays and structs, of reals
-  among them, all work), and a port of a real or holding one. A computation with reals whose
+  among them, all work), and a port holding an aggregate of reals. A computation with reals whose
   operands are all constants, such as `Period >= 2ps` with `Period` a parameter, is folded to its
   integral result;
 - a recursive call, which slang does not fold to a constant, and a `ref` argument;
