@@ -17,8 +17,8 @@ keyword, such as `logic`, `bit`, `int` or `final`, which then has to be renamed.
   hierarchical references.
 - `initial`, `final`, `always`, `always_comb`, `always_ff` and `always_latch`, continuous
   assignments, and tasks and functions.
-- Four-state values, packed and unpacked arrays and structs of fixed size, enumerations and reals;
-  streaming concatenations, `{<<{...}}` and `{>>{...}}`.
+- Four-state values, packed and unpacked arrays and structs of fixed size, enumerations and reals,
+  including powers with real exponents; streaming concatenations, `{<<{...}}` and `{>>{...}}`.
 - Nets of every kind with several drivers, resolved by their kind, at strong and weak strengths;
   gates, MOS switches and user-defined primitives; specify blocks' module path delays.
 - Delays, event controls on signals and expressions, named events, `wait`, `force` and `release`,

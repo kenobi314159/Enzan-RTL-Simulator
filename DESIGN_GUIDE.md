@@ -2014,8 +2014,8 @@ regression each run with a recorded pass rate.
 Left out of the milestones above, and refused by name where a design uses them rather than
 mistranslated:
 
-- SystemVerilog `string` variables and ports, ports holding aggregates of reals, a real
-  exponent, events as values, dynamic and associative arrays, queues, classes, unpacked unions,
+- SystemVerilog `string` variables and ports, ports holding aggregates of reals, events as values,
+  dynamic and associative arrays, queues, classes, unpacked unions,
   `fork`, `highz` strengths, resistive and bidirectional switches, the module paths 5.1 refuses, net
   aliases, a procedural `assign` or `force` of part of an object, and the concurrent assertions
   5.1 refuses.

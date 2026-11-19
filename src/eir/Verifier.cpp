@@ -898,6 +898,12 @@ private:
             checkReals(definition, body, {instruction.dst, instruction.a}, {instruction.b}, where);
             break;
 
+        // A real raised to a real power.
+        case Opcode::RealPower:
+            checkReals(definition, body, {instruction.dst, instruction.a, instruction.b}, {},
+                       where);
+            break;
+
         // Narrower bits, or a real's whole part as bits.
         case Opcode::Truncate:
             if (isRealRegister(body, instruction.dst)) {

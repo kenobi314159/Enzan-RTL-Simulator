@@ -52,6 +52,7 @@ module tb;
         check(2, product < b && b < a && a >= 1.5);
         check(3, average(a, b) == -0.375);
         check(4, Half == 1.25);
+        check(20, 16.0 ** 0.5 == 4.0);
 
         // An assignment rounds halfway away from zero; $rtoi drops the fraction.
         rounded = 2.5;

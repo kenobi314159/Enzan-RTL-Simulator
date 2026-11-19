@@ -48,6 +48,7 @@ bool runReal(const codegen::Instruction& instruction, const Registers& reg) {
         result(std::pow(a(), power));
         return true;
     }
+    case eir::Opcode::RealPower: result(std::pow(a(), b())); return true;
     case eir::Opcode::Equal: truth(a() == b()); return true;
     case eir::Opcode::NotEqual: truth(a() != b()); return true;
     case eir::Opcode::LessThan: truth(a() < b()); return true;
@@ -695,6 +696,9 @@ ExecutionResult Interpreter::execute(std::uint32_t processIndex, Activation curr
                 reg(instruction.dst, instruction.dstWidth), reg(instruction.a, instruction.aWidth),
                 reg(instruction.b, instruction.bWidth), instruction.isSigned, instruction.c != 0);
             break;
+
+        case eir::Opcode::RealPower:
+            ENZAN_UNREACHABLE("a real power was not run as an operation on reals");
 
         case eir::Opcode::CaseZMatch:
             bitops::caseZMatch(reg(instruction.dst, instruction.dstWidth),

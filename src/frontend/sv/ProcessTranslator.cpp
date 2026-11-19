@@ -2776,12 +2776,16 @@ ProcessTranslator::translateBinary(const ast::Expression& expression) {
 
     case ast::BinaryOperator::Power: {
         // The exponent is self-determined, as a shift amount is, and its signedness decides
-        // what a negative one means, so it travels as an immediate. A real raises to a whole
-        // power only.
+        // what a negative integral one means, so it travels as an immediate. A real exponent
+        // uses the double operation of its own instead.
         if (right->type.isReal()) {
-            module->reportUnsupported(expression.sourceRange.start(), "a real exponent");
-            failed = true;
-            return std::nullopt;
+            const Value base = coerce(*left, eir::Type::real());
+            const Value exponent = coerce(*right, eir::Type::real());
+            const std::uint32_t result = newRegister(eir::Type::real());
+            emit(eir::Instruction::make(eir::Opcode::RealPower, eir::Operand::reg(result),
+                                        eir::Operand::reg(base.reg),
+                                        eir::Operand::reg(exponent.reg)));
+            return Value{.reg = result, .type = eir::Type::real()};
         }
         const Value base = coerce(*left, *resultType);
         const std::uint32_t result = newRegister(*resultType);

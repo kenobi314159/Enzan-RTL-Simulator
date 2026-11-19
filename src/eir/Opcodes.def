@@ -234,6 +234,9 @@ ENZAN_OPCODE(Power, "pow", true, 3,
              "table of IEEE 1800 section 11.4.3 for a negative exponent, then square and "
              "multiply over the exponent's bits with `mul`; wide values call the runtime "
              "helper, as Multiply does")
+ENZAN_OPCODE(RealPower, "rpow", true, 2,
+             "llvm.pow on the aval planes interpreted as doubles; real values have no bval "
+             "plane")
 
 // --- Shifts ----------------------------------------------------------------
 
