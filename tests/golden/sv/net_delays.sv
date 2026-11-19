@@ -13,6 +13,13 @@ module delayed_ports(input_value, output_value);
     assign output_value = input_value;
 endmodule
 
+module delayed_driver(output wire output_value);
+    logic value = 1'b0;
+    assign output_value = value;
+
+    initial #20 value = 1'b1;
+endmodule
+
 module tb;
     logic high = 1'b0, low = 1'b0;
     tri #5 resolved;
@@ -30,6 +37,9 @@ module tb;
     logic port_driver = 1'b0;
     wire port_delayed;
     delayed_ports ports(.input_value(port_driver), .output_value(port_delayed));
+
+    wire #5 instance_delayed;
+    delayed_driver driver(.output_value(instance_delayed));
 
     initial begin
         #1 if (resolved !== 1'bz) $fatal(1, "net did not begin undriven: %b", resolved);
@@ -77,6 +87,13 @@ module tb;
         #8 port_driver = 1'b1;
         #11 if (port_delayed !== 1'b0) $fatal(1, "early changed delay through ports");
         #1 if (port_delayed !== 1'b1) $fatal(1, "changed delay through ports");
+    end
+
+    initial begin
+        #4 if (instance_delayed !== 1'bz) $fatal(1, "early delay from an instance");
+        #1 if (instance_delayed !== 1'b0) $fatal(1, "initial delay from an instance");
+        #19 if (instance_delayed !== 1'b0) $fatal(1, "early changed delay from an instance");
+        #1 if (instance_delayed !== 1'b1) $fatal(1, "changed delay from an instance");
     end
 
     initial begin
