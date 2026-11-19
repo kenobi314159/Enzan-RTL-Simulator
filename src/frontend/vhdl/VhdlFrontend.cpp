@@ -60,7 +60,7 @@ enum class Record : std::uint8_t {
     Answers = 6,
     /// The interfaces of the entities SystemVerilog instantiates: how many, then each's name, its
     /// parameters' count, name, kind, length and value when it has one, and its ports' count,
-    /// name, direction, whether four-state, whether signed and whether unpacked.
+    /// name, direction, whether four-state, signed, real and unpacked.
     Interfaces = 7,
     /// NVC's analysis of the sources succeeded, so their units are in the work library whatever
     /// the translation after it did.
@@ -239,6 +239,7 @@ public:
                 encoder.byte(static_cast<std::uint8_t>(port.direction));
                 encoder.byte(port.fourState ? 1 : 0);
                 encoder.byte(port.isSigned ? 1 : 0);
+                encoder.byte(port.isReal ? 1 : 0);
                 encoder.byte(port.unpacked ? 1 : 0);
             }
         }
@@ -436,14 +437,16 @@ std::optional<eir::UnitInterface> decodeInterface(Decoder& decoder) {
         const std::optional<std::uint8_t> direction = decoder.byte();
         const std::optional<std::uint8_t> fourState = decoder.byte();
         const std::optional<std::uint8_t> isSigned = decoder.byte();
+        const std::optional<std::uint8_t> isReal = decoder.byte();
         const std::optional<std::uint8_t> unpacked = decoder.byte();
-        if (!portName || !direction || !fourState || !isSigned || !unpacked
+        if (!portName || !direction || !fourState || !isSigned || !isReal || !unpacked
             || *direction > static_cast<std::uint8_t>(eir::PortDirection::InOut))
             return std::nullopt;
         unit.ports.push_back({.name = std::move(*portName),
                               .direction = static_cast<eir::PortDirection>(*direction),
                               .fourState = *fourState != 0,
                               .isSigned = *isSigned != 0,
+                              .isReal = *isReal != 0,
                               .unpacked = *unpacked != 0});
     }
     return unit;

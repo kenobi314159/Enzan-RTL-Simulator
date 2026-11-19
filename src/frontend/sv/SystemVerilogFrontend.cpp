@@ -2992,10 +2992,14 @@ std::string interfaceText(const std::vector<eir::UnitInterface>& interfaces) {
                     ? std::format(" [{}:{}]", escapedName(boundParameterName(index, "left")),
                                   escapedName(boundParameterName(index, "right")))
                     : std::string();
-            ports.push_back(
-                std::format("{} {}{}[{}- 1:0] {}{}", direction, port.fourState ? "logic " : "bit ",
-                            port.isSigned ? "signed " : "", escapedName(widthParameterName(index)),
-                            escapedName(port.name), dimension));
+            if (port.isReal) {
+                ports.push_back(std::format("{} real {}", direction, escapedName(port.name)));
+            } else {
+                ports.push_back(std::format(
+                    "{} {}{}[{}- 1:0] {}{}", direction, port.fourState ? "logic " : "bit ",
+                    port.isSigned ? "signed " : "", escapedName(widthParameterName(index)),
+                    escapedName(port.name), dimension));
+            }
         }
 
         const auto joined = [](const std::vector<std::string>& parts) {

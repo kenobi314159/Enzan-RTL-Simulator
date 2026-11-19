@@ -2033,9 +2033,9 @@ mistranslated:
   anything but `character`, a function's result, a concatenation outside a message or a `write`,
   a whole such string assigned, a function's own string sized by a parameter its call leaves to the
   run, and one held across a `wait`.
-- A port of a real, an enumeration other than `std_ulogic`, `bit` and `boolean`, or a physical type
-  across the language boundary; a VHDL port of an unconstrained type instantiated from
-  SystemVerilog; a second top level of VHDL.
+- A port holding an aggregate of reals, an enumeration other than `std_ulogic`, `bit` and
+  `boolean`, or a physical type across the language boundary; a VHDL port of an unconstrained
+  type instantiated from SystemVerilog; a second top level of VHDL.
 - Altera's models of Cyclone V and later families, `altera_lnsim.sv`, which M7.2 holds to no
   reference; among them `altera_pll`'s `string` arguments are refused.
 - In VPI, declared ranges (a vector reports `[width-1:0]`), integer atom types, reals and what

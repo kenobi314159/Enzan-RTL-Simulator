@@ -455,15 +455,51 @@ TEST_F(BoundaryTest, ARecordCrossesFieldByFieldIntoATwoStateStruct) {
     EXPECT_EQ(simulation->value("/top/s", Radix::Hexadecimal), "00000000e") << "X as 0, 7, 0";
 }
 
-TEST_F(BoundaryTest, ARealIsRefusedByName) {
+TEST_F(BoundaryTest, AScalarRealCrossesWithoutBitEncoding) {
     Design design;
     ModuleDefinition child = vhdlDefinition("vreal");
     child.vhdlTypes.push_back(
         VhdlType{.kind = VhdlType::Kind::Floating, .name = "REAL", .width = 64});
-    child.addObject(Object{.name = "r",
-                           .type = Type::bits(64, false, false),
-                           .encoding = enzan::eir::Encoding::Real,
-                           .vhdlType = 3});
+    child.addObject(Object{
+        .name = "r", .type = Type::real(), .encoding = enzan::eir::Encoding::Real, .vhdlType = 3});
+    child.ports.push_back(Port{.name = "r", .direction = PortDirection::Input, .objectIndex = 0});
+    design.addModule(std::move(child));
+
+    ModuleDefinition top;
+    top.name = "top";
+    top.addObject(Object{.name = "x",
+                         .type = Type::real(),
+                         .initialValue = BitVector::fromUInt64(0x3ff8000000000000ULL, 64),
+                         .encoding = enzan::eir::Encoding::Real});
+    top.instances.push_back(
+        Instance{.name = "u", .definitionName = "vreal", .connections = {connect(0, 0)}});
+    design.addModule(std::move(top));
+
+    ASSERT_TRUE(enzan::elab::bridgeLanguages(design, engine));
+    EXPECT_TRUE(enzan::eir::verify(design, engine));
+    const ModuleDefinition* bridged = design.findModule("top");
+    ASSERT_NE(bridged, nullptr);
+    ASSERT_EQ(bridged->processes.size(), 1U);
+    const enzan::eir::Process& conversion = bridged->processes.front();
+    EXPECT_TRUE(std::ranges::any_of(conversion.blocks, [](const auto& block) {
+        return std::ranges::any_of(block.instructions, [](const Instruction& instruction) {
+            return instruction.opcode == Opcode::Move;
+        });
+    }));
+    EXPECT_FALSE(std::ranges::any_of(conversion.blocks, [](const auto& block) {
+        return std::ranges::any_of(block.instructions, [](const Instruction& instruction) {
+            return instruction.opcode == Opcode::Present || instruction.opcode == Opcode::Encode;
+        });
+    }));
+}
+
+TEST_F(BoundaryTest, ARealDoesNotCrossIntoBits) {
+    Design design;
+    ModuleDefinition child = vhdlDefinition("vreal");
+    child.vhdlTypes.push_back(
+        VhdlType{.kind = VhdlType::Kind::Floating, .name = "REAL", .width = 64});
+    child.addObject(Object{
+        .name = "r", .type = Type::real(), .encoding = enzan::eir::Encoding::Real, .vhdlType = 3});
     child.ports.push_back(Port{.name = "r", .direction = PortDirection::Input, .objectIndex = 0});
     design.addModule(std::move(child));
 

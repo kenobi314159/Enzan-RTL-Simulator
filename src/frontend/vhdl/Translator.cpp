@@ -1676,6 +1676,7 @@ private:
                                   .direction = direction,
                                   .fourState = holdsLogic(type),
                                   .isSigned = type_is_integer(type),
+                                  .isReal = type_is_real(type) && !type_is_array(type),
                                   .unpacked = unpacked});
         }
         return unit;

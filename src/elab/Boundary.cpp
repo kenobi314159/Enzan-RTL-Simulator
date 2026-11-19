@@ -63,7 +63,9 @@ bool appendLeaves(const eir::ModuleDefinition& definition, std::uint32_t typeInd
     case eir::VhdlType::Kind::Physical:
         refusal = std::format("the physical type {} has no SystemVerilog counterpart", type.name);
         return false;
-    case eir::VhdlType::Kind::Floating: refusal = "it holds a real"; return false;
+    case eir::VhdlType::Kind::Floating:
+        leaves.push_back({.offset = base, .width = type.width, .encoding = Encoding::Real});
+        return true;
     case eir::VhdlType::Kind::Array: {
         if (type.element >= definition.vhdlTypes.size()) {
             refusal = "its element type is not known";
@@ -99,10 +101,6 @@ std::optional<std::vector<Leaf>> leavesOf(const eir::ModuleDefinition& definitio
     std::vector<Leaf> leaves;
     if (object.vhdlType == eir::VhdlType::None) {
         // With no type to say otherwise, the object's encoding is what all of it holds.
-        if (object.encoding == Encoding::Real) {
-            refusal = "it holds a real";
-            return std::nullopt;
-        }
         leaves.push_back(
             {.offset = 0, .width = object.type.bitWidth(), .encoding = object.encoding});
     } else if (!appendLeaves(definition, object.vhdlType, 0, leaves, refusal)) {
@@ -143,7 +141,7 @@ eir::BitVector converted(const eir::BitVector& value, const std::vector<Leaf>& l
         eir::BitVector part(toShown ? leaf.width : leaf.shownWidth());
         eir::bitops::partSelectAt(part.mutableRef(), value.ref(), toShown ? leaf.offset : shown);
         eir::BitVector into(toShown ? leaf.shownWidth() : leaf.width);
-        if (leaf.encoding == Encoding::Bits) {
+        if (leaf.encoding == Encoding::Bits || leaf.encoding == Encoding::Real) {
             into = part;
         } else if (toShown) {
             eir::present(leaf.encoding, part.ref(), into.mutableRef());
@@ -208,9 +206,12 @@ std::uint32_t convert(Builder& body, std::uint32_t value, const std::vector<Leaf
                       bool toShown, eir::Type target, std::uint8_t weak) {
     // Each leaf's own conversion, from a register of its bits on the side converted from.
     const auto one = [&](const Leaf& leaf, std::uint32_t from) {
-        const std::uint32_t into =
-            body.reg(eir::Type::bits(toShown ? leaf.shownWidth() : leaf.width, false, true));
-        if (leaf.encoding == Encoding::Bits) {
+        const eir::Type type =
+            leaf.encoding == Encoding::Real
+                ? eir::Type::real()
+                : eir::Type::bits(toShown ? leaf.shownWidth() : leaf.width, false, true);
+        const std::uint32_t into = body.reg(type);
+        if (leaf.encoding == Encoding::Bits || leaf.encoding == Encoding::Real) {
             body.emit(Instruction::make(Opcode::Move, Operand::reg(into), Operand::reg(from)));
         } else if (toShown) {
             body.emit(
@@ -250,7 +251,7 @@ std::uint32_t convert(Builder& body, std::uint32_t value, const std::vector<Leaf
     }
 
     // Into a two-state object, an unknown bit is 0, as assigning one makes it.
-    if (!target.isFourState()) {
+    if (!target.isFourState() && !target.isReal()) {
         const std::uint32_t coerced = body.reg(target);
         body.emit(
             Instruction::make(Opcode::CoerceTwoState, Operand::reg(coerced), Operand::reg(result)));
@@ -390,13 +391,22 @@ bool bridge(eir::ModuleDefinition& parent, const eir::Instance& instance,
     const std::optional<std::vector<Leaf>> leaves =
         leavesOf(vhdlInside ? child : parent, vhdlObject, refusal);
     if (leaves) {
+        const bool hasReal = std::ranges::any_of(
+            *leaves, [](const Leaf& leaf) { return leaf.encoding == Encoding::Real; });
         std::uint32_t coded = 0;
         std::uint32_t shown = 0;
         for (const Leaf& leaf : *leaves) {
             coded += leaf.width;
             shown += leaf.shownWidth();
         }
-        if (coded != vhdlObject.type.bitWidth()) {
+        if (hasReal
+            && (leaves->size() != 1 || leaves->front().width != 64 || !vhdlObject.type.isReal())) {
+            refusal = "its VHDL side holds an aggregate containing a real";
+        } else if (hasReal && (!svObject.type.isReal() || svObject.encoding != Encoding::Real)) {
+            refusal = "its VHDL side is a real and its SystemVerilog side is not";
+        } else if (!hasReal && (svObject.type.isReal() || svObject.encoding == Encoding::Real)) {
+            refusal = "its SystemVerilog side is a real and its VHDL side is not";
+        } else if (coded != vhdlObject.type.bitWidth()) {
             refusal = "its VHDL type does not cover its bits";
         } else if (shown != svObject.type.bitWidth()) {
             refusal = std::format("its VHDL side is {} bits in SystemVerilog and its "

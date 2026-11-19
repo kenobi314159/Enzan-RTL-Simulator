@@ -102,10 +102,12 @@ struct UnitInterface {
         std::string name;
         PortDirection direction = PortDirection::Input;
 
-        /// Whether any of its bits is four-state, whether it is a signed integer, and whether it
-        /// is an array of arrays or records, which is an unpacked array of its elements.
+        /// Whether any of its bits is four-state, whether it is a signed integer, whether it is a
+        /// scalar real, and whether it is an array of arrays or records, which is an unpacked
+        /// array of its elements.
         bool fourState = true;
         bool isSigned = false;
+        bool isReal = false;
         bool unpacked = false;
 
         friend bool operator==(const Port&, const Port&) = default;

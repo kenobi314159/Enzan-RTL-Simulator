@@ -3344,4 +3344,31 @@ TEST_F(FrontendTest, ARealParameterOfAnotherLanguagesUnitIsAskedForAsAReal) {
     EXPECT_EQ(asked[1].parameters[0].value, "19200.0");
 }
 
+TEST_F(FrontendTest, AScalarRealPortOfAnotherLanguageKeepsItsType) {
+    using enzan::eir::PortDirection;
+    interfaces.push_back({.name = "gain",
+                          .parameters = {},
+                          .ports = {{.name = "value",
+                                     .direction = PortDirection::Input,
+                                     .fourState = false,
+                                     .isSigned = false,
+                                     .isReal = true}},
+                          .widths = {{.values = {}, .ports = {{.bits = 64}}}}});
+    const std::unique_ptr<Design> design = analyse(R"(
+        module top;
+            real value;
+            gain u (.value(value));
+        endmodule
+)");
+    ASSERT_NE(design, nullptr) << consumer.messages.front();
+    const ModuleDefinition* top = design->findModule("top");
+    ASSERT_NE(top, nullptr);
+    ASSERT_EQ(top->instances.size(), 1U);
+    const Instance& instance = top->instances.front();
+    ASSERT_EQ(instance.connections.size(), 1U);
+    EXPECT_TRUE(top->objects[instance.connections.front().objectIndex].type.isReal());
+    EXPECT_EQ(top->objects[instance.connections.front().objectIndex].encoding,
+              enzan::eir::Encoding::Real);
+}
+
 } // namespace
