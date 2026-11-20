@@ -15,6 +15,17 @@ set_tests_properties(bench.harness PROPERTIES TIMEOUT 120)
 # still run the suite; CI installs it. ENZAN_COCOTB_PYTHON names the Python to use when the one
 # CMake finds is not the one cocotb was installed into.
 find_package(Python3 COMPONENTS Interpreter QUIET)
+if(ENZAN_ENABLE_SYSTEMVERILOG AND Python3_Interpreter_FOUND)
+  find_program(ENZAN_BENCH_IVERILOG iverilog)
+  find_program(ENZAN_BENCH_VVP vvp)
+  if(ENZAN_BENCH_IVERILOG AND ENZAN_BENCH_VVP)
+    add_test(NAME bench.scale
+             COMMAND "${PROJECT_SOURCE_DIR}/bench/run-scale.sh" $<TARGET_FILE:enzan>
+                     "${ENZAN_BENCH_IVERILOG}" 1024 "${PROJECT_BINARY_DIR}/bench-scale")
+    set_tests_properties(bench.scale PROPERTIES TIMEOUT 120)
+  endif()
+endif()
+
 set(ENZAN_COCOTB_PYTHON
     "${Python3_EXECUTABLE}"
     CACHE FILEPATH "A Python that has cocotb installed, for the cocotb golden tests")
