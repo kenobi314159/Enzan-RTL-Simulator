@@ -36,6 +36,7 @@ module bench #(parameter integer WIDTH = 1024, parameter integer TRACE = 0);
             @(negedge clk);
             if (TRACE != 0) $display("state=%08x", state[31:0]);
         end
+        if (state !== {WIDTH/32{32'h12baddb8}}) $fatal(1, "unexpected final state");
         $display("cells=%0d cycles=20 ones=%0d", WIDTH, $countones(state));
         $finish;
     end

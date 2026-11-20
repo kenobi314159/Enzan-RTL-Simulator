@@ -63,7 +63,8 @@ with (work / "enzan.out").open("w") as output, (work / "enzan.err").open("w") as
     _, status, usage = os.wait4(process.pid, 0)
     elapsed = time.monotonic_ns() - start
     process.returncode = os.waitstatus_to_exitcode(status)
-    print(f"elapsed_ns={elapsed}\npeak_rss_kib={usage.ru_maxrss}")
+    rss_kib = (usage.ru_maxrss + 1023) // 1024 if sys.platform == "darwin" else usage.ru_maxrss
+    print(f"elapsed_ns={elapsed}\npeak_rss_kib={rss_kib}")
     if process.returncode:
         print(f"Enzan exited with status {process.returncode}; see {work / 'enzan.err'}", file=sys.stderr)
         sys.exit(1)
