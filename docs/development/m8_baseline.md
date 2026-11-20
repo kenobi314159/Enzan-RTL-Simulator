@@ -45,6 +45,40 @@ should not be compared directly with CI's reference: they were taken on
 different machines. Timer output was enabled for these runs, so comparisons with
 untimed runs should allow for its overhead.
 
+## NEORV32 processor regression
+
+On the same machine and container, three isolated repetitions of the pinned
+NEORV32 regression were measured at Enzan checkout `ceee0a6`, with the same
+simulator binary `98b1c944` as above. The processor source was at revision
+`84743cdbeefccb531f836d66933c8478f1d9bf71`; GHDL was 4.1.0. Each repetition
+passed the comparison of reports and CPU/UART logs with GHDL, for both the VHDL
+and mixed-language testbench. No source compilation ran concurrently; other
+host activity and CPU affinity were not controlled.
+
+The regression's fixed window is 160 µs with a nominal 100 MHz clock. Its
+testbench enables a dual-core processor, trace logging and external memory models.
+It writes CPU and UART logs but no waveform file. This is a processor RTL
+workload, not a measured 100k-LUT netlist, and the two testbenches do not perform
+identical work. Their times should not be interpreted as a language-overhead
+comparison.
+
+```sh
+./bench/run-neorv32.sh ./build/gcc-release/bin/enzan /usr/bin/ghdl \
+  ./build/bench-neorv32
+```
+
+The harness reports one run of each testbench. These are the three end-to-end
+times observed, in seconds; the fastest row's phase times follow. The elapsed
+time includes starting the simulator, not GHDL or fetching the design.
+
+| Testbench | Run 1 | Run 2 | Run 3 | Analysis s | Elaboration s | Bytecode s | Image s | Simulation s |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| VHDL | 35.215 | 35.738 | 35.098 | 1.166 | 0.335 | 0.021 | 0.020 | 33.534 |
+| Mixed | 35.635 | 35.773 | 35.407 | 1.506 | 0.009 | 0.021 | 0.020 | 33.821 |
+
+Simulation was about 95.5% of each fastest run. These timings include the
+testbench's CPU trace and file I/O, so they do not isolate process execution.
+
 ## Implications and limits
 
 Simulation accounts for 97% or more of end-to-end time in five cases. The short
@@ -53,8 +87,8 @@ could have a visible effect there. This supports measuring process execution
 and kernel work independently; it does not establish how much JIT can accelerate
 either of them.
 
-These results have no real-design, waveform-capture, cocotb, JIT compilation,
-or 100k-LUT measurement. They do not establish a Verilator comparison, a
-break-even run length, or an acceptance target. The next measurement uses the
-`gcc-profile` preset with frame pointers and representative real designs before
-those decisions are made.
+These results have no waveform-capture, cocotb, JIT compilation, or 100k-LUT
+measurement. They do not establish a Verilator comparison, a break-even run
+length, or an acceptance target. The next measurement uses the `gcc-profile`
+preset with frame pointers and representative real designs before those
+decisions are made.
