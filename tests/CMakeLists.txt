@@ -6,11 +6,26 @@ include(GoogleTest)
 
 add_subdirectory(unit)
 
+add_test(NAME bench.harness COMMAND bash "${CMAKE_CURRENT_SOURCE_DIR}/golden/run-bench-check.sh"
+                                    "${PROJECT_SOURCE_DIR}/bench/run-bench.sh")
+set_tests_properties(bench.harness PROPERTIES TIMEOUT 120)
+
 # The cocotb golden tests, one for each frontend's toplevel, drive Enzan as a user does. Skipped
 # rather than failed when no Python has cocotb installed, so that a contributor without it can
 # still run the suite; CI installs it. ENZAN_COCOTB_PYTHON names the Python to use when the one
 # CMake finds is not the one cocotb was installed into.
 find_package(Python3 COMPONENTS Interpreter QUIET)
+if(ENZAN_ENABLE_SYSTEMVERILOG AND Python3_Interpreter_FOUND)
+  find_program(ENZAN_BENCH_IVERILOG iverilog)
+  find_program(ENZAN_BENCH_VVP vvp)
+  if(ENZAN_BENCH_IVERILOG AND ENZAN_BENCH_VVP)
+    add_test(NAME bench.scale
+             COMMAND "${PROJECT_SOURCE_DIR}/bench/run-scale.sh" $<TARGET_FILE:enzan>
+                     "${ENZAN_BENCH_IVERILOG}" 1024 "${PROJECT_BINARY_DIR}/bench-scale")
+    set_tests_properties(bench.scale PROPERTIES TIMEOUT 120)
+  endif()
+endif()
+
 set(ENZAN_COCOTB_PYTHON
     "${Python3_EXECUTABLE}"
     CACHE FILEPATH "A Python that has cocotb installed, for the cocotb golden tests")
@@ -27,6 +42,19 @@ if(ENZAN_COCOTB_PYTHON)
 endif()
 if(NOT ENZAN_HAVE_COCOTB)
   message(STATUS "cocotb not found; the cocotb golden tests are skipped")
+endif()
+
+if(ENZAN_ENABLE_SYSTEMVERILOG AND ENZAN_HAVE_COCOTB)
+  find_program(ENZAN_BENCH_IVERILOG iverilog)
+  find_program(ENZAN_BENCH_VVP vvp)
+  if(ENZAN_BENCH_IVERILOG AND ENZAN_BENCH_VVP)
+    add_test(NAME bench.cocotb
+             COMMAND "${PROJECT_SOURCE_DIR}/bench/run-cocotb.sh" $<TARGET_FILE:enzan>
+                     "${ENZAN_COCOTB_PYTHON}" "${PROJECT_BINARY_DIR}/bench-cocotb")
+    set_tests_properties(bench.cocotb PROPERTIES TIMEOUT 120)
+  else()
+    message(STATUS "Icarus Verilog not found; the cocotb benchmark check is skipped")
+  endif()
 endif()
 
 # What the cocotb golden tests change in a sanitiser run's environment. Each runs CPython inside
