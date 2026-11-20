@@ -193,6 +193,44 @@ signal updates, waits and transactions remain candidates for separate profiling
 and improvement. The small workloads and user-space-only samples do not set the
 M8 target.
 
+## Synchronous pipeline against Verilator
+
+The SystemVerilog pipeline was run for a fixed one million cycles on the same
+machine and container, with the same Enzan release binary as above. Verilator
+was 5.020 (Ubuntu/Debian package); Icarus Verilog 12.0 supplied the independent
+reference. Both simulators ran without waveforms and Verilator used one thread.
+The comparison script subsequently committed as `ba3192e` uses:
+
+```sh
+./bench/compare-verilator.sh ./build/gcc-release/bin/enzan \
+  /usr/bin/verilator /usr/bin/iverilog ./build/bench-verilator
+```
+
+Before timing, Icarus, Enzan and Verilator agreed on 56 falling-edge samples of
+the seed and all eight pipeline registers after the pipeline filled. They also
+produced the same final checksum, `a500fbb`, after the full million-cycle run.
+The samples deliberately exclude initial unknown values: Verilator's two-state
+execution is not a reference for their four-state behaviour.
+
+Verilator was invoked with `--binary --timing --threads 1 -j 2 -O3 -CFLAGS -O3`.
+Its translation and C++ build, into a fresh output directory, took 5.676 s.
+Compiler and operating-system caches were already warm. Three Enzan invocations
+were alternated with three executions of the resulting Verilator binary:
+
+| Repeat | Enzan total s | Enzan simulation s | Verilator executable s |
+|---|---:|---:|---:|
+| 1 | 2.856 | 2.850 | 0.229 |
+| 2 | 2.877 | 2.870 | 0.227 |
+| 3 | 2.860 | 2.852 | 0.223 |
+
+The best Enzan invocation was 12.78 times the best already-built Verilator
+execution. Adding this measurement's build and best execution gives Verilator
+about 5.90 s for a newly generated build and one run, versus 2.86 s for Enzan's
+one-shot analysis and run. The reference Icarus run and validation builds are
+excluded from both figures. These numbers describe one small, synchronous,
+compute-heavy pipeline with no capture or external callbacks. They neither
+represent general simulator performance nor establish the 100k-LUT target.
+
 ## Implications and limits
 
 Simulation accounts for 97% or more of end-to-end time in five cases. The short
@@ -201,7 +239,7 @@ could have a visible effect there. This supports measuring process execution
 and kernel work independently; it does not establish how much JIT can accelerate
 either of them.
 
-These results have no JIT compilation or 100k-LUT measurement. They do not
-establish a Verilator comparison, a break-even run length, or an acceptance
-target. Larger designs and a comparable synchronous Verilator workload are
-still needed before those decisions are made.
+These results have no JIT compilation or 100k-LUT measurement. The Verilator
+comparison covers only the pipeline above; it does not establish a general
+break-even run length or an acceptance target. Larger designs and JIT
+measurements are still needed before those decisions are made.
