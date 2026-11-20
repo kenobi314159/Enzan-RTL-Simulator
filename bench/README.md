@@ -57,6 +57,12 @@ The phase file records the five nanosecond counts of the same run selected for i
 end-to-end time. It is separate from `results.tsv`, so existing benchmark references stay
 comparable. Timed and untimed runs should not be mixed when measuring small differences.
 
+For a real design, `./bench/run-neorv32.sh <enzan> <ghdl> <work-directory>` runs the pinned
+NEORV32 regression with phase timings. It reports the VHDL and mixed-language testbenches only
+after both match GHDL's reports and CPU/UART logs. It uses the regression's fixed simulation
+window and work directory, including the output files that regression replaces. Each result is
+one run, rather than the best of three; repeat it explicitly when comparing performance.
+
 It is a target rather than a test. CI runs it as a job of its own, and a measurement taken on a
 loaded machine alongside three hundred other tests is not comparable with anything.
 
