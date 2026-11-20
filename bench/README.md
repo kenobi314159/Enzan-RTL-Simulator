@@ -70,6 +70,15 @@ phase times. Each invocation makes a fresh directory under the work directory an
 simulators' logs; it records one run. The supplied Python must have the project's pinned cocotb
 version installed, and Icarus Verilog must be on `PATH`.
 
+`./bench/compare-verilator.sh <enzan> <verilator> <iverilog> <work-directory>` compares the
+SystemVerilog pipeline over one million cycles with Verilator. Before timing, it holds settled
+pipeline states and the final result to Icarus Verilog under all three simulators. Verilator runs
+single-threaded without tracing. The script measures its translation and native build separately,
+then alternates three Enzan and Verilator runs and reports the best single-invocation times. The
+ratio compares Enzan's analysis and run against the already-built Verilator executable; use the
+separate build time when comparing a fresh build and one run. Its work directory retains compiler
+logs, outputs and generated code for inspection.
+
 It is a target rather than a test. CI runs it as a job of its own, and a measurement taken on a
 loaded machine alongside three hundred other tests is not comparable with anything.
 
