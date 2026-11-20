@@ -17,36 +17,39 @@ keyword, such as `logic`, `bit`, `int` or `final`, which then has to be renamed.
   hierarchical references.
 - `initial`, `final`, `always`, `always_comb`, `always_ff` and `always_latch`, continuous
   assignments, and tasks and functions.
-- Four-state values, packed and unpacked arrays and structs of fixed size, enumerations and reals;
-  streaming concatenations, `{<<{...}}` and `{>>{...}}`.
-- Nets of every kind with several drivers, resolved by their kind, at strong and weak strengths;
-  gates, MOS switches and user-defined primitives; specify blocks' module path delays.
-- Delays, event controls, named events, `wait`, `force` and `release`, `assign` and `deassign`.
+- Four-state values, packed and unpacked arrays and structs of fixed size, enumerations and reals,
+  including powers with real exponents; streaming concatenations, `{<<{...}}` and `{>>{...}}`.
+- Nets of every kind with several drivers, resolved by their kind, at strong and weak strengths,
+  including declaration delays after resolution; gates, MOS switches and user-defined primitives;
+  specify blocks' module path delays.
+- Delays, event controls on signals and expressions, named events, `wait`, `force` and `release`,
+  `assign` and `deassign`; delayed writes to a whole signal or a selected part.
 - Immediate assertions, and concurrent assertions declared in a module: `assert`, `assume` and
   `cover property` of booleans joined by fixed delays (`a ##2 b`) and consecutive repetitions
   (`b[*3]`), with one `|->` or `|=>`, `disable iff`, a default clocking block, named properties
   and sequences, and `$past`, `$rose`, `$fell`, `$stable`, `$changed` and `$sampled`.
-- `$display` and its family, files written and read, `$readmemh` and `$readmemb`, `$random` and
-  `$urandom`, and `$finish`, `$stop`, `$fatal`, `$error`, `$warning` and `$info`.
+- `$display` and its family, files written and read, `$readmemh` and `$readmemb`, `$random`,
+  `$urandom` and `$urandom_range`; `$time`, `$stime`, `$realtime`, `$bits`, `$clog2`,
+  `$isunknown`, `$countones`, `$onehot`, `$onehot0`, the integer/real conversion functions and all
+  real math functions; and `$finish`, `$stop`, `$fatal`, `$error`, `$warning` and `$info`.
 - VPI, as cocotb uses it.
 
 ### Not yet
 
 - Classes, and what is built on them: UVM, `randomize` and constraints, covergroups.
-- `string` variables and ports, real ports, dynamic and associative arrays, queues and unpacked
-  unions.
+- `string` variables and ports, ports holding aggregates of reals, dynamic and associative arrays,
+  queues and unpacked unions.
 - `fork`, a recursive function, `ref` arguments and DPI.
 - Concurrent assertions beyond the subset above: a range of delays (`##[1:3]`), goto and
   non-consecutive repetitions, the property operators (`not`, `and`, `until`, `s_eventually` and
   the rest), local variables, `restrict`, and a concurrent assertion inside a procedure; deferred
   assertions (`assert #0`, `assert final`).
-- An event control on an expression other than a signal or a constant select of one.
-- A delayed write to part of a signal, separate rise, fall and turn-off delays on a vector, and a
-  delay on a net.
+- An event control whose expression reads a variable local to the process or subprogram, or has a
+  side effect.
+- A net declaration delay on an `inout` port, or combined with a module path delay.
 - `trireg`, `interconnect`, user-defined nettypes, `highz` strengths, and the resistive and
   bidirectional switches.
-- Most system functions beyond those above; any slang computes while analysing, such as `$bits`
-  and `$clog2`, works.
+- Most system functions beyond those above; any slang computes while analysing works too.
 
 ## VHDL
 

@@ -57,15 +57,16 @@ std::optional<std::uint32_t> ProcessTranslator::readable(std::uint32_t objectInd
     return module->sampledCopyOf(objectIndex);
 }
 
-bool ProcessTranslator::translateCopyInto(std::uint32_t target, std::uint32_t source) {
+bool ProcessTranslator::translateCopyInto(std::uint32_t target, std::uint32_t source,
+                                          const ast::TimingControl* delay) {
+    if (delay != nullptr && !setContinuousDelay(*delay)) return false;
     const eir::Type type = module->definition().objects[source].type;
     const std::uint32_t value = newRegister(type);
     noteRead(source);
     emit(eir::Instruction::make(eir::Opcode::ReadObject, eir::Operand::reg(value),
                                 eir::Operand::object(source)));
     noteWholeWrite(target);
-    emit(eir::Instruction::make(eir::Opcode::Store, {}, eir::Operand::object(target),
-                                eir::Operand::reg(value)));
+    if (!emitWholeStore(target, value, false)) return false;
     emit(eir::Instruction::make(eir::Opcode::Return));
     return !failed;
 }

@@ -649,7 +649,14 @@ floor.
   what the switch passed would be whichever driver decides the input at the time. **A user-defined
   primitive is one too**, by its table, which the frontend encodes as a constant and the runtime
   matches by the layout `eir/Udp.h` gives both. Inputs changing together are a race the standard
-  leaves open, and Enzan takes them in port order.
+  leaves open, and Enzan takes them in port order. A continuous assignment's separate rise, fall
+  and turn-off delays select one delay for a vector: fall when it becomes zero, turn-off when it
+  becomes all z, and rise otherwise (IEEE 1800 section 10.3.3).
+- **A net declaration delay follows resolution.** The declared object is the visible net, a hidden
+  net receives and resolves every driver, and one continuous assignment delays the resolved value
+  between them. An input port exposes the hidden side to its connection; an output exposes the
+  visible side. In `wire #5 w = expression`, by contrast, the delay belongs only to that declaration
+  assignment, as IEEE 1800 section 10.3.3 requires.
 - **A real is a double**, `shortreal` without its reduced precision.
 - **A named event is a bit its trigger toggles**, so that what waits on it sees it change.
 - **An event control on an expression waits on an object a continuous assignment keeps at the
@@ -2014,8 +2021,8 @@ regression each run with a recorded pass rate.
 Left out of the milestones above, and refused by name where a design uses them rather than
 mistranslated:
 
-- SystemVerilog `string` variables, real and string ports, and ports holding reals, a real
-  exponent, events as values, dynamic and associative arrays, queues, classes, unpacked unions,
+- SystemVerilog `string` variables and ports, ports holding aggregates of reals, events as values,
+  dynamic and associative arrays, queues, classes, unpacked unions,
   `fork`, `highz` strengths, resistive and bidirectional switches, the module paths 5.1 refuses, net
   aliases, a procedural `assign` or `force` of part of an object, and the concurrent assertions
   5.1 refuses.
@@ -2026,9 +2033,9 @@ mistranslated:
   anything but `character`, a function's result, a concatenation outside a message or a `write`,
   a whole such string assigned, a function's own string sized by a parameter its call leaves to the
   run, and one held across a `wait`.
-- A port of a real, an enumeration other than `std_ulogic`, `bit` and `boolean`, or a physical type
-  across the language boundary; a VHDL port of an unconstrained type instantiated from
-  SystemVerilog; a second top level of VHDL.
+- A port holding an aggregate of reals, an enumeration other than `std_ulogic`, `bit` and
+  `boolean`, or a physical type across the language boundary; a VHDL port of an unconstrained
+  type instantiated from SystemVerilog; a second top level of VHDL.
 - Altera's models of Cyclone V and later families, `altera_lnsim.sv`, which M7.2 holds to no
   reference; among them `altera_pll`'s `string` arguments are refused.
 - In VPI, declared ranges (a vector reports `[width-1:0]`), integer atom types, reals and what

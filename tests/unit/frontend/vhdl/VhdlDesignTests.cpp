@@ -2274,6 +2274,7 @@ entity Fifo is
   port (Clk : in std_logic;
         Data : out std_logic_vector(Width - 1 downto 0);
         Count : out integer;
+        RealValue : in real;
         Pair : inout words);
 end entity;
 
@@ -2321,6 +2322,12 @@ TEST_F(VhdlDesignTest, AnEntitySystemVerilogInstantiatesIsDescribedWithItsNamesA
                                               .fourState = false,
                                               .isSigned = true,
                                               .unpacked = false},
+                                             {.name = "RealValue",
+                                              .direction = PortDirection::Input,
+                                              .fourState = false,
+                                              .isSigned = false,
+                                              .isReal = true,
+                                              .unpacked = false},
                                              {.name = "Pair",
                                               .direction = PortDirection::InOut,
                                               .fourState = true,
@@ -2345,7 +2352,7 @@ TEST_F(VhdlDesignTest, AnEntitySystemVerilogAsksForIsTranslatedWithItsValues) {
     ASSERT_EQ(exchange.answers.size(), 1U);
     const enzan::eir::ModuleDefinition* fifo = design->findModule(exchange.answers.front());
     ASSERT_NE(fifo, nullptr) << exchange.answers.front();
-    ASSERT_EQ(fifo->ports.size(), 4U);
+    ASSERT_EQ(fifo->ports.size(), 5U);
     EXPECT_EQ(fifo->objects[fifo->ports[1].objectIndex].type.bitWidth(), 6U * 8U)
         << "six std_ulogic codes for the width 6";
 }

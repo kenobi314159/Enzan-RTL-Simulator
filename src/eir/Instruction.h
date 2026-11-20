@@ -21,6 +21,31 @@ enum class Opcode : std::uint8_t {
 #undef ENZAN_OPCODE
 };
 
+/// One-argument real mathematical function selected by `Opcode::RealUnaryMath`.
+enum class RealUnaryFunction : std::uint8_t {
+    Ln,
+    Log10,
+    Exp,
+    Sqrt,
+    Floor,
+    Ceil,
+    Sin,
+    Cos,
+    Tan,
+    Asin,
+    Acos,
+    Atan,
+    Sinh,
+    Cosh,
+    Tanh,
+    Asinh,
+    Acosh,
+    Atanh,
+};
+
+/// Two-argument real mathematical function selected by `Opcode::RealBinaryMath`.
+enum class RealBinaryFunction : std::uint8_t { Pow, Atan2, Hypot };
+
 /// Returns the short textual mnemonic, as used when dumping EIR.
 std::string_view mnemonic(Opcode opcode) noexcept;
 

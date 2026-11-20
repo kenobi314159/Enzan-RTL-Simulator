@@ -430,10 +430,14 @@ private:
     /// path whose delay Enzan does not model.
     bool translateModulePaths();
 
-    /// Sends the body's own writes of each output `translateModulePaths` delays to the object it
-    /// gave the output's process to read, every process's but the first `pathProcesses` from
-    /// `firstPathProcess`, which are the outputs' own.
-    void redirectDelayedOutputs(std::size_t firstPathProcess, std::size_t pathProcesses);
+    /// Adds a hidden net to receive and resolve every driver of each net with a declaration delay,
+    /// and a process that delays its resolved value into the visible net.
+    bool translateNetDelays();
+
+    /// Sends the body's own writes of each delayed output or net to its undelayed object, except
+    /// the `delayedProcesses` beginning at `firstDelayedProcess`, which copy into the visible
+    /// objects themselves.
+    void redirectDelayedOutputs(std::size_t firstDelayedProcess, std::size_t delayedProcesses);
 
     /// The object, bits and width a module path's terminal names: a port, or a constant select of
     /// one. Nothing, having reported, for any other.
@@ -492,9 +496,10 @@ private:
     /// when the type is not an enumeration.
     std::uint32_t enumFor(const ast::Type& type);
 
-    /// True when `type` is as wide as `port`, so that elaboration can collapse the port onto a
-    /// signal of it. A port whose type does not convert is left to the connection to report.
-    bool hasPortWidth(const ast::PortSymbol& port, const eir::Type& type);
+    /// True when `type` has the width and real encoding of `port`, so that elaboration can collapse
+    /// the port onto a signal of it. A port whose type does not convert is left to the connection
+    /// to report.
+    bool hasPortStorage(const ast::PortSymbol& port, const eir::Type& type);
 
     /// Creates an intermediate object plus a continuous assignment for a port connection
     /// that is an expression rather than a plain signal.
@@ -548,8 +553,13 @@ private:
     std::vector<std::pair<slang::SourceLocation, std::string>> pulseShapers;
 
     /// Each output a module path with a delay reaches, by its port's object, and the object the
-    /// body's own writes of it write instead.
+    /// body's own writes of it write instead. Net declaration delays use the same redirection.
     std::map<std::uint32_t, std::uint32_t> delayedOutputs;
+
+    /// Nets whose declaration delay applies after all their drivers resolve. A net declaration
+    /// assignment is absent: its delay belongs to that assignment alone (IEEE 1800 section
+    /// 10.3.3).
+    std::vector<const ast::NetSymbol*> delayedNets;
 
     /// The interface ports of this body, in declaration order.
     std::vector<const ast::InterfacePortSymbol*> interfacePorts;
@@ -987,12 +997,6 @@ std::optional<std::uint32_t> ModuleBuilder::objectFor(const ast::ValueSymbol& sy
             return std::nullopt;
         }
         object.netKind = *netKind;
-        // A net delay postpones every change by an inertial delay; dropping it would make the
-        // net change early and the design simulate to an answer that looks plausible.
-        if (net.getDelay() != nullptr) {
-            reportUnsupported(symbol.location, "a delay on a net");
-            return std::nullopt;
-        }
         if (!driveStrengthOf(net.getDriveStrength(), symbol.location)) return std::nullopt;
     }
 
@@ -1023,6 +1027,13 @@ std::optional<std::uint32_t> ModuleBuilder::objectFor(const ast::ValueSymbol& sy
 
     const std::uint32_t index = definitionValue.addObject(std::move(object));
     objectBySymbol.emplace(&symbol, index);
+    if (symbol.kind == slang::ast::SymbolKind::Net) {
+        const auto& net = symbol.as<ast::NetSymbol>();
+        // With an initialiser the declaration is a continuous assignment and the delay belongs
+        // to that assignment. Without one it delays the resolved net itself (section 10.3.3).
+        if (net.getDelay() != nullptr && net.getInitializer() == nullptr)
+            delayedNets.push_back(&net);
+    }
     return index;
 }
 
@@ -1475,15 +1486,68 @@ bool ModuleBuilder::translateModulePaths() {
     return true;
 }
 
-void ModuleBuilder::redirectDelayedOutputs(std::size_t firstPathProcess,
-                                           std::size_t pathProcesses) {
+bool ModuleBuilder::translateNetDelays() {
+    for (const ast::NetSymbol* net : delayedNets) {
+        const std::uint32_t visibleIndex = objectBySymbol.at(net);
+        const eir::Object visible = definitionValue.objects[visibleIndex];
+        if (delayedOutputs.contains(visibleIndex)) {
+            reportUnsupported(
+                net->location,
+                std::format("a net delay combined with a module path on '{}'", visible.name));
+            return false;
+        }
+
+        // An input's connection drives the undelayed side. An output's connection reads the
+        // delayed side. An inout would need both directions through different objects, which an
+        // EIR port deliberately cannot name.
+        for (const eir::Port& port : definitionValue.ports) {
+            if (port.objectIndex != visibleIndex) continue;
+            if (port.direction == eir::PortDirection::InOut) {
+                reportUnsupported(net->location,
+                                  std::format("a delay on the inout net '{}'", visible.name));
+                return false;
+            }
+        }
+
+        eir::Object undelayed = visible;
+        undelayed.name = uniqueObjectName(std::format("{}$undelayed", visible.name));
+        const std::uint32_t undelayedIndex = definitionValue.addObject(std::move(undelayed));
+        delayedOutputs.emplace(visibleIndex, undelayedIndex);
+
+        // Resolution and an undriven net's pull or supply value belong before the delay. The
+        // visible object's one driver begins at that undriven value, rather than X, so a net that
+        // is already undriven at time zero does not invent a delayed transition. Applying its
+        // declared resolution kind again to one already resolved driver is idempotent and keeps
+        // the kind tools show the user.
+        definitionValue.objects[visibleIndex].initialValue =
+            eir::BitVector::filled(visible.type.bitWidth(), eir::undrivenValue(visible.netKind));
+        for (eir::Port& port : definitionValue.ports) {
+            if (port.objectIndex == visibleIndex && port.direction == eir::PortDirection::Input)
+                port.objectIndex = undelayedIndex;
+        }
+
+        ProcessTranslator translator(*this, eir::ProcessKind::ContinuousAssign,
+                                     std::format("netdelay@{}:{}",
+                                                 shared->slangSources.getFileName(net->location),
+                                                 shared->slangSources.getLineNumber(net->location)),
+                                     convertLocation(net->location));
+        if (!translator.translateCopyInto(visibleIndex, undelayedIndex, net->getDelay()))
+            return false;
+        definitionValue.processes.push_back(translator.take());
+    }
+    return true;
+}
+
+void ModuleBuilder::redirectDelayedOutputs(std::size_t firstDelayedProcess,
+                                           std::size_t delayedProcesses) {
     if (delayedOutputs.empty()) return;
     const auto redirected = [this](std::uint32_t objectIndex) {
         const auto found = delayedOutputs.find(objectIndex);
         return found == delayedOutputs.end() ? objectIndex : found->second;
     };
     for (std::size_t index = 0; index < definitionValue.processes.size(); ++index) {
-        if (index >= firstPathProcess && index < firstPathProcess + pathProcesses) continue;
+        if (index >= firstDelayedProcess && index < firstDelayedProcess + delayedProcesses)
+            continue;
         eir::Process& process = definitionValue.processes[index];
         for (eir::WriteExtent& extent : process.writeSet)
             extent.objectIndex = redirected(extent.objectIndex);
@@ -1537,10 +1601,6 @@ bool ModuleBuilder::collectDeclarations() {
         const std::optional<std::uint32_t> objectIndex =
             objectFor(port.internalSymbol->as<ast::ValueSymbol>());
         if (!objectIndex.has_value()) continue;
-        if (definitionValue.objects[*objectIndex].type.isReal()) {
-            reportUnsupported(port.location, std::format("the real port '{}'", port.name));
-            continue;
-        }
         if (definitionValue.objects[*objectIndex].holdsReals) {
             reportUnsupported(port.location,
                               std::format("the port '{}', which holds reals,", port.name));
@@ -1569,11 +1629,12 @@ bool ModuleBuilder::collectDeclarations() {
 }
 
 bool ModuleBuilder::translateProcesses() {
-    // First, so that the body's own writes of an output translated after them can be sent where
-    // the outputs' processes read them.
-    const std::size_t firstPathProcess = definitionValue.processes.size();
+    // First, so that the body's own writes translated after these can be sent to the undelayed
+    // objects their delay processes read.
+    const std::size_t firstDelayedProcess = definitionValue.processes.size();
     if (!translateModulePaths()) failed = true;
-    const std::size_t pathProcesses = definitionValue.processes.size() - firstPathProcess;
+    if (!translateNetDelays()) failed = true;
+    const std::size_t delayedProcesses = definitionValue.processes.size() - firstDelayedProcess;
 
     for (const auto& [prefix, block] : proceduralBlocks) {
         eir::ProcessKind kind = eir::ProcessKind::Always;
@@ -1757,7 +1818,8 @@ bool ModuleBuilder::translateProcesses() {
                                                  shared->slangSources.getLineNumber(net.location)),
                                      convertLocation(net.location));
 
-        if (!translator.translateExpressionInto(objectIndex, *net.getInitializer())) {
+        if (!translator.translateExpressionInto(objectIndex, *net.getInitializer(),
+                                                net.getDelay())) {
             failed = true;
             continue;
         }
@@ -1769,7 +1831,7 @@ bool ModuleBuilder::translateProcesses() {
             definitionValue.processes.back().strength = *strength;
     }
 
-    redirectDelayedOutputs(firstPathProcess, pathProcesses);
+    redirectDelayedOutputs(firstDelayedProcess, delayedProcesses);
     return !failed;
 }
 
@@ -2097,12 +2159,13 @@ ModuleBuilder::extractSensitivity(ProcessTranslator& translator, const ast::Timi
     }
 }
 
-bool ModuleBuilder::hasPortWidth(const ast::PortSymbol& port, const eir::Type& type) {
+bool ModuleBuilder::hasPortStorage(const ast::PortSymbol& port, const eir::Type& type) {
     if (port.internalSymbol == nullptr || !ast::ValueSymbol::isKind(port.internalSymbol->kind))
         return true;
     const std::optional<eir::Type> portType =
         convertType(port.internalSymbol->as<ast::ValueSymbol>().getType());
-    return !portType.has_value() || portType->bitWidth() == type.bitWidth();
+    return !portType.has_value()
+           || (portType->bitWidth() == type.bitWidth() && portType->isReal() == type.isReal());
 }
 
 std::optional<std::uint32_t>
@@ -2136,6 +2199,7 @@ ModuleBuilder::materialiseConnection(const ast::InstanceSymbol& instance,
     eir::Object object;
     object.name = uniqueObjectName(std::format("{}${}", instance.name, port.name));
     object.type = *type;
+    if (type->isReal()) object.encoding = eir::Encoding::Real;
     object.kind = eir::ObjectKind::Variable;
     if (port.internalSymbol->kind == slang::ast::SymbolKind::Net) {
         const std::optional<eir::NetKind> netKind =
@@ -2220,7 +2284,7 @@ bool ModuleBuilder::addInstance(
             // (IEEE 1800 section 23.3.3.7).
             if (objectIndex.has_value()
                 && (!definitionValue.objects[*objectIndex].hierarchicalPath.empty()
-                    || !hasPortWidth(port, definitionValue.objects[*objectIndex].type)))
+                    || !hasPortStorage(port, definitionValue.objects[*objectIndex].type)))
                 objectIndex = materialiseConnection(instance, port, reference);
         } else {
             objectIndex = materialiseConnection(instance, port, reference);
@@ -2928,10 +2992,14 @@ std::string interfaceText(const std::vector<eir::UnitInterface>& interfaces) {
                     ? std::format(" [{}:{}]", escapedName(boundParameterName(index, "left")),
                                   escapedName(boundParameterName(index, "right")))
                     : std::string();
-            ports.push_back(
-                std::format("{} {}{}[{}- 1:0] {}{}", direction, port.fourState ? "logic " : "bit ",
-                            port.isSigned ? "signed " : "", escapedName(widthParameterName(index)),
-                            escapedName(port.name), dimension));
+            if (port.isReal) {
+                ports.push_back(std::format("{} real {}", direction, escapedName(port.name)));
+            } else {
+                ports.push_back(std::format(
+                    "{} {}{}[{}- 1:0] {}{}", direction, port.fourState ? "logic " : "bit ",
+                    port.isSigned ? "signed " : "", escapedName(widthParameterName(index)),
+                    escapedName(port.name), dimension));
+            }
         }
 
         const auto joined = [](const std::vector<std::string>& parts) {

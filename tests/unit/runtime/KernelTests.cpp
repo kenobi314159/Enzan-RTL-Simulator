@@ -2614,8 +2614,8 @@ TEST(Kernel, ARecursiveFunctionCallsItself) {
 }
 
 TEST(Kernel, RealsComputeAsDoublesAndRoundHalfwayAwayFromZero) {
-    // 1.5 + real(2) is 3.5, which rounds to 4 and its negation to -4; 2.0 ** 3 is 8.0; and 1.5 is
-    // less than 2.0.
+    // 1.5 + real(2) is 3.5, which rounds to 4 and its negation to -4; 2.0 ** 3 is 8.0;
+    // 9.0 ** 0.5 is 3.0; and 1.5 is less than 2.0.
     ProcessBuilder builder(ProcessKind::Initial, "reals");
     const Type real = Type::real();
     const Type integer = Type::bits(32, true, false);
@@ -2623,16 +2623,22 @@ TEST(Kernel, RealsComputeAsDoublesAndRoundHalfwayAwayFromZero) {
     const std::uint32_t two = builder.reg(integer);
     const std::uint32_t three = builder.reg(integer);
     const std::uint32_t twoReal = builder.reg(real);
+    const std::uint32_t nineReal = builder.reg(real);
+    const std::uint32_t halfReal = builder.reg(real);
     const std::uint32_t sum = builder.reg(real);
     const std::uint32_t negated = builder.reg(real);
     const std::uint32_t cubed = builder.reg(real);
+    const std::uint32_t squareRoot = builder.reg(real);
     const std::uint32_t rounded = builder.reg(integer);
     const std::uint32_t roundedNegated = builder.reg(integer);
     const std::uint32_t cubedInteger = builder.reg(integer);
+    const std::uint32_t squareRootInteger = builder.reg(integer);
     const std::uint32_t less = builder.reg(Type::bits(1, false, false));
     const std::uint32_t oneAndAHalfValue = builder.constant("64'h3FF8000000000000");
     const std::uint32_t twoValue = builder.constant("32'sd2");
     const std::uint32_t threeValue = builder.constant("32'sd3");
+    const std::uint32_t nineRealValue = builder.constant("64'h4022000000000000");
+    const std::uint32_t halfRealValue = builder.constant("64'h3FE0000000000000");
 
     builder.block("entry");
     builder.emit(Instruction::make(Opcode::LoadConstant, Operand::reg(oneAndAHalf),
@@ -2641,6 +2647,10 @@ TEST(Kernel, RealsComputeAsDoublesAndRoundHalfwayAwayFromZero) {
         Instruction::make(Opcode::LoadConstant, Operand::reg(two), Operand::constant(twoValue)));
     builder.emit(Instruction::make(Opcode::LoadConstant, Operand::reg(three),
                                    Operand::constant(threeValue)));
+    builder.emit(Instruction::make(Opcode::LoadConstant, Operand::reg(nineReal),
+                                   Operand::constant(nineRealValue)));
+    builder.emit(Instruction::make(Opcode::LoadConstant, Operand::reg(halfReal),
+                                   Operand::constant(halfRealValue)));
     Instruction toReal =
         Instruction::make(Opcode::Convert, Operand::reg(twoReal), Operand::reg(two));
     toReal.isSigned = true;
@@ -2650,31 +2660,79 @@ TEST(Kernel, RealsComputeAsDoublesAndRoundHalfwayAwayFromZero) {
     builder.emit(Instruction::make(Opcode::Negate, Operand::reg(negated), Operand::reg(sum)));
     builder.emit(Instruction::make(Opcode::Power, Operand::reg(cubed), Operand::reg(twoReal),
                                    Operand::reg(three), Operand::immediate(1)));
+    builder.emit(Instruction::make(Opcode::RealPower, Operand::reg(squareRoot),
+                                   Operand::reg(nineReal), Operand::reg(halfReal)));
     builder.emit(Instruction::make(Opcode::Convert, Operand::reg(rounded), Operand::reg(sum)));
     builder.emit(
         Instruction::make(Opcode::Convert, Operand::reg(roundedNegated), Operand::reg(negated)));
     builder.emit(
         Instruction::make(Opcode::Convert, Operand::reg(cubedInteger), Operand::reg(cubed)));
+    builder.emit(Instruction::make(Opcode::Convert, Operand::reg(squareRootInteger),
+                                   Operand::reg(squareRoot)));
     builder.emit(Instruction::make(Opcode::LessThan, Operand::reg(less), Operand::reg(oneAndAHalf),
                                    Operand::reg(twoReal)));
     builder.store(0, rounded);
     builder.store(1, roundedNegated);
     builder.store(2, cubedInteger);
-    builder.store(3, less);
+    builder.store(3, squareRootInteger);
+    builder.store(4, less);
     builder.emit(Instruction::make(Opcode::Return));
 
     ModuleDefinition definition =
         makeTop({builder.finish()},
                 {Object{.name = "a", .type = integer}, Object{.name = "b", .type = integer},
-                 Object{.name = "c", .type = integer},
-                 Object{.name = "d", .type = Type::bits(1, false, false)}});
+                 Object{.name = "c", .type = integer}, Object{.name = "d", .type = integer},
+                 Object{.name = "e", .type = Type::bits(1, false, false)}});
     Simulation simulation(designOf(std::move(definition)), "tb");
     ASSERT_TRUE(simulation.ready()) << reportedMessages(simulation);
     EXPECT_EQ(simulation.run(), RunStatus::Quiescent);
     EXPECT_EQ(simulation.value("/tb/a", Radix::Decimal), "4");
     EXPECT_EQ(simulation.value("/tb/b", Radix::Hexadecimal), "fffffffc") << "-4";
     EXPECT_EQ(simulation.value("/tb/c", Radix::Decimal), "8");
-    EXPECT_EQ(simulation.value("/tb/d", Radix::Decimal), "1");
+    EXPECT_EQ(simulation.value("/tb/d", Radix::Decimal), "3");
+    EXPECT_EQ(simulation.value("/tb/e", Radix::Decimal), "1");
+}
+
+TEST(Kernel, RealMathFunctionsUseTheirSelectedOperation) {
+    ProcessBuilder builder(ProcessKind::Initial, "real_math");
+    const Type real = Type::real();
+    const Type integer = Type::bits(32, true, false);
+    const std::uint32_t three = builder.reg(real);
+    const std::uint32_t four = builder.reg(real);
+    const std::uint32_t nine = builder.reg(real);
+    const std::uint32_t root = builder.reg(real);
+    const std::uint32_t hypotenuse = builder.reg(real);
+    const std::uint32_t rootInteger = builder.reg(integer);
+    const std::uint32_t hypotenuseInteger = builder.reg(integer);
+
+    builder.block("entry");
+    builder.emit(Instruction::make(Opcode::LoadConstant, Operand::reg(three),
+                                   Operand::constant(builder.constant("64'h4008000000000000"))));
+    builder.emit(Instruction::make(Opcode::LoadConstant, Operand::reg(four),
+                                   Operand::constant(builder.constant("64'h4010000000000000"))));
+    builder.emit(Instruction::make(Opcode::LoadConstant, Operand::reg(nine),
+                                   Operand::constant(builder.constant("64'h4022000000000000"))));
+    builder.emit(Instruction::make(
+        Opcode::RealUnaryMath, Operand::reg(root), Operand::reg(nine),
+        Operand::immediate(static_cast<std::uint32_t>(enzan::eir::RealUnaryFunction::Sqrt))));
+    builder.emit(Instruction::make(
+        Opcode::RealBinaryMath, Operand::reg(hypotenuse), Operand::reg(three), Operand::reg(four),
+        Operand::immediate(static_cast<std::uint32_t>(enzan::eir::RealBinaryFunction::Hypot))));
+    builder.emit(Instruction::make(Opcode::Convert, Operand::reg(rootInteger), Operand::reg(root)));
+    builder.emit(Instruction::make(Opcode::Convert, Operand::reg(hypotenuseInteger),
+                                   Operand::reg(hypotenuse)));
+    builder.store(0, rootInteger);
+    builder.store(1, hypotenuseInteger);
+    builder.emit(Instruction::make(Opcode::Return));
+
+    ModuleDefinition definition =
+        makeTop({builder.finish()}, {Object{.name = "root", .type = integer},
+                                     Object{.name = "hypotenuse", .type = integer}});
+    Simulation simulation(designOf(std::move(definition)), "tb");
+    ASSERT_TRUE(simulation.ready()) << reportedMessages(simulation);
+    EXPECT_EQ(simulation.run(), RunStatus::Quiescent);
+    EXPECT_EQ(simulation.value("/tb/root", Radix::Decimal), "3");
+    EXPECT_EQ(simulation.value("/tb/hypotenuse", Radix::Decimal), "5");
 }
 
 TEST(Kernel, CodesArePresentedAsBitsAndBitsEncodedAsCodes) {

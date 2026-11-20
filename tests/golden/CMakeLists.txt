@@ -159,8 +159,17 @@ enzan_add_golden_test(disable)
 # A nonblocking event trigger, which Icarus Verilog does not support, so the case checks itself.
 enzan_add_golden_test(nonblocking_events NO_DIFFERENTIAL)
 
-# Separate rise, fall and turn-off delays of a continuous assignment and of a gate.
+# Separate rise, fall and turn-off delays of a scalar continuous assignment and a gate.
 enzan_add_golden_test(rise_fall)
+
+# The same delays on a vector, selected once from the vector's transition. Icarus Verilog does not
+# apply the standard's rise choice to a mixed 0-to-1/x/z transition, so this case checks itself.
+enzan_add_golden_test(vector_transition_delays NO_DIFFERENTIAL)
+
+# A delay after all drivers of a net resolve, including transition delays, and the distinct delay
+# of the continuous assignment written inside a net declaration. Icarus Verilog diagnoses net
+# delays as unsupported, so the case checks itself.
+enzan_add_golden_test(net_delays NO_DIFFERENTIAL)
 
 # Delayed writes to part of a signal: a memory word at an index known as the design runs, a bit of
 # a vector, and a continuous assignment of one bit that rejects a pulse shorter than its delay.
@@ -190,6 +199,13 @@ enzan_add_golden_test(module_path_bits NO_DIFFERENTIAL OWN_TIME_SCALES)
 # Reals as AMD's clock managers compute with them: arithmetic, conversions, the bits of a double,
 # the time in fractions of a unit, a clock whose half period is a real variable's, and formatting.
 enzan_add_golden_test(reals OWN_TIME_SCALES)
+
+# Every real math system function, with operands held in variables so slang cannot fold the calls.
+enzan_add_golden_test(real_math)
+
+# Scalar real input and output ports, directly connected and through an expression. A real keeps
+# its encoding through an intermediate connection object rather than becoming a 64-bit vector.
+enzan_add_golden_test(real_ports OWN_TIME_SCALES)
 
 # Unpacked arrays of reals, element by element, as Altera's PLL models use them.
 enzan_add_golden_test(real_arrays OWN_TIME_SCALES)

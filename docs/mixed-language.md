@@ -72,6 +72,7 @@ come back a delay.
 | `bit`, `boolean` | a two-state bit |
 | `std_logic_vector`, `unsigned`, `bit_vector` and their kin | a packed vector, the left element its most significant bit |
 | an integer type | `int`, or `longint` when its range needs it |
+| `real` | scalar `real`, the same IEEE 754 double |
 | an array of these | an unpacked array |
 | a record of these | a packed struct, field by field |
 
@@ -103,8 +104,8 @@ building with make](libraries.md#mixed-language-libraries).
 
 Each is refused by name rather than simulated wrongly:
 
-- a port of a real type, an enumeration other than `std_ulogic`, `bit` and `boolean`, or a
-  physical type such as `time` (ENZ3016);
+- a port holding an aggregate of reals, an enumeration other than `std_ulogic`, `bit` and
+  `boolean`, or a physical type such as `time` (ENZ3016);
 - a VHDL port of an unconstrained type, such as `std_logic_vector` with no range, instantiated
   from SystemVerilog, where nothing gives it bounds (ENZ2005);
 - `entity work.m` naming a SystemVerilog module: declare a component instead;

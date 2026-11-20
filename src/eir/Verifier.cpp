@@ -898,6 +898,31 @@ private:
             checkReals(definition, body, {instruction.dst, instruction.a}, {instruction.b}, where);
             break;
 
+        // A real raised to a real power.
+        case Opcode::RealPower:
+            checkReals(definition, body, {instruction.dst, instruction.a, instruction.b}, {},
+                       where);
+            break;
+
+        case Opcode::RealUnaryMath:
+            checkReals(definition, body, {instruction.dst, instruction.a}, {}, where);
+            if (instruction.b.kind() != Operand::Kind::Immediate
+                || instruction.b.index() > static_cast<std::uint32_t>(RealUnaryFunction::Atanh)) {
+                reportBody(definition, body,
+                           std::format("{} names no one-argument real math function", where));
+            }
+            break;
+
+        case Opcode::RealBinaryMath:
+            checkReals(definition, body, {instruction.dst, instruction.a, instruction.b}, {},
+                       where);
+            if (instruction.c.kind() != Operand::Kind::Immediate
+                || instruction.c.index() > static_cast<std::uint32_t>(RealBinaryFunction::Hypot)) {
+                reportBody(definition, body,
+                           std::format("{} names no two-argument real math function", where));
+            }
+            break;
+
         // Narrower bits, or a real's whole part as bits.
         case Opcode::Truncate:
             if (isRealRegister(body, instruction.dst)) {

@@ -101,6 +101,9 @@ enzan_add_mixed_sv_golden_test(shapes)
 # SystemVerilog instantiating VHDL instantiating SystemVerilog, at two widths.
 enzan_add_mixed_sv_golden_test(nesting)
 
+# A scalar IEEE-754 double crossing into VHDL, through a SystemVerilog component, and back.
+enzan_add_mixed_sv_golden_test(real_ports)
+
 # cocotb driving a design of both languages, through the toplevel's language's interface and the
 # other's, once with each language's toplevel, when a Python has cocotb.
 if(ENZAN_HAVE_COCOTB)

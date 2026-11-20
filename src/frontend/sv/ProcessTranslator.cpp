@@ -147,14 +147,24 @@ bool hasSideEffects(const ast::Expression& expression) {
                          },
                          [&found](auto& visitor, const ast::CallExpression& call) {
                              static constexpr std::array PureFunctions{
-                                 std::string_view("$bits"),      std::string_view("$clog2"),
-                                 std::string_view("$signed"),    std::string_view("$unsigned"),
-                                 std::string_view("$countones"), std::string_view("$onehot"),
-                                 std::string_view("$onehot0"),   std::string_view("$isunknown"),
-                                 std::string_view("$time"),      std::string_view("$stime"),
-                                 std::string_view("$realtime"),  std::string_view("$rtoi"),
-                                 std::string_view("$itor"),      std::string_view("$realtobits"),
-                                 std::string_view("$bitstoreal")};
+                                 std::string_view("$bits"),       std::string_view("$clog2"),
+                                 std::string_view("$signed"),     std::string_view("$unsigned"),
+                                 std::string_view("$countones"),  std::string_view("$onehot"),
+                                 std::string_view("$onehot0"),    std::string_view("$isunknown"),
+                                 std::string_view("$time"),       std::string_view("$stime"),
+                                 std::string_view("$realtime"),   std::string_view("$rtoi"),
+                                 std::string_view("$itor"),       std::string_view("$realtobits"),
+                                 std::string_view("$bitstoreal"), std::string_view("$ln"),
+                                 std::string_view("$log10"),      std::string_view("$exp"),
+                                 std::string_view("$sqrt"),       std::string_view("$floor"),
+                                 std::string_view("$ceil"),       std::string_view("$sin"),
+                                 std::string_view("$cos"),        std::string_view("$tan"),
+                                 std::string_view("$asin"),       std::string_view("$acos"),
+                                 std::string_view("$atan"),       std::string_view("$sinh"),
+                                 std::string_view("$cosh"),       std::string_view("$tanh"),
+                                 std::string_view("$asinh"),      std::string_view("$acosh"),
+                                 std::string_view("$atanh"),      std::string_view("$pow"),
+                                 std::string_view("$atan2"),      std::string_view("$hypot")};
                              if (!call.isSystemCall()
                                  || std::ranges::find(PureFunctions, call.getSubroutineName())
                                         == PureFunctions.end()) {
@@ -657,7 +667,9 @@ bool ProcessTranslator::translateBody(const ast::Statement& body) {
 }
 
 bool ProcessTranslator::translateExpressionInto(std::uint32_t objectIndex,
-                                                const ast::Expression& expression) {
+                                                const ast::Expression& expression,
+                                                const ast::TimingControl* delay) {
+    if (delay != nullptr && !setContinuousDelay(*delay)) return false;
     const std::optional<Value> value = translateExpression(expression);
     if (!value.has_value()) return false;
 
@@ -666,8 +678,7 @@ bool ProcessTranslator::translateExpressionInto(std::uint32_t objectIndex,
     const Value stored = coerceState(widened, objectType);
 
     noteWholeWrite(objectIndex);
-    emit(eir::Instruction::make(eir::Opcode::Store, {}, eir::Operand::object(objectIndex),
-                                eir::Operand::reg(stored.reg)));
+    if (!emitWholeStore(objectIndex, stored.reg, false)) return false;
 
     if (!currentBlockTerminated()) emit(eir::Instruction::make(eir::Opcode::Return));
 
@@ -763,16 +774,8 @@ bool ProcessTranslator::setContinuousDelay(const ast::TimingControl& delay) {
 }
 
 std::optional<std::uint32_t> ProcessTranslator::storeDelayFor(std::uint32_t stored,
-                                                              std::uint32_t width,
-                                                              const ast::Expression* target) {
+                                                              std::uint32_t width) {
     if (!transitionDelays.has_value()) return storeDelay;
-    if (width != 1) {
-        module->reportUnsupported(target != nullptr ? target->sourceRange.start()
-                                                    : slang::SourceLocation(),
-                                  "separate rise, fall and turn-off delays on a vector");
-        failed = true;
-        return std::nullopt;
-    }
     const eir::Type time = eir::Type::bits(64, false, false);
     const auto ticks = [&](std::uint64_t value) {
         const std::uint32_t result = newRegister(time);
@@ -782,10 +785,18 @@ std::optional<std::uint32_t> ProcessTranslator::storeDelayFor(std::uint32_t stor
         return result;
     };
     const auto is = [&](eir::Logic level) {
+        std::uint32_t levelRegister = 0;
+        if (width == 1) {
+            levelRegister = constantRegister(level);
+        } else {
+            levelRegister = newRegister(eir::Type::bits(width, false, true));
+            emit(eir::Instruction::make(
+                eir::Opcode::LoadConstant, eir::Operand::reg(levelRegister),
+                eir::Operand::constant(addConstant(eir::BitVector::filled(width, level)))));
+        }
         const std::uint32_t result = newRegister(eir::Type::logic());
         emit(eir::Instruction::make(eir::Opcode::CaseEqual, eir::Operand::reg(result),
-                                    eir::Operand::reg(stored),
-                                    eir::Operand::reg(constantRegister(level))));
+                                    eir::Operand::reg(stored), eir::Operand::reg(levelRegister)));
         return result;
     };
     const auto select = [&](std::uint32_t condition, std::uint32_t whenTrue,
@@ -797,6 +808,10 @@ std::optional<std::uint32_t> ProcessTranslator::storeDelayFor(std::uint32_t stor
         return result;
     };
     const auto [rise, fall, turnOff] = *transitionDelays;
+    if (width > 1) {
+        return select(is(eir::Logic::HighZ), ticks(turnOff),
+                      select(is(eir::Logic::Zero), ticks(fall), ticks(rise)));
+    }
     const std::uint32_t toUnknown = ticks(std::min({rise, fall, turnOff}));
     return select(is(eir::Logic::One), ticks(rise),
                   select(is(eir::Logic::Zero), ticks(fall),
@@ -2776,12 +2791,16 @@ ProcessTranslator::translateBinary(const ast::Expression& expression) {
 
     case ast::BinaryOperator::Power: {
         // The exponent is self-determined, as a shift amount is, and its signedness decides
-        // what a negative one means, so it travels as an immediate. A real raises to a whole
-        // power only.
+        // what a negative integral one means, so it travels as an immediate. A real exponent
+        // uses the double operation of its own instead.
         if (right->type.isReal()) {
-            module->reportUnsupported(expression.sourceRange.start(), "a real exponent");
-            failed = true;
-            return std::nullopt;
+            const Value base = coerce(*left, eir::Type::real());
+            const Value exponent = coerce(*right, eir::Type::real());
+            const std::uint32_t result = newRegister(eir::Type::real());
+            emit(eir::Instruction::make(eir::Opcode::RealPower, eir::Operand::reg(result),
+                                        eir::Operand::reg(base.reg),
+                                        eir::Operand::reg(exponent.reg)));
+            return Value{.reg = result, .type = eir::Type::real()};
         }
         const Value base = coerce(*left, *resultType);
         const std::uint32_t result = newRegister(*resultType);
@@ -3722,30 +3741,10 @@ bool ProcessTranslator::writeLocation(const ast::Expression& target, const Locat
 
     const Value low = lowOf(location);
     if (storeDelay.has_value()) {
-        // The offset and the delay in one operand, the offset in the low 64 bits.
-        const eir::Type both = eir::Type::bits(128, false, true);
-        const std::uint32_t packed = newRegister(both);
-        emit(eir::Instruction::make(
-            eir::Opcode::LoadConstant, eir::Operand::reg(packed),
-            eir::Operand::constant(addConstant(eir::BitVector::filled(128, eir::Logic::Zero)))));
-        const auto splice = [&](std::uint32_t splicedValue, std::uint64_t at) {
-            const std::uint32_t offset = newRegister(eir::Type::bits(32, false, false));
-            emit(eir::Instruction::make(
-                eir::Opcode::LoadConstant, eir::Operand::reg(offset),
-                eir::Operand::constant(addConstant(eir::BitVector::fromUInt64(at, 32)))));
-            emit(eir::Instruction::make(eir::Opcode::SplicePart, eir::Operand::reg(packed),
-                                        eir::Operand::reg(splicedValue),
-                                        eir::Operand::reg(offset)));
-        };
         const std::optional<std::uint32_t> delay =
-            storeDelayFor(stored.reg, stored.type.bitWidth(), &target);
+            storeDelayFor(stored.reg, stored.type.bitWidth());
         if (!delay.has_value()) return false;
-        splice(coerce(low, eir::Type::bits(64, false, low.type.isFourState())).reg, 0);
-        splice(*delay, 64);
-        emit(eir::Instruction::make(nonBlocking ? eir::Opcode::StorePartNonBlockingDelayed
-                                                : eir::Opcode::StorePartDelayed,
-                                    {}, eir::Operand::object(location.objectIndex),
-                                    eir::Operand::reg(stored.reg), eir::Operand::reg(packed)));
+        emitDelayedPartStore(location.objectIndex, stored.reg, low, *delay, nonBlocking);
         return true;
     }
     emit(eir::Instruction::make(nonBlocking ? eir::Opcode::StorePartNonBlocking
@@ -3758,8 +3757,8 @@ bool ProcessTranslator::writeLocation(const ast::Expression& target, const Locat
 bool ProcessTranslator::emitWholeStore(std::uint32_t objectIndex, std::uint32_t reg,
                                        bool nonBlocking) {
     if (storeDelay.has_value()) {
-        const std::optional<std::uint32_t> delay =
-            storeDelayFor(reg, module->definition().objects[objectIndex].type.bitWidth(), nullptr);
+        const eir::Type type = module->definition().objects[objectIndex].type;
+        const std::optional<std::uint32_t> delay = storeDelayFor(reg, type.bitWidth());
         if (!delay.has_value()) return false;
         emit(eir::Instruction::make(
             nonBlocking ? eir::Opcode::StoreNonBlockingDelayed : eir::Opcode::StoreDelayed, {},
@@ -3769,6 +3768,30 @@ bool ProcessTranslator::emitWholeStore(std::uint32_t objectIndex, std::uint32_t 
     emit(eir::Instruction::make(nonBlocking ? eir::Opcode::StoreNonBlocking : eir::Opcode::Store,
                                 {}, eir::Operand::object(objectIndex), eir::Operand::reg(reg)));
     return true;
+}
+
+void ProcessTranslator::emitDelayedPartStore(std::uint32_t objectIndex, std::uint32_t stored,
+                                             const Value& low, std::uint32_t delay,
+                                             bool nonBlocking) {
+    // The offset and the delay in one operand, the offset in the low 64 bits.
+    const eir::Type both = eir::Type::bits(128, false, true);
+    const std::uint32_t packed = newRegister(both);
+    emit(eir::Instruction::make(
+        eir::Opcode::LoadConstant, eir::Operand::reg(packed),
+        eir::Operand::constant(addConstant(eir::BitVector::filled(128, eir::Logic::Zero)))));
+    const auto splice = [&](std::uint32_t splicedValue, std::uint64_t at) {
+        const std::uint32_t offset = newRegister(eir::Type::bits(32, false, false));
+        emit(eir::Instruction::make(
+            eir::Opcode::LoadConstant, eir::Operand::reg(offset),
+            eir::Operand::constant(addConstant(eir::BitVector::fromUInt64(at, 32)))));
+        emit(eir::Instruction::make(eir::Opcode::SplicePart, eir::Operand::reg(packed),
+                                    eir::Operand::reg(splicedValue), eir::Operand::reg(offset)));
+    };
+    splice(coerce(low, eir::Type::bits(64, false, low.type.isFourState())).reg, 0);
+    splice(delay, 64);
+    emit(eir::Instruction::make(
+        nonBlocking ? eir::Opcode::StorePartNonBlockingDelayed : eir::Opcode::StorePartDelayed, {},
+        eir::Operand::object(objectIndex), eir::Operand::reg(stored), eir::Operand::reg(packed)));
 }
 
 bool ProcessTranslator::refuseDelayedWrite(const ast::Expression& target) {
@@ -3925,6 +3948,58 @@ ProcessTranslator::translateCall(const ast::Expression& expression) {
             emit(eir::Instruction::make(coarser > 0 ? eir::Opcode::Divide : eir::Opcode::Multiply,
                                         eir::Operand::reg(result), eir::Operand::reg(time.reg),
                                         eir::Operand::reg(factor.reg)));
+            return Value{.reg = result, .type = eir::Type::real()};
+        }
+
+        const auto unaryMath = [&]() -> std::optional<eir::RealUnaryFunction> {
+            if (name == "$ln") return eir::RealUnaryFunction::Ln;
+            if (name == "$log10") return eir::RealUnaryFunction::Log10;
+            if (name == "$exp") return eir::RealUnaryFunction::Exp;
+            if (name == "$sqrt") return eir::RealUnaryFunction::Sqrt;
+            if (name == "$floor") return eir::RealUnaryFunction::Floor;
+            if (name == "$ceil") return eir::RealUnaryFunction::Ceil;
+            if (name == "$sin") return eir::RealUnaryFunction::Sin;
+            if (name == "$cos") return eir::RealUnaryFunction::Cos;
+            if (name == "$tan") return eir::RealUnaryFunction::Tan;
+            if (name == "$asin") return eir::RealUnaryFunction::Asin;
+            if (name == "$acos") return eir::RealUnaryFunction::Acos;
+            if (name == "$atan") return eir::RealUnaryFunction::Atan;
+            if (name == "$sinh") return eir::RealUnaryFunction::Sinh;
+            if (name == "$cosh") return eir::RealUnaryFunction::Cosh;
+            if (name == "$tanh") return eir::RealUnaryFunction::Tanh;
+            if (name == "$asinh") return eir::RealUnaryFunction::Asinh;
+            if (name == "$acosh") return eir::RealUnaryFunction::Acosh;
+            if (name == "$atanh") return eir::RealUnaryFunction::Atanh;
+            return std::nullopt;
+        }();
+        if (unaryMath.has_value() && call.arguments().size() == 1) {
+            const std::optional<Value> argument = translateExpression(*call.arguments()[0]);
+            if (!argument.has_value()) return std::nullopt;
+            const Value real = coerce(*argument, eir::Type::real());
+            const std::uint32_t result = newRegister(eir::Type::real());
+            emit(eir::Instruction::make(
+                eir::Opcode::RealUnaryMath, eir::Operand::reg(result), eir::Operand::reg(real.reg),
+                eir::Operand::immediate(static_cast<std::uint32_t>(*unaryMath))));
+            return Value{.reg = result, .type = eir::Type::real()};
+        }
+
+        const auto binaryMath = [&]() -> std::optional<eir::RealBinaryFunction> {
+            if (name == "$pow") return eir::RealBinaryFunction::Pow;
+            if (name == "$atan2") return eir::RealBinaryFunction::Atan2;
+            if (name == "$hypot") return eir::RealBinaryFunction::Hypot;
+            return std::nullopt;
+        }();
+        if (binaryMath.has_value() && call.arguments().size() == 2) {
+            const std::optional<Value> left = translateExpression(*call.arguments()[0]);
+            const std::optional<Value> right = translateExpression(*call.arguments()[1]);
+            if (!left.has_value() || !right.has_value()) return std::nullopt;
+            const Value a = coerce(*left, eir::Type::real());
+            const Value b = coerce(*right, eir::Type::real());
+            const std::uint32_t result = newRegister(eir::Type::real());
+            emit(eir::Instruction::make(
+                eir::Opcode::RealBinaryMath, eir::Operand::reg(result), eir::Operand::reg(a.reg),
+                eir::Operand::reg(b.reg),
+                eir::Operand::immediate(static_cast<std::uint32_t>(*binaryMath))));
             return Value{.reg = result, .type = eir::Type::real()};
         }
 
