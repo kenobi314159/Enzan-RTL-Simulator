@@ -142,7 +142,8 @@ if [[ ${#sources[@]} -gt 0 ]]; then
     expect 0 "PASS cli tb" "$enzan" --run all "${sources[0]}"
     "$enzan" --phase-timings "${sources[0]}" >timing-out.txt 2>timing-err.txt \
         || fail "a run with phase timings failed"
-    grep -q 'PASS cli tb' timing-out.txt || fail "timing changed the design transcript"
+    grep -q 'PASS cli tb' timing-out.txt timing-err.txt \
+        || fail "timing changed the design transcript"
     grep -Eq '^-- phase timings \(ns\): analysis=[0-9]+ elaboration=[0-9]+ bytecode=[0-9]+ image=[0-9]+ simulation=[0-9]+$' timing-err.txt \
         || fail "phase timing fields are missing or malformed"
     "$enzan" "${sources[0]}" >untimed-out.txt 2>untimed-err.txt \
