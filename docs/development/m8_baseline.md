@@ -136,6 +136,63 @@ about 27% of its elapsed time in the simulation phase. This is one short
 callback-heavy workload; it does not isolate VPI overhead or predict a longer
 cocotb regression's performance.
 
+## Frame-pointer profiles
+
+The same container and hardware were sampled with the `gcc-profile` preset,
+which uses GCC 13.3.0, `RelWithDebInfo`, `-O2 -g -DNDEBUG`,
+`-fno-omit-frame-pointer` and `-mno-omit-leaf-frame-pointer`. Enzan's internal
+assertions are enabled in this configuration. The simulator binary reports
+`98b1c944`; its runtime sources are the same as in the measurements above.
+Both frontends were enabled, with GUI and JIT disabled.
+
+Host `perf` 7.2.3 sampled `task-clock:u` at 999 Hz with frame-pointer call
+stacks. The profiled process ran as `ubuntu` in the container. For each small
+benchmark, perf attached to a stopped container shell before it ran four copies
+of the unchanged benchmark, inheriting their processes. Their reported results
+matched across repetitions. The NEORV32 profile is one run of its VHDL testbench
+with the same fixed window as above; its reports and four logs matched GHDL.
+No waveform files were recorded, and no build ran concurrently.
+
+The table reports **self samples**, as `perf report --no-children` attributes
+them, over the entire process lifetime. It includes frontend and subprocess
+user time and excludes kernel time; the short VHDL pipeline has relatively few
+samples. Enzan's debug symbols and the container's shared libraries were made
+available to perf through a symbol root. System-library frame-pointer support
+was not verified, so call stacks through those libraries may be incomplete.
+No samples were reported lost.
+
+Where `perf` is available in the same environment as the simulator, the counters
+profile can be repeated directly from the repository root:
+
+```sh
+perf record -e task-clock:u -F 999 --call-graph fp -o /tmp/counters.data -- \
+  bash -c 'for n in 1 2 3 4; do build/gcc-profile/bin/enzan --top bench \
+    --timescale ns -F bench/designs/counters.f || exit; done'
+perf report --stdio --no-children -g none -i /tmp/counters.data
+```
+
+For the measurements above, host perf attached to the container process, so its
+`--symfs` mapped `/w` to the host's mounted home directory and contained copies
+of the container libraries named by `perf buildid-list`.
+
+| Workload | Samples, approximately | `Interpreter::execute` self | Other notable self samples |
+|---|---:|---:|---|
+| pipeline | 1,000 | 22.2% | `changeSignal` 6.9%; `notifyChange` 5.1% |
+| pipeline-vhdl | 376 | 29.5% | `present` 8.8%; `encode` 3.7% |
+| counters | 6,000 | 29.4% | `notifyChange` 7.4%; `wake` 4.1% |
+| fifo-mixed | 6,000 | 29.3% | bit `set` 10.6%; bit `get` 8.7% |
+| fifo-vhdl | 5,000 | 38.5% | VHDL `drive` 3.4%; event suspension 2.7% |
+| router | 7,000 | 35.7% | `changeSignal` 4.2%; `notifyChange` 3.0% |
+| NEORV32 VHDL | 37,000 | 43.0% | event suspension 5.8%; VHDL `drive` 3.2% |
+
+`Interpreter::execute` contains inlined value and control-flow work as well as
+dispatch, and its separately compiled helpers are attributed to other symbols.
+The percentages neither measure dispatch alone nor predict JIT speedup. They do
+show that native process execution is worth investigating, while bit access,
+signal updates, waits and transactions remain candidates for separate profiling
+and improvement. The small workloads and user-space-only samples do not set the
+M8 target.
+
 ## Implications and limits
 
 Simulation accounts for 97% or more of end-to-end time in five cases. The short
@@ -146,5 +203,5 @@ either of them.
 
 These results have no JIT compilation or 100k-LUT measurement. They do not
 establish a Verilator comparison, a break-even run length, or an acceptance
-target. The next measurement uses the `gcc-profile` preset with frame pointers
-and representative real designs before those decisions are made.
+target. Larger designs and a comparable synchronous Verilator workload are
+still needed before those decisions are made.
