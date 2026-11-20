@@ -42,8 +42,11 @@ is marked `-dirty`, because a number that cannot be attributed to a commit is wo
 number: it makes the history look trustworthy when it is not.
 
 The elapsed time covers analysis, elaboration and the run, which is what a user waits for.
-Separating them is worth doing once there is something to tune; conflating them at least never
-flatters the result.
+To measure their contributions separately, add `--phase-timings` to a simulation. It prints
+nanoseconds to standard error for analysis, elaboration, bytecode compilation, image preparation
+and kernel execution. Elaboration excludes bytecode and image preparation. The report excludes
+library opening outside analysis, waveform setup and flushing, so its sum is not end-to-end time.
+For a served session, simulation time accumulates over runs and the report appears when it ends.
 
 It is a target rather than a test. CI runs it as a job of its own, and a measurement taken on a
 loaded machine alongside three hundred other tests is not comparable with anything.

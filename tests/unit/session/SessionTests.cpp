@@ -207,6 +207,34 @@ TEST_F(SessionTest, ElaboratingPreparesAKernelAtTimeZero) {
     EXPECT_EQ(session.time(), 0U);
 }
 
+TEST_F(SessionTest, PhaseTimingsAccumulateAcrossRunsWhenEnabled) {
+    session.enablePhaseTimings();
+    loadCounter();
+    const auto prepared = session.phaseTimings();
+    EXPECT_GT(prepared.analysis.count(), 0);
+    EXPECT_GT(prepared.bytecode.count(), 0);
+    EXPECT_GT(prepared.image.count(), 0);
+    EXPECT_GE(prepared.elaboration, prepared.bytecode + prepared.image);
+    EXPECT_EQ(prepared.simulation.count(), 0);
+
+    EXPECT_EQ(session.run(5), RunStatus::TimeLimitReached);
+    const auto first = session.phaseTimings().simulation;
+    EXPECT_GT(first.count(), 0);
+    EXPECT_EQ(session.run(10), RunStatus::TimeLimitReached);
+    EXPECT_GE(session.phaseTimings().simulation, first);
+}
+
+TEST_F(SessionTest, PhaseTimingsStayZeroUnlessEnabled) {
+    loadCounter();
+    EXPECT_EQ(session.run(5), RunStatus::TimeLimitReached);
+    const auto& t = session.phaseTimings();
+    EXPECT_EQ(t.analysis.count(), 0);
+    EXPECT_EQ(t.elaboration.count(), 0);
+    EXPECT_EQ(t.bytecode.count(), 0);
+    EXPECT_EQ(t.image.count(), 0);
+    EXPECT_EQ(t.simulation.count(), 0);
+}
+
 TEST_F(SessionTest, SeveralTopLevelsAreElaboratedSideBySide) {
     ASSERT_TRUE(analyse("tops.sv", "module design_top;\n  logic a = 1'b1;\nendmodule\n"
                                    "module glbl;\n  logic GSR = 1'b0;\nendmodule\n"))

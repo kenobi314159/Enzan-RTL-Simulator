@@ -1811,6 +1811,12 @@ implementation began: it constrains EIR, and discovering the constraint later me
 
 ### 15.3 Benchmarks
 
+`--phase-timings` reports accumulated wall time in nanoseconds for analysis, elaboration,
+bytecode compilation, image preparation and kernel execution. Elaboration excludes the latter
+two in the report. It is opt-in, so normal simulation does not read a clock. Analysis-library
+opening outside analysis, waveform setup and output flushing are not included; the benchmark's
+end-to-end time remains the measure of what a user waits for.
+
 `bench/` holds a fixed set of designs with fixed stimulus, which CI runs as a job of its own.
 **A regression fails CI**: each design is held to a reference of the instructions and delta cycles
 it takes, closely, and of its rate, loosely. The counts are the same on every machine, so they are

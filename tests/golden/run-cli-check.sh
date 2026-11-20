@@ -103,6 +103,8 @@ expect 1 "'--run' and '--seed' apply" "$enzan" analyse --run 10 --seed 3 tb.sv
 expect 1 "\`elaborate\` runs none" "$enzan" elaborate --in-lib libs/none --fst a.fst tb
 expect 1 "'--gui' applies" "$enzan" elaborate --in-lib libs/none --gui tb
 expect 1 "'--listen' applies" "$enzan" analyse --listen k.sock tb.sv
+expect 1 "'--phase-timings' applies" "$enzan" analyse --phase-timings tb.sv
+expect 1 "cannot measure a simulation already running" "$enzan" --gui --attach k.sock --phase-timings
 
 # --- an option given twice ------------------------------------------------------------------------
 
@@ -136,6 +138,15 @@ expect 1 "'10xs' is not a length of time" "$enzan" --run 10xs tb.sv
 expect 1 "'ALL' is not a length of time" "$enzan" --run ALL tb.sv
 if [[ ${#sources[@]} -gt 0 ]]; then
     expect 0 "PASS cli tb" "$enzan" --run all "${sources[0]}"
+    "$enzan" --phase-timings "${sources[0]}" >timing-out.txt 2>timing-err.txt \
+        || fail "a run with phase timings failed"
+    grep -q 'PASS cli tb' timing-out.txt || fail "timing changed the design transcript"
+    grep -Eq '^-- phase timings \(ns\): analysis=[0-9]+ elaboration=[0-9]+ bytecode=[0-9]+ image=[0-9]+ simulation=[0-9]+$' timing-err.txt \
+        || fail "phase timing fields are missing or malformed"
+    "$enzan" "${sources[0]}" >untimed-out.txt 2>untimed-err.txt \
+        || fail "a run without phase timings failed"
+    cmp -s timing-out.txt untimed-out.txt || fail "timing changed the transcript"
+    ! grep -q 'phase timings' untimed-err.txt || fail "timing is not opt-in"
 fi
 if has systemverilog; then
     printf '`timescale 1ns/1ps\nmodule clock;\n  reg c = 0;\n  always #5 c = ~c;\nendmodule\n' \
