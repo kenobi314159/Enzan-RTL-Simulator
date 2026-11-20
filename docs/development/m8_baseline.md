@@ -108,6 +108,34 @@ The end-to-end measurement includes opening and closing the file; the reported
 simulation phase excludes those operations. No build ran during these tests;
 CPU affinity and other host activity were not controlled.
 
+## Cocotb callbacks
+
+At checkout `4ae1472`, the same simulator binary and container ran the fixed
+10,000-cycle Python clock and rising-edge callback workload in `bench/cocotb/`.
+The run used cocotb 2.1.0, CPython 3.12 and Icarus Verilog 12.0 as the reference.
+Every repetition passed the expected counter value under both simulators; no
+waveform was recorded. No build or profiling ran concurrently, but CPU affinity
+and other host activity were not controlled.
+
+```sh
+./bench/run-cocotb.sh ./build/gcc-release/bin/enzan .venv/bin/python \
+  ./build/bench-cocotb
+```
+
+| Repeat | Enzan make invocation s | Analysis s | Elaboration s | Bytecode s | Image s | Simulation s |
+|---|---:|---:|---:|---:|---:|---:|
+| 1 | 2.136 | 0.000686 | 0.000024 | 0.000010 | 0.349 | 0.545 |
+| 2 | 2.133 | 0.000888 | 0.000027 | 0.000011 | 0.342 | 0.565 |
+| 3 | 1.723 | 0.000979 | 0.000031 | 0.000014 | 0.291 | 0.471 |
+
+The elapsed measurement covers the Enzan `make` invocation, including its
+configuration and simulator startup; it excludes preparing the harness, the
+Icarus run and the subsequent result-file check. The image phase includes kernel
+initialisation and start-of-simulation callbacks. The fastest invocation spent
+about 27% of its elapsed time in the simulation phase. This is one short
+callback-heavy workload; it does not isolate VPI overhead or predict a longer
+cocotb regression's performance.
+
 ## Implications and limits
 
 Simulation accounts for 97% or more of end-to-end time in five cases. The short
@@ -116,7 +144,7 @@ could have a visible effect there. This supports measuring process execution
 and kernel work independently; it does not establish how much JIT can accelerate
 either of them.
 
-These results have no cocotb, JIT compilation, or 100k-LUT measurement. They
-do not establish a Verilator comparison, a break-even run length, or an
-acceptance target. The next measurement uses the `gcc-profile` preset with
-frame pointers and representative real designs before those decisions are made.
+These results have no JIT compilation or 100k-LUT measurement. They do not
+establish a Verilator comparison, a break-even run length, or an acceptance
+target. The next measurement uses the `gcc-profile` preset with frame pointers
+and representative real designs before those decisions are made.
