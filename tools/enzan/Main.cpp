@@ -1413,6 +1413,13 @@ int main(int argc, char** argv) {
     case ParseOutcome::Run: break;
     }
 
+    if (invocation.phaseTimings
+        && (invocation.dryRun || invocation.command == Command::LibCreate
+            || invocation.command == Command::LibList || invocation.command == Command::LibClean)) {
+        std::cerr << "enzan: '--phase-timings' needs a simulation to measure\n";
+        return static_cast<int>(ExitStatus::Usage);
+    }
+
     // `elaborate` and `run` take the top level as their one positional word; everything else
     // reads its positional words as sources.
     if (invocation.command == Command::Elaborate || invocation.command == Command::Run) {

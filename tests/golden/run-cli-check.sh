@@ -105,6 +105,8 @@ expect 1 "'--gui' applies" "$enzan" elaborate --in-lib libs/none --gui tb
 expect 1 "'--listen' applies" "$enzan" analyse --listen k.sock tb.sv
 expect 1 "'--phase-timings' applies" "$enzan" analyse --phase-timings tb.sv
 expect 1 "cannot measure a simulation already running" "$enzan" --gui --attach k.sock --phase-timings
+expect 1 "'--phase-timings' needs a simulation" "$enzan" --phase-timings --dry-run tb.sv
+expect 1 "'--phase-timings' needs a simulation" "$enzan" lib list --phase-timings libs/none
 
 # --- an option given twice ------------------------------------------------------------------------
 
