@@ -231,6 +231,60 @@ excluded from both figures. These numbers describe one small, synchronous,
 compute-heavy pipeline with no capture or external callbacks. They neither
 represent general simulator performance nor establish the 100k-LUT target.
 
+## Active structural scale
+
+The same hardware and container ran the synthetic network in `bench/scale/` at
+checkout `5b4628b`. Its 20 clock cycles keep changing the state: each bit is
+driven by an explicitly instantiated six-input LUT and registered each cycle.
+The workload compares the low 32 bits at 20 settled states with Icarus at 1,024
+cells and checks every bit of the final state at the measured width. It records
+a single run at each width, with no waveform capture and no build or other
+benchmark running concurrently. CPU affinity and other host activity were not
+controlled.
+
+The release binary reported `v0.3.0-57-g99082ff0-dirty`: it was built while the
+benchmark files were being added, and its simulator sources match commit
+`99082ff`. The process was limited to 6 GiB of virtual memory. For example:
+
+```sh
+ulimit -v 6291456
+timeout 360 ./bench/run-scale.sh ./build/gcc-release/bin/enzan /usr/bin/iverilog \
+  65536 ./build/m8-scale
+```
+
+| Explicit cells | Elapsed s | Analysis s | Image and kernel preparation s | Simulation s | Peak RSS MiB |
+|---:|---:|---:|---:|---:|---:|
+| 16,384 | 7.508 | 1.024 | 4.812 | 1.059 | 364 |
+| 32,768 | 26.290 | 2.029 | 20.622 | 2.127 | 715 |
+| 65,536 | 101.393 | 4.065 | 89.082 | 4.311 | 1,411 |
+| 100,000 | 238.653 | 5.708 | 218.240 | 6.603 | 2,192 |
+
+Image preparation grows much faster than analysis in this workload; the image
+timer also includes kernel construction and initialization. These timings do
+not identify which operation inside that phase dominates. The run is too short
+to establish sustained throughput.
+
+For a before-and-after check of the frontend name-index change, the same source
+was run once at width 512 with the pre-change binary `98b1c944` and once with
+`99082ff`, using `--phase-timings`. Both passed the full final-state check and
+printed `cells=512 cycles=20 ones=272`. Analysis fell from 2.421 s to 0.0298 s,
+about 81 times faster in these two runs. This comparison measures analysis of
+this specific synthetic design, not JIT execution or overall simulation speed.
+
+This is a synthetic structural stress test, not a representative design or a
+post-place FPGA utilisation measurement. Yosys 0.33, with the `LUT6` model
+declared as a black box and the instances marked `keep`, retained 100,000 LUT6
+cells after `proc; opt` at width 100,000, alongside two `$dff` cells and one
+`$not` cell. That structural count is not a synthesis estimate for ordinary
+RTL, where optimisations could change the result.
+
+The initial benchmark prototype also exposed an existing port-initialization
+difference. A child with `output logic [7:0] state = 8'ha5` connects that port
+to a parent `wire [7:0]` and never assigns it again. After `#1`, Icarus 12.0
+reports `a5`, while both the pre-change and current Enzan binaries report `zz`.
+The workload uses an explicit `initial` assignment instead. The port declaration
+case remains to be investigated independently.
+
 ## Implications and limits
 
 Simulation accounts for 97% or more of end-to-end time in five cases. The short
@@ -239,7 +293,8 @@ could have a visible effect there. This supports measuring process execution
 and kernel work independently; it does not establish how much JIT can accelerate
 either of them.
 
-These results have no JIT compilation or 100k-LUT measurement. The Verilator
-comparison covers only the pipeline above; it does not establish a general
-break-even run length or an acceptance target. Larger designs and JIT
-measurements are still needed before those decisions are made.
+These results have no JIT compilation or measured post-place 100k-LUT design.
+The Verilator comparison covers only the pipeline above; it does not establish
+a general break-even run length or an acceptance target. More representative
+large designs and JIT measurements are still needed before those decisions are
+made.
