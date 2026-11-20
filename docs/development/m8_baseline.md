@@ -79,6 +79,35 @@ time includes starting the simulator, not GHDL or fetching the design.
 Simulation was about 95.5% of each fastest run. These timings include the
 testbench's CPU trace and file I/O, so they do not isolate process execution.
 
+## Selected waveform capture
+
+On the same machine and simulator binary, at checkout `4c68bb8`, the
+SystemVerilog pipeline was run three times without a waveform, interleaved with
+three runs recording the `/bench/u_stage0` scope to FST. The simulation printed
+the same result and instruction/delta counts in every run. `fst2vcd` decoded the
+file and showed one 32-bit signal, `mixed`, with 100,001 time markers. Each FST
+file was 500,684 bytes. This is selective capture of one signal, not a measure
+of recording the entire design.
+
+```sh
+./build/gcc-release/bin/enzan --top bench --timescale ns --dump-stats \
+  --phase-timings bench/designs/pipeline.sv
+./build/gcc-release/bin/enzan --top bench --timescale ns --dump-stats \
+  --phase-timings --fst /tmp/pipeline.fst --wave-scope /bench/u_stage0 \
+  bench/designs/pipeline.sv
+```
+
+| Repeat | No waveform: end-to-end s | FST: end-to-end s | No waveform: simulation s | FST: simulation s |
+|---|---:|---:|---:|---:|
+| 1 | 0.307 | 0.375 | 0.302 | 0.361 |
+| 2 | 0.311 | 0.376 | 0.302 | 0.362 |
+| 3 | 0.306 | 0.379 | 0.299 | 0.364 |
+
+The best FST end-to-end time was 22.7% higher than the best without capture.
+The end-to-end measurement includes opening and closing the file; the reported
+simulation phase excludes those operations. No build ran during these tests;
+CPU affinity and other host activity were not controlled.
+
 ## Implications and limits
 
 Simulation accounts for 97% or more of end-to-end time in five cases. The short
@@ -87,8 +116,7 @@ could have a visible effect there. This supports measuring process execution
 and kernel work independently; it does not establish how much JIT can accelerate
 either of them.
 
-These results have no waveform-capture, cocotb, JIT compilation, or 100k-LUT
-measurement. They do not establish a Verilator comparison, a break-even run
-length, or an acceptance target. The next measurement uses the `gcc-profile`
-preset with frame pointers and representative real designs before those
-decisions are made.
+These results have no cocotb, JIT compilation, or 100k-LUT measurement. They
+do not establish a Verilator comparison, a break-even run length, or an
+acceptance target. The next measurement uses the `gcc-profile` preset with
+frame pointers and representative real designs before those decisions are made.
