@@ -24,6 +24,10 @@ chmod +x "$work/enzan"
 awk -F '\t' 'NR > 1 && (NF != 9 || $5 != 10 || $6 != 20 || $7 != 30 || $8 != 40 || $9 != 50) { exit 1 }
               END { if (NR < 2) exit 1 }' "$work/phases.tsv"
 [[ $(wc -l <"$work/results.tsv") == $(wc -l <"$work/phases.tsv") ]]
+awk -F '\t' 'BEGIN { OFS="\t" } NR > 1 { print $3, 20, 3, 1 }' "$work/results.tsv" >"$work/reference.tsv"
+"$bench" --check "$work/reference.tsv" --phases "$work/checked-phases.tsv" \
+    "$work/enzan" "$work/checked-results.tsv" >"$work/output"
+[[ $(wc -l <"$work/checked-results.tsv") == $(wc -l <"$work/checked-phases.tsv") ]]
 
 if MOCK_TIMING=missing "$bench" --phases "$work/missing.tsv" "$work/enzan" "$work/other.tsv" \
     >"$work/output" 2>&1; then
