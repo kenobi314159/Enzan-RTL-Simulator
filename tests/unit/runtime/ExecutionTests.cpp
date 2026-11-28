@@ -71,6 +71,9 @@ public:
         lastKernel = &kernel;
         ++observed.runs;
         const auto& process = kernel.image().processes()[context.processIndex()];
+        EXPECT_EQ(context.activation().bodyIndex, process.bodyIndex);
+        EXPECT_EQ(context.activation().body,
+                  &kernel.image().compiledDesign().body(process.bodyIndex));
         if (kernel.image().compiledDesign().body(process.bodyIndex).connectsPort)
             ++observed.connections;
         if (context.resumePc() != 0) ++observed.resumed;
@@ -85,6 +88,11 @@ public:
         Kernel& kernel = context.kernel();
         lastKernel = &kernel;
         ++observed.calls;
+        const auto bodyIndex = context.activation().bodyIndex;
+        EXPECT_LT(bodyIndex, kernel.image().compiledDesign().bodies().size());
+        if (bodyIndex < kernel.image().compiledDesign().bodies().size()) {
+            EXPECT_EQ(context.activation().body, &kernel.image().compiledDesign().body(bodyIndex));
+        }
         if (observed.depth != 0) ++observed.nestedCalls;
         return delegate->call(context);
     }

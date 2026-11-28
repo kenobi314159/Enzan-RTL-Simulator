@@ -24,6 +24,9 @@ namespace enzan::jit {
 /// Calling convention for a generated process or subprogram body.
 using NativeBody = std::uint32_t (*)(runtime::ExecutionContext*);
 
+/// A body yielded a call to the native dispatch loop, not to the simulation kernel.
+inline constexpr std::uint32_t NativeCallRequested = 3;
+
 /// Owns the native code for one prepared simulation.
 /// The diagnostic engine must outlive this object and its generated entry points.
 class Engine {

@@ -11,9 +11,11 @@ LLVM's C++ types stay inside this component and its tests. The simulation runtim
 dependency on LLVM or on this component.
 
 The initial bytecode compiler covers branches, movement, width changes, bitwise operations,
-signal access, waits, system tasks, nonblocking writes, narrow integer arithmetic, comparisons
-and shifts. It refuses other operations before the kernel initializes; it never falls back to the
-interpreter. A session selects it for an entire simulation.
+signal access and attributes, selection and splicing, calls, waits, system tasks and functions,
+nonblocking writes, VHDL encodings and driver transactions, integer and real basic arithmetic,
+shifts, and four-state and real comparisons. Calls use an iterative dispatcher
+and the kernel's bounded call stack. It refuses other operations before the kernel initializes; it
+never falls back to the interpreter. A session selects it for an entire simulation.
 It has been built and tested with LLVM 18; the remaining LLVM versions admitted by the build
 need their own coverage.
 

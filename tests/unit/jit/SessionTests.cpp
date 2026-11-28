@@ -42,8 +42,9 @@ std::unique_ptr<eir::Design> design(bool unsupported = false) {
     process.readObject(value, 0);
     process.store(1, value);
     if (unsupported) {
-        process.emit(eir::Instruction::make(eir::Opcode::Divide, eir::Operand::reg(quotient),
-                                            eir::Operand::reg(value), eir::Operand::reg(value)));
+        process.emit(eir::Instruction::make(eir::Opcode::Power, eir::Operand::reg(quotient),
+                                            eir::Operand::reg(value), eir::Operand::reg(value),
+                                            eir::Operand::immediate(0)));
     }
     process.emit(eir::Instruction::make(eir::Opcode::WaitTime, {}, eir::Operand::reg(delay),
                                         eir::Operand::block(1)));

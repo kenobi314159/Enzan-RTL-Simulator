@@ -18,6 +18,8 @@ struct WriteRoute;
 /// A compiled body bound to the frame, objects, routes and callees of one instance.
 struct Activation {
     const codegen::CompiledBody* body = nullptr;
+    /// Index of that body in the image's compiled design.
+    std::uint32_t bodyIndex = 0xFFFF'FFFFU;
     /// Word offset into the kernel's frame storage, not a byte offset.
     std::uint32_t frameOffset = 0;
     /// Per-object signal indices for reads and for writes; port bindings can differ.
@@ -43,6 +45,22 @@ public:
 
     [[nodiscard]] std::uint32_t resumePc() const noexcept { return resume; }
 
+    /// A nested activation uses the same kernel and process, with its own frame and PC.
+    [[nodiscard]] ExecutionContext withActivation(const Activation& activation,
+                                                  std::uint32_t resumePc) const noexcept {
+        return {*owner, process, activation, resumePc};
+    }
+
+    /// A native body yields a call to its backend's iterative dispatcher.
+    void requestCall(std::uint32_t callIndex, std::uint32_t resumePc) noexcept {
+        requestedCall = callIndex;
+        callResume = resumePc;
+    }
+
+    [[nodiscard]] std::uint32_t callIndex() const noexcept { return requestedCall; }
+
+    [[nodiscard]] std::uint32_t callResumePc() const noexcept { return callResume; }
+
 private:
     friend class Kernel;
 
@@ -54,6 +72,8 @@ private:
     std::uint32_t process;
     const Activation* bound;
     std::uint32_t resume;
+    std::uint32_t requestedCall = 0;
+    std::uint32_t callResume = 0;
 };
 
 /// How executing a process body ended.

@@ -11,6 +11,7 @@
 #include "eir/Instruction.h"
 #include "runtime/Execution.h"
 #include "runtime/Image.h"
+#include "runtime/Kernel.h"
 
 #include <llvm/ExecutionEngine/Orc/ThreadSafeModule.h>
 #include <llvm/IR/IRBuilder.h>
@@ -22,7 +23,6 @@
 #include <format>
 #include <memory>
 #include <string>
-#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -39,11 +39,28 @@ bool supported(const Instruction& instruction) {
     case Opcode::Nop:
     case Opcode::Jump:
     case Opcode::Return:
+    case Opcode::Call:
     case Opcode::SysTask:
     case Opcode::WaitTime:
     case Opcode::WaitEdge:
     case Opcode::WaitEvents: return true;
     case Opcode::BranchIf: return instruction.aWidth != 0;
+    case Opcode::Present:
+    case Opcode::Encode: return instruction.dstWidth != 0 && instruction.aWidth != 0;
+    case Opcode::Drive:
+    case Opcode::DriveTransport:
+    case Opcode::DrivePart: return instruction.bWidth != 0 && instruction.cWidth != 0;
+    case Opcode::DrivePartAfter:
+    case Opcode::DriveTransportPart: return instruction.bWidth != 0 && instruction.cWidth == 128;
+    case Opcode::BitSelect:
+        return instruction.dstWidth == 1 && instruction.aWidth != 0 && instruction.bWidth != 0;
+    case Opcode::Conditional:
+        return instruction.dstWidth != 0 && instruction.aWidth != 0
+               && instruction.bWidth == instruction.dstWidth
+               && instruction.cWidth == instruction.dstWidth;
+    case Opcode::PartSelect:
+    case Opcode::SplicePart:
+        return instruction.dstWidth != 0 && instruction.aWidth != 0 && instruction.bWidth != 0;
     case Opcode::LoadConstant: return instruction.dstWidth != 0;
     case Opcode::Move:
         return instruction.dstWidth != 0 && instruction.dstWidth == instruction.aWidth;
@@ -60,42 +77,163 @@ bool supported(const Instruction& instruction) {
         return instruction.dstWidth != 0 && instruction.dstWidth == instruction.aWidth
                && instruction.dstWidth == instruction.bWidth;
     case Opcode::ReadObject: return instruction.dstWidth != 0;
+    case Opcode::ReadObjectPart: return instruction.dstWidth != 0 && instruction.bWidth != 0;
+    case Opcode::ReadEvent:
+    case Opcode::ReadActive: return instruction.dstWidth == 1;
+    case Opcode::ReadLastValue:
+    case Opcode::ReadTime:
+    case Opcode::SysFunction: return instruction.dstWidth != 0;
     case Opcode::Store:
     case Opcode::StoreNonBlocking: return instruction.bWidth != 0;
+    case Opcode::StorePart:
+    case Opcode::StorePartNonBlocking: return instruction.bWidth != 0 && instruction.cWidth != 0;
     case Opcode::Add:
     case Opcode::Subtract:
     case Opcode::Multiply:
-        return !instruction.isReal && instruction.dstWidth != 0 && instruction.dstWidth <= 64
+        return instruction.dstWidth != 0 && (!instruction.isReal || instruction.dstWidth == 64)
                && instruction.aWidth == instruction.dstWidth
                && instruction.bWidth == instruction.dstWidth;
+    case Opcode::Negate:
+        return instruction.dstWidth != 0 && instruction.aWidth == instruction.dstWidth
+               && (!instruction.isReal || instruction.dstWidth == 64);
+    case Opcode::Divide:
+    case Opcode::Modulo:
+        return instruction.dstWidth != 0 && instruction.aWidth == instruction.dstWidth
+               && instruction.bWidth == instruction.dstWidth
+               && (!instruction.isReal
+                   || (instruction.opcode == Opcode::Divide && instruction.dstWidth == 64));
     case Opcode::ShiftLeft:
     case Opcode::ShiftRightLogical:
     case Opcode::ShiftRightArithmetic:
-        return !instruction.isReal && instruction.dstWidth != 0 && instruction.dstWidth <= 64
-               && instruction.aWidth == instruction.dstWidth && instruction.bWidth != 0
-               && instruction.bWidth <= 64;
+        return !instruction.isReal && instruction.dstWidth != 0
+               && instruction.aWidth == instruction.dstWidth && instruction.bWidth != 0;
     case Opcode::Equal:
     case Opcode::NotEqual:
     case Opcode::CaseEqual:
     case Opcode::CaseNotEqual:
     case Opcode::LessThan:
     case Opcode::LessEqual:
-        return !instruction.isReal && instruction.dstWidth == 1 && instruction.aWidth != 0
-               && instruction.aWidth <= 64 && instruction.aWidth == instruction.bWidth;
+    case Opcode::WildcardEqual:
+    case Opcode::WildcardNotEqual:
+    case Opcode::CaseZMatch:
+    case Opcode::CaseXMatch:
+        return instruction.dstWidth == 1 && instruction.aWidth != 0
+               && instruction.aWidth == instruction.bWidth
+               && (!instruction.isReal || instruction.aWidth == 64);
     default: return false;
     }
 }
 
+/// Generated code accounts before an operation can stop, re-enter the kernel, or transfer
+/// control. Counting a straight-line run once preserves the logical bytecode count without
+/// a helper call for every instruction.
+bool endsCountRun(Opcode opcode) {
+    switch (opcode) {
+    case Opcode::Jump:
+    case Opcode::BranchIf:
+    case Opcode::Return:
+    case Opcode::Call:
+    case Opcode::Store:
+    case Opcode::StoreNonBlocking:
+    case Opcode::StorePart:
+    case Opcode::StorePartNonBlocking:
+    case Opcode::Drive:
+    case Opcode::DriveTransport:
+    case Opcode::DrivePart:
+    case Opcode::DrivePartAfter:
+    case Opcode::DriveTransportPart:
+    case Opcode::SysTask:
+    case Opcode::SysFunction:
+    case Opcode::WaitTime:
+    case Opcode::WaitEdge:
+    case Opcode::WaitEvents: return true;
+    default: return false;
+    }
+}
+
+struct CountRuns {
+    std::vector<bool> leaders;
+    std::vector<std::uint64_t> countAt;
+};
+
+CountRuns countRuns(const CompiledBody& body) {
+    CountRuns result{.leaders = std::vector<bool>(body.code.size(), false),
+                     .countAt = std::vector<std::uint64_t>(body.code.size(), 0)};
+    if (body.code.empty()) return result;
+    result.leaders[0] = true;
+    for (std::size_t pc = 0; pc < body.code.size(); ++pc) {
+        const auto& instruction = body.code[pc];
+        switch (instruction.opcode) {
+        case Opcode::Jump: result.leaders[instruction.a] = true; break;
+        case Opcode::BranchIf:
+            result.leaders[instruction.b] = true;
+            result.leaders[instruction.c] = true;
+            break;
+        case Opcode::WaitTime:
+        case Opcode::WaitEvents: result.leaders[instruction.b] = true; break;
+        case Opcode::WaitEdge: result.leaders[instruction.c] = true; break;
+        default: break;
+        }
+        if (endsCountRun(instruction.opcode) && pc + 1 < body.code.size())
+            result.leaders[pc + 1] = true;
+    }
+    std::uint64_t count = 0;
+    for (std::size_t pc = 0; pc < body.code.size(); ++pc) {
+        ++count;
+        if (endsCountRun(body.code[pc].opcode) || pc + 1 == body.code.size()
+            || result.leaders[pc + 1]) {
+            result.countAt[pc] = count;
+            count = 0;
+        }
+    }
+    return result;
+}
+
 class NativeBackend final : public runtime::ExecutionBackend {
 public:
-    NativeBackend(std::unique_ptr<Engine> owner,
-                  std::unordered_map<const CompiledBody*, NativeBody> entries)
+    NativeBackend(std::unique_ptr<Engine> owner, std::vector<NativeBody> entries)
         : engine(std::move(owner)), bodies(std::move(entries)) {}
 
     runtime::ExecutionResult run(runtime::ExecutionContext& context) override {
-        const auto entry = bodies.find(context.activation().body);
-        if (entry == bodies.end()) return runtime::ExecutionResult::Stopped;
-        return static_cast<runtime::ExecutionResult>(entry->second(&context));
+        const auto invoke = [&](runtime::ExecutionContext& invocation) {
+            const auto index = invocation.activation().bodyIndex;
+            if (index >= bodies.size() || bodies[index] == nullptr)
+                return static_cast<std::uint32_t>(runtime::ExecutionResult::Stopped);
+            return bodies[index](&invocation);
+        };
+        const auto first = invoke(context);
+        if (first != NativeCallRequested) return static_cast<runtime::ExecutionResult>(first);
+
+        runtime::Kernel& kernel = context.kernel();
+        runtime::Activation current = context.activation();
+        std::uint32_t callIndex = context.callIndex();
+        std::uint32_t resume = context.callResumePc();
+        std::size_t depth = 0;
+        for (;;) {
+            const auto callee =
+                kernel.enterCall(context.processIndex(), current, callIndex, resume);
+            if (!callee.has_value()) return runtime::ExecutionResult::Stopped;
+            current = *callee;
+            ++depth;
+            resume = 0;
+            for (;;) {
+                auto invocation = context.withActivation(current, resume);
+                const auto outcome = invoke(invocation);
+                if (outcome == NativeCallRequested) {
+                    callIndex = invocation.callIndex();
+                    resume = invocation.callResumePc();
+                    break;
+                }
+                if (outcome != static_cast<std::uint32_t>(runtime::ExecutionResult::Completed))
+                    return static_cast<runtime::ExecutionResult>(outcome);
+                if (depth == 0) return runtime::ExecutionResult::Completed;
+                const auto caller = kernel.leaveCall(current);
+                if (!caller.has_value()) return runtime::ExecutionResult::Completed;
+                current = caller->first;
+                resume = caller->second;
+                --depth;
+            }
+        }
     }
 
     runtime::ExecutionResult call(runtime::ExecutionContext& context) override {
@@ -104,46 +242,61 @@ public:
 
 private:
     std::unique_ptr<Engine> engine;
-    std::unordered_map<const CompiledBody*, NativeBody> bodies;
+    std::vector<NativeBody> bodies;
 };
 
-/// Emits one native function per body. Every bytecode instruction has its own block so that
-/// branch and resume targets use bytecode indices, including those after eliminated constants.
+/// Emits one native function per body. Branch and resume targets retain their bytecode indices;
+/// straight-line instructions share blocks, with a limit on block size for LLVM's code generator.
 class Lowerer {
 public:
     Lowerer(llvm::LLVMContext& llvmContext, llvm::Module& llvmModule)
         : context(llvmContext), module(llvmModule), builder(llvmContext) {}
 
     void emit(const CompiledBody& body, std::uint32_t index) {
+        const CountRuns counts = countRuns(body);
         auto* ptr = builder.getPtrTy();
         auto* type = llvm::FunctionType::get(builder.getInt32Ty(), {ptr}, false);
         auto* function =
             llvm::Function::Create(type, llvm::Function::ExternalLinkage, name(index), module);
         auto* entry = llvm::BasicBlock::Create(context, "entry", function);
         auto* invalid = llvm::BasicBlock::Create(context, "invalid_resume", function);
-        std::vector<llvm::BasicBlock*> blocks;
-        blocks.reserve(body.code.size());
+        constexpr std::size_t MaxInstructionsPerBlock = 64;
+        std::vector<bool> blockLeaders = counts.leaders;
+        std::size_t blockSize = 0;
+        for (std::size_t pc = 0; pc < body.code.size(); ++pc) {
+            if (blockLeaders[pc] || blockSize == MaxInstructionsPerBlock) {
+                blockLeaders[pc] = true;
+                blockSize = 0;
+            }
+            ++blockSize;
+        }
+        std::vector<llvm::BasicBlock*> blocks(body.code.size(), nullptr);
         for (std::size_t pc = 0; pc < body.code.size(); ++pc)
-            blocks.push_back(
-                llvm::BasicBlock::Create(context, "pc" + std::to_string(pc), function));
+            if (blockLeaders[pc])
+                blocks[pc] = llvm::BasicBlock::Create(context, "pc" + std::to_string(pc), function);
 
         builder.SetInsertPoint(entry);
         auto* argument = function->getArg(0);
         auto resume = helper("enzanExecResumePc", builder.getInt32Ty(), {ptr});
-        auto frameFunction = helper("enzanExecFrame", ptr, {ptr});
-        auto* frame = builder.CreateCall(frameFunction, {argument});
+        auto* counterSlot = builder.CreateAlloca(ptr);
+        auto frameFunction = helper("enzanExecFrameAndCounter", ptr, {ptr, ptr});
+        auto* frame = builder.CreateCall(frameFunction, {argument, counterSlot});
+        auto* counter = builder.CreateLoad(ptr, counterSlot);
         auto* branch = builder.CreateSwitch(builder.CreateCall(resume, {argument}), invalid,
                                             static_cast<unsigned>(blocks.size()));
         for (std::size_t pc = 0; pc < blocks.size(); ++pc)
-            branch->addCase(builder.getInt32(static_cast<std::uint32_t>(pc)), blocks[pc]);
+            if (counts.leaders[pc])
+                branch->addCase(builder.getInt32(static_cast<std::uint32_t>(pc)), blocks[pc]);
         builder.SetInsertPoint(invalid);
         builder.CreateRet(result(runtime::ExecutionResult::Stopped));
 
         for (std::size_t pc = 0; pc < body.code.size(); ++pc) {
-            builder.SetInsertPoint(blocks[pc]);
+            if (blockLeaders[pc]) builder.SetInsertPoint(blocks[pc]);
             const Instruction& op = body.code[pc];
-            count(argument);
-            const auto next = [&] { builder.CreateBr(blocks[pc + 1]); };
+            if (counts.countAt[pc] != 0) count(counter, counts.countAt[pc]);
+            const auto next = [&] {
+                if (blockLeaders[pc + 1]) builder.CreateBr(blocks[pc + 1]);
+            };
             switch (op.opcode) {
             case Opcode::Nop: next(); break;
             case Opcode::Jump: builder.CreateBr(blocks[op.a]); break;
@@ -162,6 +315,14 @@ public:
             case Opcode::Return:
                 builder.CreateRet(result(runtime::ExecutionResult::Completed));
                 break;
+            case Opcode::Call: {
+                auto request = helper("enzanExecRequestCall", builder.getVoidTy(),
+                                      {ptr, builder.getInt32Ty(), builder.getInt32Ty()});
+                builder.CreateCall(request, {argument, builder.getInt32(op.a),
+                                             builder.getInt32(static_cast<std::uint32_t>(pc + 1))});
+                builder.CreateRet(builder.getInt32(NativeCallRequested));
+                break;
+            }
             case Opcode::LoadConstant: {
                 eir::BitVector value = eir::BitVector::filled(op.dstWidth, eir::Logic::Zero);
                 eir::bitops::extend(value.mutableRef(), body.constant(op.a), op.isSigned);
@@ -265,10 +426,156 @@ public:
                 next();
                 break;
             }
+            case Opcode::Present:
+            case Opcode::Encode: {
+                auto* i32 = builder.getInt32Ty();
+                if (op.opcode == Opcode::Present) {
+                    auto present = helper("enzanExecPresent", builder.getVoidTy(),
+                                          {ptr, i32, i32, i32, i32, i32});
+                    builder.CreateCall(present,
+                                       {argument, builder.getInt32(op.dst),
+                                        builder.getInt32(op.dstWidth), builder.getInt32(op.a),
+                                        builder.getInt32(op.aWidth), builder.getInt32(op.b)});
+                } else {
+                    auto encode = helper("enzanExecEncode", builder.getVoidTy(),
+                                         {ptr, i32, i32, i32, i32, i32, i32});
+                    builder.CreateCall(encode, {argument, builder.getInt32(op.dst),
+                                                builder.getInt32(op.dstWidth),
+                                                builder.getInt32(op.a), builder.getInt32(op.aWidth),
+                                                builder.getInt32(op.b), builder.getInt32(op.c)});
+                }
+                next();
+                break;
+            }
+            case Opcode::BitSelect:
+            case Opcode::PartSelect:
+            case Opcode::SplicePart: {
+                if (op.opcode != Opcode::SplicePart && op.dstWidth <= 64 && op.aWidth <= 64
+                    && op.bWidth <= 64) {
+                    auto* position = load(frame, op.b);
+                    auto* known = builder.CreateICmpEQ(load(frame, op.b + 1), builder.getInt64(0));
+                    auto* inRange = builder.CreateICmpULT(position, builder.getInt64(op.aWidth));
+                    auto* valid = builder.CreateAnd(known, inRange);
+                    // LLVM shifts by the word size or more are poison even on the unused path.
+                    auto* shift = builder.CreateSelect(valid, position, builder.getInt64(0));
+                    auto* selectedMask = builder.CreateAnd(
+                        builder.CreateLShr(builder.getInt64(eir::topWordMask(op.aWidth)), shift),
+                        builder.getInt64(eir::topWordMask(op.dstWidth)));
+                    auto* mask = builder.CreateSelect(valid, selectedMask, builder.getInt64(0));
+                    auto* missing =
+                        builder.CreateXor(mask, builder.getInt64(eir::topWordMask(op.dstWidth)));
+                    auto selectPlane = [&](std::uint32_t offset) {
+                        auto* selected =
+                            builder.CreateAnd(builder.CreateLShr(load(frame, offset), shift), mask);
+                        return builder.CreateOr(selected, missing);
+                    };
+                    auto* aval = selectPlane(op.a);
+                    auto* bval = selectPlane(op.a + 1);
+                    write(frame, op.dst, aval);
+                    write(frame, op.dst + 1, bval);
+                } else {
+                    const char* name = "enzanExecSplicePart";
+                    if (op.opcode == Opcode::BitSelect) name = "enzanExecBitSelect";
+                    if (op.opcode == Opcode::PartSelect) name = "enzanExecPartSelect";
+                    auto* i32 = builder.getInt32Ty();
+                    auto select =
+                        helper(name, builder.getVoidTy(), {ptr, i32, i32, i32, i32, i32, i32});
+                    builder.CreateCall(
+                        select, {argument, builder.getInt32(op.dst), builder.getInt32(op.dstWidth),
+                                 builder.getInt32(op.a), builder.getInt32(op.aWidth),
+                                 builder.getInt32(op.b), builder.getInt32(op.bWidth)});
+                }
+                next();
+                break;
+            }
+            case Opcode::Conditional: {
+                const std::uint32_t conditionWords = eir::wordsFor(op.aWidth);
+                llvm::Value* knownOnes = builder.getInt64(0);
+                llvm::Value* unknownBits = builder.getInt64(0);
+                for (std::uint32_t word = 0; word < conditionWords; ++word) {
+                    auto* aval = load(frame, op.a + word);
+                    auto* bval = load(frame, op.a + conditionWords + word);
+                    knownOnes = builder.CreateOr(knownOnes,
+                                                 builder.CreateAnd(aval, builder.CreateNot(bval)));
+                    unknownBits = builder.CreateOr(unknownBits, bval);
+                }
+                auto* isTrue = builder.CreateICmpNE(knownOnes, builder.getInt64(0));
+                auto* hasUnknown = builder.CreateICmpNE(unknownBits, builder.getInt64(0));
+                const std::uint32_t words = eir::wordsFor(op.dstWidth);
+                for (std::uint32_t word = 0; word < words; ++word) {
+                    auto* trueAval = load(frame, op.b + word);
+                    auto* trueBval = load(frame, op.b + words + word);
+                    auto* falseAval = load(frame, op.c + word);
+                    auto* falseBval = load(frame, op.c + words + word);
+                    auto* different = builder.CreateOr(builder.CreateXor(trueAval, falseAval),
+                                                       builder.CreateXor(trueBval, falseBval));
+                    auto selectPlane = [&](llvm::Value* whenTrue, llvm::Value* whenFalse) {
+                        auto* merged = builder.CreateOr(
+                            builder.CreateAnd(whenTrue, builder.CreateNot(different)), different);
+                        return builder.CreateSelect(
+                            isTrue, whenTrue, builder.CreateSelect(hasUnknown, merged, whenFalse));
+                    };
+                    llvm::Value* aval = selectPlane(trueAval, falseAval);
+                    llvm::Value* bval = selectPlane(trueBval, falseBval);
+                    if (word + 1 == words) {
+                        auto* mask = builder.getInt64(eir::topWordMask(op.dstWidth));
+                        aval = builder.CreateAnd(aval, mask);
+                        bval = builder.CreateAnd(bval, mask);
+                    }
+                    write(frame, op.dst + word, aval);
+                    write(frame, op.dst + words + word, bval);
+                }
+                next();
+                break;
+            }
             case Opcode::ReadObject: {
                 auto read = helper("enzanExecReadObject", ptr, {ptr, builder.getInt32Ty()});
                 auto* source = builder.CreateCall(read, {argument, builder.getInt32(op.a)});
                 copy(frame, op.dst, source, 0, eir::storageWordsFor(op.dstWidth));
+                next();
+                break;
+            }
+            case Opcode::ReadObjectPart: {
+                auto* i32 = builder.getInt32Ty();
+                auto read = helper("enzanExecReadObjectPart", builder.getVoidTy(),
+                                   {ptr, i32, i32, i32, i32, i32});
+                builder.CreateCall(read, {argument, builder.getInt32(op.dst),
+                                          builder.getInt32(op.dstWidth), builder.getInt32(op.a),
+                                          builder.getInt32(op.b), builder.getInt32(op.bWidth)});
+                next();
+                break;
+            }
+            case Opcode::ReadEvent:
+            case Opcode::ReadActive: {
+                auto* i32 = builder.getInt32Ty();
+                auto attribute = helper("enzanExecSignalAttribute", i32, {ptr, i32, i32});
+                auto* value = builder.CreateCall(
+                    attribute, {argument, builder.getInt32(op.a),
+                                builder.getInt32(op.opcode == Opcode::ReadActive ? 1 : 0)});
+                write(frame, op.dst, builder.CreateZExt(value, builder.getInt64Ty()));
+                write(frame, op.dst + 1, builder.getInt64(0));
+                next();
+                break;
+            }
+            case Opcode::ReadLastValue: {
+                auto last = helper("enzanExecLastValue", ptr, {ptr, builder.getInt32Ty()});
+                auto* source = builder.CreateCall(last, {argument, builder.getInt32(op.a)});
+                copy(frame, op.dst, source, 0, eir::storageWordsFor(op.dstWidth));
+                next();
+                break;
+            }
+            case Opcode::ReadTime: {
+                auto time = helper("enzanExecTime", builder.getInt64Ty(), {ptr});
+                llvm::Value* value = builder.CreateCall(time, {argument});
+                if (op.dstWidth < 64)
+                    value =
+                        builder.CreateAnd(value, builder.getInt64(eir::topWordMask(op.dstWidth)));
+                const std::uint32_t words = eir::wordsFor(op.dstWidth);
+                write(frame, op.dst, value);
+                for (std::uint32_t word = 1; word < words; ++word)
+                    write(frame, op.dst + word, builder.getInt64(0));
+                for (std::uint32_t word = 0; word < words; ++word)
+                    write(frame, op.dst + words + word, builder.getInt64(0));
                 next();
                 break;
             }
@@ -291,9 +598,85 @@ public:
                 next();
                 break;
             }
+            case Opcode::StorePart:
+            case Opcode::StorePartNonBlocking: {
+                auto* i32 = builder.getInt32Ty();
+                auto store = helper("enzanExecStorePart", builder.getVoidTy(),
+                                    {ptr, i32, i32, i32, i32, i32, i32, i32});
+                builder.CreateCall(
+                    store, {argument, builder.getInt32(op.a), builder.getInt32(op.dst),
+                            builder.getInt32(op.b), builder.getInt32(op.bWidth),
+                            builder.getInt32(op.c), builder.getInt32(op.cWidth),
+                            builder.getInt32(op.opcode == Opcode::StorePartNonBlocking ? 1 : 0)});
+                next();
+                break;
+            }
+            case Opcode::Drive:
+            case Opcode::DriveTransport: {
+                auto* i32 = builder.getInt32Ty();
+                auto drive =
+                    helper("enzanExecDrive", i32, {ptr, i32, i32, i32, i32, i32, i32, i32});
+                auto* outcome = builder.CreateCall(
+                    drive, {argument, builder.getInt32(op.a), builder.getInt32(op.dst),
+                            builder.getInt32(op.b), builder.getInt32(op.bWidth),
+                            builder.getInt32(op.c), builder.getInt32(op.cWidth),
+                            builder.getInt32(op.opcode == Opcode::Drive ? 1 : 0)});
+                auto* stopped = llvm::BasicBlock::Create(context, "drive_stop", function);
+                builder.CreateCondBr(
+                    builder.CreateICmpEQ(outcome, result(runtime::ExecutionResult::Completed)),
+                    blocks[pc + 1], stopped);
+                builder.SetInsertPoint(stopped);
+                builder.CreateRet(outcome);
+                break;
+            }
+            case Opcode::DrivePart:
+            case Opcode::DrivePartAfter:
+            case Opcode::DriveTransportPart: {
+                auto* i32 = builder.getInt32Ty();
+                auto drive =
+                    helper("enzanExecDrivePart", i32, {ptr, i32, i32, i32, i32, i32, i32, i32});
+                auto* outcome = builder.CreateCall(
+                    drive, {argument, builder.getInt32(op.a), builder.getInt32(op.dst),
+                            builder.getInt32(op.b), builder.getInt32(op.bWidth),
+                            builder.getInt32(op.c), builder.getInt32(op.cWidth),
+                            builder.getInt32(static_cast<std::uint32_t>(op.opcode))});
+                auto* stopped = llvm::BasicBlock::Create(context, "drive_part_stop", function);
+                builder.CreateCondBr(
+                    builder.CreateICmpEQ(outcome, result(runtime::ExecutionResult::Completed)),
+                    blocks[pc + 1], stopped);
+                builder.SetInsertPoint(stopped);
+                builder.CreateRet(outcome);
+                break;
+            }
             case Opcode::Add:
             case Opcode::Subtract:
             case Opcode::Multiply: {
+                if (op.isReal) {
+                    auto* left = builder.CreateBitCast(load(frame, op.a), builder.getDoubleTy());
+                    auto* right = builder.CreateBitCast(load(frame, op.b), builder.getDoubleTy());
+                    llvm::Value* value = nullptr;
+                    if (op.opcode == Opcode::Add)
+                        value = builder.CreateFAdd(left, right);
+                    else if (op.opcode == Opcode::Subtract)
+                        value = builder.CreateFSub(left, right);
+                    else
+                        value = builder.CreateFMul(left, right);
+                    write(frame, op.dst, builder.CreateBitCast(value, builder.getInt64Ty()));
+                    write(frame, op.dst + 1, builder.getInt64(0));
+                    next();
+                    break;
+                }
+                if (op.dstWidth > 64) {
+                    auto* i32 = builder.getInt32Ty();
+                    auto arithmetic = helper("enzanExecWideArithmetic", builder.getVoidTy(),
+                                             {ptr, i32, i32, i32, i32, i32});
+                    builder.CreateCall(arithmetic,
+                                       {argument, builder.getInt32(op.dst), builder.getInt32(op.a),
+                                        builder.getInt32(op.b), builder.getInt32(op.dstWidth),
+                                        builder.getInt32(static_cast<std::uint32_t>(op.opcode))});
+                    next();
+                    break;
+                }
                 auto* left = load(frame, op.a);
                 auto* right = load(frame, op.b);
                 auto* unknown = builder.CreateOr(load(frame, op.a + 1), load(frame, op.b + 1));
@@ -313,12 +696,145 @@ public:
                 next();
                 break;
             }
+            case Opcode::Negate: {
+                if (op.isReal) {
+                    auto* value = builder.CreateBitCast(load(frame, op.a), builder.getDoubleTy());
+                    write(frame, op.dst,
+                          builder.CreateBitCast(builder.CreateFNeg(value), builder.getInt64Ty()));
+                    write(frame, op.dst + 1, builder.getInt64(0));
+                } else if (op.dstWidth > 64) {
+                    auto* i32 = builder.getInt32Ty();
+                    auto arithmetic = helper("enzanExecWideArithmetic", builder.getVoidTy(),
+                                             {ptr, i32, i32, i32, i32, i32});
+                    builder.CreateCall(arithmetic,
+                                       {argument, builder.getInt32(op.dst), builder.getInt32(op.a),
+                                        builder.getInt32(0), builder.getInt32(op.dstWidth),
+                                        builder.getInt32(static_cast<std::uint32_t>(op.opcode))});
+                } else {
+                    auto* hasUnknown =
+                        builder.CreateICmpNE(load(frame, op.a + 1), builder.getInt64(0));
+                    auto* mask = builder.getInt64(eir::topWordMask(op.dstWidth));
+                    auto* value = builder.CreateAnd(builder.CreateNeg(load(frame, op.a)), mask);
+                    write(frame, op.dst, builder.CreateSelect(hasUnknown, mask, value));
+                    write(frame, op.dst + 1,
+                          builder.CreateSelect(hasUnknown, mask, builder.getInt64(0)));
+                }
+                next();
+                break;
+            }
+            case Opcode::Divide:
+            case Opcode::Modulo: {
+                if (op.isReal) {
+                    auto* left = builder.CreateBitCast(load(frame, op.a), builder.getDoubleTy());
+                    auto* right = builder.CreateBitCast(load(frame, op.b), builder.getDoubleTy());
+                    auto* quotient = builder.CreateFDiv(left, right);
+                    write(frame, op.dst, builder.CreateBitCast(quotient, builder.getInt64Ty()));
+                    write(frame, op.dst + 1, builder.getInt64(0));
+                    next();
+                    break;
+                }
+                if (op.dstWidth > 64) {
+                    auto* i32 = builder.getInt32Ty();
+                    auto divide = helper("enzanExecDivRem", builder.getVoidTy(),
+                                         {ptr, i32, i32, i32, i32, i32, i32});
+                    builder.CreateCall(divide,
+                                       {argument, builder.getInt32(op.dst), builder.getInt32(op.a),
+                                        builder.getInt32(op.b), builder.getInt32(op.dstWidth),
+                                        builder.getInt32(op.isSigned ? 1 : 0),
+                                        builder.getInt32(op.opcode == Opcode::Modulo ? 1 : 0)});
+                    next();
+                    break;
+                }
+                auto* left = load(frame, op.a);
+                auto* right = load(frame, op.b);
+                auto* unknown = builder.CreateOr(load(frame, op.a + 1), load(frame, op.b + 1));
+                auto* undefinedResult =
+                    builder.CreateOr(builder.CreateICmpNE(unknown, builder.getInt64(0)),
+                                     builder.CreateICmpEQ(right, builder.getInt64(0)));
+                auto* mask = builder.getInt64(eir::topWordMask(op.dstWidth));
+                llvm::Value* leftNegative = builder.getFalse();
+                llvm::Value* rightNegative = builder.getFalse();
+                llvm::Value* leftMagnitude = left;
+                llvm::Value* rightMagnitude = right;
+                if (op.isSigned) {
+                    auto sign = [&](llvm::Value* value) {
+                        return builder.CreateICmpNE(
+                            builder.CreateAnd(builder.CreateLShr(value, op.dstWidth - 1),
+                                              builder.getInt64(1)),
+                            builder.getInt64(0));
+                    };
+                    auto magnitude = [&](llvm::Value* value, llvm::Value* negative) {
+                        auto* negated = builder.CreateAnd(builder.CreateNeg(value), mask);
+                        return builder.CreateSelect(negative, negated, value);
+                    };
+                    leftNegative = sign(left);
+                    rightNegative = sign(right);
+                    leftMagnitude = magnitude(left, leftNegative);
+                    rightMagnitude = magnitude(right, rightNegative);
+                }
+                // LLVM division by zero is poison, including on a later discarded path.
+                auto* safeDivisor =
+                    builder.CreateSelect(undefinedResult, builder.getInt64(1), rightMagnitude);
+                llvm::Value* value = op.opcode == Opcode::Modulo
+                                         ? builder.CreateURem(leftMagnitude, safeDivisor)
+                                         : builder.CreateUDiv(leftMagnitude, safeDivisor);
+                if (op.isSigned) {
+                    auto* negative = op.opcode == Opcode::Modulo
+                                         ? leftNegative
+                                         : builder.CreateXor(leftNegative, rightNegative);
+                    value = builder.CreateSelect(negative, builder.CreateNeg(value), value);
+                }
+                value = builder.CreateAnd(value, mask);
+                write(frame, op.dst, builder.CreateSelect(undefinedResult, mask, value));
+                write(frame, op.dst + 1,
+                      builder.CreateSelect(undefinedResult, mask, builder.getInt64(0)));
+                next();
+                break;
+            }
             case Opcode::Equal:
             case Opcode::NotEqual:
             case Opcode::CaseEqual:
             case Opcode::CaseNotEqual:
             case Opcode::LessThan:
-            case Opcode::LessEqual: {
+            case Opcode::LessEqual:
+            case Opcode::WildcardEqual:
+            case Opcode::WildcardNotEqual:
+            case Opcode::CaseZMatch:
+            case Opcode::CaseXMatch: {
+                const bool realComparison =
+                    op.isReal
+                    && (op.opcode == Opcode::Equal || op.opcode == Opcode::NotEqual
+                        || op.opcode == Opcode::LessThan || op.opcode == Opcode::LessEqual);
+                if (realComparison) {
+                    auto* left = builder.CreateBitCast(load(frame, op.a), builder.getDoubleTy());
+                    auto* right = builder.CreateBitCast(load(frame, op.b), builder.getDoubleTy());
+                    llvm::Value* value = nullptr;
+                    switch (op.opcode) {
+                    case Opcode::Equal: value = builder.CreateFCmpOEQ(left, right); break;
+                    case Opcode::NotEqual: value = builder.CreateFCmpUNE(left, right); break;
+                    case Opcode::LessThan: value = builder.CreateFCmpOLT(left, right); break;
+                    case Opcode::LessEqual: value = builder.CreateFCmpOLE(left, right); break;
+                    default: break;
+                    }
+                    write(frame, op.dst, builder.CreateZExt(value, builder.getInt64Ty()));
+                    write(frame, op.dst + 1, builder.getInt64(0));
+                    next();
+                    break;
+                }
+                if (op.aWidth > 64 || op.opcode == Opcode::WildcardEqual
+                    || op.opcode == Opcode::WildcardNotEqual || op.opcode == Opcode::CaseZMatch
+                    || op.opcode == Opcode::CaseXMatch) {
+                    auto* i32 = builder.getInt32Ty();
+                    auto compare = helper("enzanExecCompare", builder.getVoidTy(),
+                                          {ptr, i32, i32, i32, i32, i32, i32});
+                    builder.CreateCall(compare,
+                                       {argument, builder.getInt32(op.dst), builder.getInt32(op.a),
+                                        builder.getInt32(op.b), builder.getInt32(op.aWidth),
+                                        builder.getInt32(static_cast<std::uint32_t>(op.opcode)),
+                                        builder.getInt32(op.isSigned ? 1 : 0)});
+                    next();
+                    break;
+                }
                 auto* left = load(frame, op.a);
                 auto* right = load(frame, op.b);
                 auto* leftUnknown = load(frame, op.a + 1);
@@ -363,6 +879,18 @@ public:
             case Opcode::ShiftLeft:
             case Opcode::ShiftRightLogical:
             case Opcode::ShiftRightArithmetic: {
+                if (op.dstWidth > 64 || op.bWidth > 64) {
+                    auto* i32 = builder.getInt32Ty();
+                    auto shift = helper("enzanExecWideShift", builder.getVoidTy(),
+                                        {ptr, i32, i32, i32, i32, i32, i32});
+                    builder.CreateCall(shift,
+                                       {argument, builder.getInt32(op.dst), builder.getInt32(op.a),
+                                        builder.getInt32(op.dstWidth), builder.getInt32(op.b),
+                                        builder.getInt32(op.bWidth),
+                                        builder.getInt32(static_cast<std::uint32_t>(op.opcode))});
+                    next();
+                    break;
+                }
                 auto* aval = load(frame, op.a);
                 auto* bval = load(frame, op.a + 1);
                 auto* amount = load(frame, op.b);
@@ -401,6 +929,20 @@ public:
                                    {ptr, builder.getInt32Ty()});
                 auto* outcome = builder.CreateCall(task, {argument, builder.getInt32(op.a)});
                 auto* stopped = llvm::BasicBlock::Create(context, "task_stop", function);
+                builder.CreateCondBr(
+                    builder.CreateICmpEQ(outcome, result(runtime::ExecutionResult::Completed)),
+                    blocks[pc + 1], stopped);
+                builder.SetInsertPoint(stopped);
+                builder.CreateRet(outcome);
+                break;
+            }
+            case Opcode::SysFunction: {
+                auto* i32 = builder.getInt32Ty();
+                auto functionCall = helper("enzanExecSystemFunction", i32, {ptr, i32, i32, i32});
+                auto* outcome = builder.CreateCall(functionCall, {argument, builder.getInt32(op.a),
+                                                                  builder.getInt32(op.dst),
+                                                                  builder.getInt32(op.dstWidth)});
+                auto* stopped = llvm::BasicBlock::Create(context, "function_stop", function);
                 builder.CreateCondBr(
                     builder.CreateICmpEQ(outcome, result(runtime::ExecutionResult::Completed)),
                     blocks[pc + 1], stopped);
@@ -464,10 +1006,10 @@ private:
             write(dst, destination + word, load(src, source + word));
     }
 
-    void count(llvm::Value* argument) {
-        auto increment = helper("enzanExecCount", builder.getVoidTy(),
-                                {builder.getPtrTy(), builder.getInt64Ty()});
-        builder.CreateCall(increment, {argument, builder.getInt64(1)});
+    void count(llvm::Value* counter, std::uint64_t instructions) {
+        // A helper may re-enter native code and update the same counter between runs.
+        auto* previous = builder.CreateLoad(builder.getInt64Ty(), counter);
+        builder.CreateStore(builder.CreateAdd(previous, builder.getInt64(instructions)), counter);
     }
 
     llvm::ConstantInt* result(runtime::ExecutionResult value) {
@@ -503,16 +1045,35 @@ std::unique_ptr<runtime::ExecutionBackend> makeBackend(const runtime::Image& ima
     }
     auto engine = Engine::create(diagnostics);
     if (!engine) return nullptr;
-    auto context = std::make_unique<llvm::LLVMContext>();
-    auto module = std::make_unique<llvm::Module>("enzan", *context);
-    Lowerer lowerer(*context, *module);
-    for (const auto index : indices) lowerer.emit(design.body(index), index);
-    if (!engine->addModule({std::move(module), std::move(context)})) return nullptr;
-    std::unordered_map<const CompiledBody*, NativeBody> entries;
-    for (const auto index : indices) {
-        auto entry = engine->lookup(Lowerer::name(index));
-        if (entry == nullptr) return nullptr;
-        entries.emplace(&design.body(index), entry);
+    std::vector<NativeBody> entries(design.bodies().size(), nullptr);
+    // Materialize bounded modules before emitting the next one, so LLVM can release each
+    // module's IR and code-generation state before the kernel starts. A body stays intact.
+    constexpr std::size_t MaxBytecodePerModule = 4096;
+    for (std::size_t first = 0; first < indices.size();) {
+        auto context = std::make_unique<llvm::LLVMContext>();
+        auto module = std::make_unique<llvm::Module>(std::format("enzan_{}", first), *context);
+        Lowerer lowerer(*context, *module);
+        std::size_t count = 0;
+        std::size_t last = first;
+        while (last < indices.size()) {
+            const auto index = indices[last];
+            const auto& body = design.body(index);
+            const std::size_t instructions = body.code.size();
+            if (last != first
+                && (count >= MaxBytecodePerModule || instructions > MaxBytecodePerModule - count))
+                break;
+            lowerer.emit(body, index);
+            count += instructions;
+            ++last;
+        }
+        if (!engine->addModule({std::move(module), std::move(context)})) return nullptr;
+        for (std::size_t current = first; current < last; ++current) {
+            const auto index = indices[current];
+            auto entry = engine->lookup(Lowerer::name(index));
+            if (entry == nullptr) return nullptr;
+            entries[index] = entry;
+        }
+        first = last;
     }
     return std::make_unique<NativeBackend>(std::move(engine), std::move(entries));
 }

@@ -525,6 +525,7 @@ bool Kernel::countDelta() {
 [[gnu::always_inline]] inline ExecutionResult Kernel::executeProcess(std::uint32_t processIndex) {
     ProcessState& state = processes[processIndex];
     const Activation activation{.body = &designImage->compiledDesign().body(state.bodyIndex),
+                                .bodyIndex = state.bodyIndex,
                                 .frameOffset = state.frameOffset,
                                 .objectSignals = state.objectSignals,
                                 .writeSignals = state.writeSignals,
@@ -970,6 +971,7 @@ bool Kernel::callResolution(std::uint32_t processIndex, std::uint32_t subprogram
     bitops::copy(frameAt(frame + parameter.offset, parameter.bitWidth), drivers);
 
     const Activation activation{.body = &body,
+                                .bodyIndex = callee.bodyIndex,
                                 .frameOffset = frame,
                                 .objectSignals = callee.objectSignals,
                                 .writeSignals = callee.writeSignals,
@@ -1532,6 +1534,7 @@ std::optional<Activation> Kernel::enterCall(std::uint32_t processIndex, const Ac
     callsInProgress.push_back(
         CallInProgress{.caller = caller, .callIndex = callIndex, .resumePc = resumePc});
     return Activation{.body = &body,
+                      .bodyIndex = callee.bodyIndex,
                       .frameOffset = frame,
                       .objectSignals = callee.objectSignals,
                       .writeSignals = callee.writeSignals,

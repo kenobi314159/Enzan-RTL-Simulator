@@ -64,14 +64,33 @@ std::unique_ptr<Engine> Engine::create(DiagnosticEngine& diagnostics) {
     };
     add("enzanExecResumePc", &runtime::enzanExecResumePc);
     add("enzanExecFrame", &runtime::enzanExecFrame);
+    add("enzanExecFrameAndCounter", &runtime::enzanExecFrameAndCounter);
+    add("enzanExecRequestCall", &runtime::enzanExecRequestCall);
     add("enzanExecExtend", &runtime::enzanExecExtend);
+    add("enzanExecPresent", &runtime::enzanExecPresent);
+    add("enzanExecEncode", &runtime::enzanExecEncode);
+    add("enzanExecBitSelect", &runtime::enzanExecBitSelect);
+    add("enzanExecPartSelect", &runtime::enzanExecPartSelect);
+    add("enzanExecSplicePart", &runtime::enzanExecSplicePart);
+    add("enzanExecCompare", &runtime::enzanExecCompare);
+    add("enzanExecDivRem", &runtime::enzanExecDivRem);
+    add("enzanExecWideArithmetic", &runtime::enzanExecWideArithmetic);
+    add("enzanExecWideShift", &runtime::enzanExecWideShift);
     add("enzanExecReadObject", &runtime::enzanExecReadObject);
+    add("enzanExecReadObjectPart", &runtime::enzanExecReadObjectPart);
+    add("enzanExecSignalAttribute", &runtime::enzanExecSignalAttribute);
+    add("enzanExecLastValue", &runtime::enzanExecLastValue);
+    add("enzanExecTime", &runtime::enzanExecTime);
     add("enzanExecStore", &runtime::enzanExecStore);
     add("enzanExecStoreNonBlocking", &runtime::enzanExecStoreNonBlocking);
+    add("enzanExecStorePart", &runtime::enzanExecStorePart);
+    add("enzanExecDrive", &runtime::enzanExecDrive);
+    add("enzanExecDrivePart", &runtime::enzanExecDrivePart);
     add("enzanExecWaitTime", &runtime::enzanExecWaitTime);
     add("enzanExecWaitEdge", &runtime::enzanExecWaitEdge);
     add("enzanExecWaitEvents", &runtime::enzanExecWaitEvents);
     add("enzanExecSystemTask", &runtime::enzanExecSystemTask);
+    add("enzanExecSystemFunction", &runtime::enzanExecSystemFunction);
     add("enzanExecCount", &runtime::enzanExecCount);
     if (auto error = instance->jit->getMainJITDylib().define(
             llvm::orc::absoluteSymbols(std::move(symbols)))) {
