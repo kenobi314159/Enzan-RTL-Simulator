@@ -43,6 +43,11 @@ std::string_view toString(RunStatus status) noexcept {
 
 namespace {
 
+/// An edge watches the lowest bit; the two stored planes encode its four values directly.
+eir::Logic lowestBit(eir::ConstBitRef value) noexcept {
+    return static_cast<eir::Logic>((value.aval()[0] & 1U) | ((value.bval()[0] & 1U) << 1U));
+}
+
 /// True when the transition from `before` to `after` is a positive edge.
 ///
 /// IEEE 1364 defines `posedge` as a transition *towards* 1, not merely 0 to 1: 0 to 1,
@@ -716,9 +721,9 @@ void Kernel::changeSignal(std::uint32_t signalIndex, eir::ConstBitRef value) {
 
     recordEvent(signalIndex, target);
     const eir::ConstBitRef previous = keepPrevious(signal, target);
-    const eir::Logic before = target.get(0);
+    const eir::Logic before = lowestBit(target);
     bitops::extend(target, value, false);
-    const eir::Logic after = target.get(0);
+    const eir::Logic after = lowestBit(target);
 
     for (ValueChangeListener* listener : listeners) listener->onValueChange(signalIndex, target);
 
@@ -759,9 +764,9 @@ void Kernel::writeSignalPart(std::uint32_t signalIndex, eir::ConstBitRef value,
 
     recordEvent(signalIndex, target);
     const eir::ConstBitRef previous = keepPrevious(signal, target);
-    const eir::Logic before = target.get(0);
+    const eir::Logic before = lowestBit(target);
     bitops::assignPartAt(target, value, lowBit);
-    const eir::Logic after = target.get(0);
+    const eir::Logic after = lowestBit(target);
 
     for (ValueChangeListener* listener : listeners) listener->onValueChange(signalIndex, target);
 
