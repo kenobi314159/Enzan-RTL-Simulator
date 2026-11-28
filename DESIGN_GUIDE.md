@@ -1971,30 +1971,8 @@ exit criteria are unmet.
 | M5 | Four-state completion and language breadth: nets, drivers and resolution, packages, interfaces, generate, structs, enums, arrays |
 | M6 | VHDL via NVC, the VHDL simulation cycle and VHPI |
 | M7 | Designs of both languages (3.5) |
-
-### M7.1 — AMD Xilinx simulation libraries
-
-Designs instantiating AMD Xilinx's simulation models, read from the user's own installation: the
-unisims, unimacro, `glbl` and XPM from SystemVerilog; the same through `unisim` and `xpm` libraries
-of components from VHDL; and 7-series functional-simulation netlists.
-
-**Exit:** self-checking testbenches for the primitives designs use most — flip-flops with `glbl`'s
-reset, LUTs, carry chains, shift registers, block RAM, DSP slices, clock buffers, MMCMs, DDR
-registers, I/O buffers with pulls — match Icarus Verilog, their clock-to-output delays included;
-XPM memories, FIFOs and synchronisers match Verilator; the same checks run from VHDL through the
-component libraries agree with both; and NEORV32's 7-series functional netlists, in Verilog and in
-VHDL, run its program as its RTL does.
-
-### M7.2 — Altera simulation libraries
-
-Designs instantiating Altera's models: `altera_primitives`, LPM, `altera_mf`, `sgate` and the
-Cyclone 10 LP atoms from SystemVerilog, and from VHDL through Altera's component packages or as
-VHDL libraries of their own; and Cyclone 10 LP `.vo` netlists.
-
-**Exit:** testbenches for `altsyncram` with an initialisation file and for the LPM functions match
-Icarus Verilog, and `scfifo` and `dcfifo` match Verilator; the Cyclone 10 LP atoms match Icarus
-Verilog, and `cyclone10lp_pll` Verilator; Altera's VHDL models give GHDL's results; and NEORV32's
-Cyclone 10 LP netlist runs its program as its RTL does.
+| M7.1 | AMD Xilinx simulation libraries |
+| M7.2 | Altera simulation libraries |
 
 ### M8 — Performance
 
