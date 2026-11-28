@@ -3,6 +3,7 @@
 #include "runtime/ExecutionHelpers.h"
 
 #include "codegen/Bytecode.h"
+#include "eir/BitOps.h"
 #include "eir/BitVector.h"
 #include "runtime/Execution.h"
 #include "runtime/Image.h"
@@ -33,6 +34,15 @@ extern "C" std::uint64_t* enzanExecFrame(ExecutionContext* context) noexcept {
     return context->kernel().frameAt(activation.frameOffset, 1).aval();
 }
 
+extern "C" void enzanExecExtend(ExecutionContext* context, std::uint32_t destinationWordOffset,
+                                std::uint32_t destinationWidth, std::uint32_t sourceWordOffset,
+                                std::uint32_t sourceWidth, std::uint32_t signExtend) {
+    Kernel& kernel = context->kernel();
+    const std::uint32_t frame = context->activation().frameOffset;
+    eir::bitops::extend(kernel.frameAt(frame + destinationWordOffset, destinationWidth),
+                        kernel.frameAt(frame + sourceWordOffset, sourceWidth), signExtend != 0);
+}
+
 extern "C" const std::uint64_t* enzanExecReadObject(ExecutionContext* context,
                                                     std::uint32_t objectIndex) noexcept {
     Kernel& kernel = context->kernel();
@@ -50,6 +60,16 @@ extern "C" void enzanExecStore(ExecutionContext* context, std::uint32_t objectIn
                       kernel.frameAt(activation.frameOffset + sourceWordOffset, sourceWidth));
 }
 
+extern "C" void enzanExecStoreNonBlocking(ExecutionContext* context, std::uint32_t objectIndex,
+                                          std::uint32_t sourceWordOffset,
+                                          std::uint32_t sourceWidth) {
+    Kernel& kernel = context->kernel();
+    const Activation& activation = context->activation();
+    kernel.scheduleNonBlocking(
+        activation.writeSignals[objectIndex],
+        kernel.frameAt(activation.frameOffset + sourceWordOffset, sourceWidth));
+}
+
 extern "C" std::uint32_t enzanExecWaitTime(ExecutionContext* context, std::uint32_t delayWordOffset,
                                            std::uint32_t delayWidth, std::uint32_t resumePc) {
     Kernel& kernel = context->kernel();
@@ -60,6 +80,20 @@ extern "C" std::uint32_t enzanExecWaitTime(ExecutionContext* context, std::uint3
     return static_cast<std::uint32_t>(ExecutionHelperAccess::error(kernel)
                                           ? ExecutionResult::Stopped
                                           : ExecutionResult::Suspended);
+}
+
+extern "C" std::uint32_t enzanExecWaitEdge(ExecutionContext* context, std::uint32_t objectIndex,
+                                           std::uint32_t edge, std::uint32_t resumePc) {
+    context->kernel().suspendForEdge(context->processIndex(),
+                                     context->activation().objectSignals[objectIndex],
+                                     static_cast<eir::EdgeKind>(edge), resumePc);
+    return static_cast<std::uint32_t>(ExecutionResult::Suspended);
+}
+
+extern "C" std::uint32_t enzanExecWaitEvents(ExecutionContext* context, std::uint32_t listIndex,
+                                             std::uint32_t resumePc) {
+    context->kernel().suspendForEvents(context->processIndex(), listIndex, resumePc);
+    return static_cast<std::uint32_t>(ExecutionResult::Suspended);
 }
 
 extern "C" std::uint32_t enzanExecSystemTask(ExecutionContext* context, std::uint32_t taskIndex) {

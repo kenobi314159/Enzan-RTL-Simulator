@@ -10,7 +10,10 @@ destroyed after the last native activation and before the diagnostic engine they
 LLVM's C++ types stay inside this component and its tests. The simulation runtime has no
 dependency on LLVM or on this component.
 
-This is the ORC foundation, not yet a bytecode compiler or a selectable execution backend.
+The initial bytecode compiler covers branches, movement, width changes, bitwise operations,
+signal access, waits, system tasks, nonblocking writes, narrow integer arithmetic, comparisons
+and shifts. It refuses other operations before the kernel initializes; it never falls back to the
+interpreter. A session selects it for an entire simulation.
 It has been built and tested with LLVM 18; the remaining LLVM versions admitted by the build
 need their own coverage.
 

@@ -83,6 +83,7 @@ public:
         std::chrono::nanoseconds elaboration{};
         std::chrono::nanoseconds bytecode{};
         std::chrono::nanoseconds image{};
+        std::chrono::nanoseconds jit{};
         std::chrono::nanoseconds simulation{};
     };
 
@@ -154,6 +155,9 @@ public:
 
     /// Collect kernel activity counters from the next elaboration onward.
     void enableActivityStats() noexcept { collectActivity = true; }
+
+    /// Selects native execution for the next elaboration. The interpreter is the default.
+    void setJitEnabled(bool enabled) noexcept { useJit = enabled; }
 
     // -----------------------------------------------------------------------
     // Analysis
@@ -659,6 +663,7 @@ private:
     PhaseTimings timings;
     bool timingEnabled = false;
     bool collectActivity = false;
+    bool useJit = false;
 
     /// Bumped by `discardElaboration`, which every path that replaces the simulation goes
     /// through. See `elaborationGeneration`.

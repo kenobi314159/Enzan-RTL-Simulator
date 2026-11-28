@@ -25,6 +25,7 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <span>
 #include <sstream>
@@ -49,6 +50,10 @@ public:
 /// Verifies, elaborates, compiles and runs a one-module design.
 class Simulation {
 public:
+    /// Prepares a backend against the actual image before the kernel is initialized.
+    using BackendFactory = std::function<std::unique_ptr<runtime::ExecutionBackend>(
+        const runtime::Image&, DiagnosticEngine&)>;
+
     /// The buffer `Simulation` registers its stand-in source text as.
     ///
     /// Always the first buffer of the manager, so that a test can build EIR carrying
@@ -80,14 +85,14 @@ public:
 
     Simulation(eir::Design design, std::string_view topName,
                std::unique_ptr<runtime::ExecutionBackend> backend = {},
-               const elab::ResolutionAnswers& resolutions = {})
+               const elab::ResolutionAnswers& resolutions = {}, const BackendFactory& factory = {})
         : Simulation(std::move(design), std::vector<std::string>{std::string(topName)},
-                     std::move(backend), resolutions) {}
+                     std::move(backend), resolutions, factory) {}
 
     /// The same with several top levels, each a root.
     Simulation(eir::Design design, std::vector<std::string> topNames,
                std::unique_ptr<runtime::ExecutionBackend> backend = {},
-               const elab::ResolutionAnswers& resolutions = {})
+               const elab::ResolutionAnswers& resolutions = {}, const BackendFactory& factory = {})
         : engine(sources), analysed(std::move(design)) {
         // Added first, so that `SourceBuffer` names it. Every simulation gets one even when
         // the test does not care, because a fixture whose buffer numbering depends on what
@@ -110,6 +115,11 @@ public:
         if (compiled == nullptr) return;
 
         image = std::make_unique<runtime::Image>(analysed, *elaborated, *compiled);
+
+        if (factory) {
+            backend = factory(*image, engine);
+            if (!backend) return;
+        }
 
         runtime::KernelOptions options;
         options.transcript = &transcriptStream;

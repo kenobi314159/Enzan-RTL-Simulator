@@ -47,6 +47,8 @@ nanoseconds to standard error for analysis, elaboration, bytecode compilation, i
 and kernel execution. Elaboration excludes bytecode and image preparation. The report excludes
 library opening outside analysis, waveform setup and flushing, so its sum is not end-to-end time.
 For a served session, simulation time accumulates over runs and the report appears when it ends.
+With `--backend jit`, a separate line reports native-code preparation; image preparation excludes
+that time. The five-column phase file does not capture the additional JIT preparation field.
 To collect those timings for the benchmark designs, run:
 
 ```sh

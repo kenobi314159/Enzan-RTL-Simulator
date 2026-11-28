@@ -9,7 +9,7 @@ of a screen full of waveforms, and *calculation* (演算), for the work the simu
 
 Enzan simulates SystemVerilog and VHDL, each alone or both in one design, writes VCD and FST
 waveforms, and runs cocotb testbenches. The NEORV32 RISC-V processor runs its own VHDL testbench,
-and the same testbench rewritten in Verilog, with GHDL's results. Performance work is next.
+and the same testbench rewritten in Verilog, with GHDL's results. Performance work is underway.
 
 Enzan is developed largely by AI coding agents, working to a written specification of its design.
 Its results are checked against Icarus Verilog's and GHDL's as well as by its own tests.
@@ -37,6 +37,10 @@ enzan --work neorv32 --top neorv32_tb -f neorv32_files.f --ieee-asserts disable 
 ```
 
 `enzan --help` lists the options.
+
+An LLVM-enabled build offers `--backend jit` for an experimental native backend. It currently
+supports only a small subset of operations and reports unsupported ones before simulation starts.
+The interpreter remains the default. Build with `-DENZAN_ENABLE_JIT=ON` to try it.
 
 To open the design in a window instead, add `--gui`:
 

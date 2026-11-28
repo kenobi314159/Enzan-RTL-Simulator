@@ -186,6 +186,7 @@ Simulation:
       --seed <n>          The seed random numbers are drawn from. Default 0.
       --dump-stats        Print instruction and delta counts when the run ends.
       --phase-timings     Print elapsed time for each simulation phase.
+      --backend <name>    Select interpreter or jit (default: interpreter).
       --activity-stats    Print opt-in kernel activity counters.
       --vpi <lib[:entry]> Load a VPI application, such as cocotb's; repeatable.
                           Without an entry, its vlog_startup_routines are run.
@@ -274,6 +275,8 @@ struct Invocation {
     bool dumpStatistics = false;
     bool phaseTimings = false;
     bool activityStats = false;
+    bool useJit = false;
+    bool backendSpecified = false;
 
     /// VPI and VHPI applications to load, each in the order given.
     std::vector<std::string> vpiApplications;
@@ -616,6 +619,27 @@ ParseOutcome parseCommandLine(std::span<char*> arguments, Invocation& invocation
         if (argument == "--phase-timings") {
             invocation.phaseTimings = true;
             simulationOnly("--phase-timings");
+            continue;
+        }
+
+        if (argument == "--backend") {
+            const char* value = requireValue(index, argument);
+            if (value == nullptr) return ParseOutcome::BadUsage;
+            if (!once("--backend", value)) return ParseOutcome::BadUsage;
+            const std::string_view backend(value);
+            if (backend != "interpreter" && backend != "jit") {
+                std::cerr << "enzan: '--backend' takes interpreter or jit\n";
+                return ParseOutcome::BadUsage;
+            }
+#ifndef ENZAN_WITH_JIT
+            if (backend == "jit") {
+                std::cerr << "enzan: the JIT backend is not available in this build\n";
+                return ParseOutcome::BadUsage;
+            }
+#endif
+            invocation.useJit = backend == "jit";
+            invocation.backendSpecified = true;
+            simulationOnly("--backend");
             continue;
         }
 
@@ -1262,14 +1286,16 @@ ExitStatus simulate(const Invocation& invocation, enzan::SourceManager& sources,
     enzan::session::Session session(sources, diagnostics);
     if (invocation.phaseTimings) session.enablePhaseTimings();
     if (invocation.activityStats) session.enableActivityStats();
+    session.setJitEnabled(invocation.useJit);
 
     const auto reportTimings = [&] {
         if (!invocation.phaseTimings) return;
         const auto& t = session.phaseTimings();
         std::cerr << "-- phase timings (ns): analysis=" << t.analysis.count()
                   << " elaboration=" << (t.elaboration - t.bytecode - t.image).count()
-                  << " bytecode=" << t.bytecode.count() << " image=" << t.image.count()
+                  << " bytecode=" << t.bytecode.count() << " image=" << (t.image - t.jit).count()
                   << " simulation=" << t.simulation.count() << '\n';
+        if (invocation.useJit) std::cerr << "-- JIT preparation (ns): " << t.jit.count() << '\n';
     };
 
     const auto reportActivity = [&] {
@@ -1449,6 +1475,12 @@ int main(int argc, char** argv) {
         std::cerr << "enzan: '--activity-stats' needs a simulation to measure\n";
         return static_cast<int>(ExitStatus::Usage);
     }
+    if (invocation.backendSpecified
+        && (invocation.dryRun || invocation.command == Command::LibCreate
+            || invocation.command == Command::LibList || invocation.command == Command::LibClean)) {
+        std::cerr << "enzan: '--backend' needs a simulation\n";
+        return static_cast<int>(ExitStatus::Usage);
+    }
 
     // `elaborate` and `run` take the top level as their one positional word; everything else
     // reads its positional words as sources.
@@ -1533,6 +1565,10 @@ int main(int argc, char** argv) {
     }
     if (invocation.useGui && !invocation.attachPath.empty() && invocation.activityStats) {
         std::cerr << "enzan: '--activity-stats' cannot measure a simulation already running\n";
+        return static_cast<int>(ExitStatus::Usage);
+    }
+    if (invocation.useGui && !invocation.attachPath.empty() && invocation.backendSpecified) {
+        std::cerr << "enzan: '--backend' cannot select the backend of a running simulation\n";
         return static_cast<int>(ExitStatus::Usage);
     }
     if (invocation.useGui && !invocation.attachPath.empty()) becomeAttachedFrontEnd(invocation);

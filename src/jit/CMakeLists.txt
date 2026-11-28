@@ -10,8 +10,8 @@ endif()
 
 enzan_add_component(
   jit
-  SOURCES Engine.cpp
-  HEADERS Engine.h
+  SOURCES Backend.cpp Engine.cpp
+  HEADERS Backend.h Engine.h
   DEPENDS enzan::common
   PRIVATE_DEPENDS enzan::runtime ${_enzan_llvm})
 target_include_directories(enzan_jit SYSTEM PRIVATE ${LLVM_INCLUDE_DIRS})

@@ -21,6 +21,11 @@ std::uint32_t enzanExecResumePc(const ExecutionContext* context) noexcept;
 /// frames can be reused after a return.
 std::uint64_t* enzanExecFrame(ExecutionContext* context) noexcept;
 
+/// Extend or truncate a frame value, preserving the bit planes and signedness.
+void enzanExecExtend(ExecutionContext* context, std::uint32_t destinationWordOffset,
+                     std::uint32_t destinationWidth, std::uint32_t sourceWordOffset,
+                     std::uint32_t sourceWidth, std::uint32_t signExtend);
+
 /// Start of a bound object's two-plane value. The body supplies its width. The address is stable
 /// during an activation, but callbacks and runtime helpers may change the value it points to.
 const std::uint64_t* enzanExecReadObject(ExecutionContext* context,
@@ -32,10 +37,20 @@ void enzanExecStore(ExecutionContext* context, std::uint32_t objectIndex,
                     std::uint32_t writePosition, std::uint32_t sourceWordOffset,
                     std::uint32_t sourceWidth);
 
+/// Enqueue a whole nonblocking write using the activation's bound write signal.
+void enzanExecStoreNonBlocking(ExecutionContext* context, std::uint32_t objectIndex,
+                               std::uint32_t sourceWordOffset, std::uint32_t sourceWidth);
+
 /// Suspend on a frame-held delay, treating unknown bits as zero. Returns the numeric
 /// ExecutionResult::Suspended or ExecutionResult::Stopped, as the interpreter does.
 std::uint32_t enzanExecWaitTime(ExecutionContext* context, std::uint32_t delayWordOffset,
                                 std::uint32_t delayWidth, std::uint32_t resumePc);
+
+/// Suspend on one edge or an event list. The edge value is an `eir::EdgeKind`.
+std::uint32_t enzanExecWaitEdge(ExecutionContext* context, std::uint32_t objectIndex,
+                                std::uint32_t edge, std::uint32_t resumePc);
+std::uint32_t enzanExecWaitEvents(ExecutionContext* context, std::uint32_t listIndex,
+                                  std::uint32_t resumePc);
 
 /// Perform a system task. Returns numeric ExecutionResult::Completed to continue or
 /// ExecutionResult::Stopped after finish/error, unwinding any in-progress calls in that case.

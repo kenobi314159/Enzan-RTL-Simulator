@@ -21,6 +21,10 @@
 #include "wavedb/FstWriter.h"
 #include "wavedb/VcdWriter.h"
 
+#ifdef ENZAN_WITH_JIT
+#include "jit/Backend.h"
+#endif
+
 #ifdef ENZAN_WITH_SYSTEMVERILOG
 #include "frontend/sv/SystemVerilogFrontend.h"
 #endif
@@ -68,7 +72,7 @@ bool isVhdlSource(const std::filesystem::path& file) {
 }
 
 /// The top levels whose translation one analysis may cache, in command-line order.
-std::vector<std::string> analysisTops(const Session::AnalysisRequest& request) {
+[[maybe_unused]] std::vector<std::string> analysisTops(const Session::AnalysisRequest& request) {
     if (request.top.empty()) return {};
     std::vector<std::string> tops{request.top};
     tops.insert(tops.end(), request.otherTops.begin(), request.otherTops.end());
@@ -1448,7 +1452,25 @@ bool Session::elaborate(std::span<const std::string> topModules) {
     options.stopSeverity = stopSeverity;
     options.collectActivity = collectActivity;
 
-    kernel = std::make_unique<runtime::Kernel>(*image, diagnostics, options);
+    std::unique_ptr<runtime::ExecutionBackend> backend;
+    if (useJit) {
+#ifdef ENZAN_WITH_JIT
+        {
+            const PhaseTimer jitTimer(timingEnabled ? &timings.jit : nullptr);
+            backend = jit::makeBackend(*image, diagnostics);
+        }
+        if (!backend) {
+            discardElaboration();
+            return false;
+        }
+#else
+        diagnostics.report(DiagCode::BuildWithout, SourceLocation(), "-DENZAN_ENABLE_JIT=OFF",
+                           "use the JIT execution backend");
+        discardElaboration();
+        return false;
+#endif
+    }
+    kernel = std::make_unique<runtime::Kernel>(*image, diagnostics, options, std::move(backend));
     kernel->initialize();
     status = runtime::RunStatus::TimeLimitReached;
 

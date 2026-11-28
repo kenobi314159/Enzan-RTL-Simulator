@@ -16,8 +16,8 @@ elaborated, compiled design.
 - **The execution boundary** (`Execution.h`) — selects the backend once per kernel, for process
   activations and kernel-invoked subprograms. The default backend delegates to the interpreter.
 - **Generated-code helpers** (`ExecutionHelpers.h`) — an internal C-callable interface for
-  frame and object access, whole stores, timed waits, system tasks and instruction accounting.
-  This is an initial subset; it does not yet cover every instruction or provide a JIT backend.
+  frame and object access, width changes, whole and nonblocking stores, waits, system tasks and
+  instruction accounting. This initial subset does not yet cover every instruction.
 - **The kernel** (`Kernel.h`) — drives the regions, applies updates, detects value changes,
   resolves drivers, enforces the delta limit and performs system tasks. It also keeps each
   VHDL driver's projected waveform, which is what a VHDL signal assignment acts on: the

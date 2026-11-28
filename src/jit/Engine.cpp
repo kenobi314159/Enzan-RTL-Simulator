@@ -64,9 +64,13 @@ std::unique_ptr<Engine> Engine::create(DiagnosticEngine& diagnostics) {
     };
     add("enzanExecResumePc", &runtime::enzanExecResumePc);
     add("enzanExecFrame", &runtime::enzanExecFrame);
+    add("enzanExecExtend", &runtime::enzanExecExtend);
     add("enzanExecReadObject", &runtime::enzanExecReadObject);
     add("enzanExecStore", &runtime::enzanExecStore);
+    add("enzanExecStoreNonBlocking", &runtime::enzanExecStoreNonBlocking);
     add("enzanExecWaitTime", &runtime::enzanExecWaitTime);
+    add("enzanExecWaitEdge", &runtime::enzanExecWaitEdge);
+    add("enzanExecWaitEvents", &runtime::enzanExecWaitEvents);
     add("enzanExecSystemTask", &runtime::enzanExecSystemTask);
     add("enzanExecCount", &runtime::enzanExecCount);
     if (auto error = instance->jit->getMainJITDylib().define(
