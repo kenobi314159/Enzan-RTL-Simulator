@@ -258,8 +258,8 @@ private:
     std::vector<CompiledBody> processes;
 
     /// (definitionIndex, processIndex) to body index. A flat sorted vector rather than
-    /// a hash map: it is built once, queried once per elaborated process, and its
-    /// iteration order must not vary between runs.
+    /// a hash map: it is built in definition and process order, then searched by binary
+    /// search once per elaborated process. Its iteration order must not vary between runs.
     struct Key {
         std::uint32_t definitionIndex;
         std::uint32_t processIndex;

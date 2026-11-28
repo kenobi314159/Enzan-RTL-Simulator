@@ -16,6 +16,8 @@ executes.
   arguments are and where the result goes — and the callee's body keeps where its parameters and
   result live; which binding of the callee a call reaches is elaboration's to say, so nothing here
   resolves one to the other.
+- Keep the process and subprogram body indices in definition order, so image preparation can
+  find each body's index by binary search without changing the compiled bodies' order.
 
 ## What this component deliberately does not do
 
