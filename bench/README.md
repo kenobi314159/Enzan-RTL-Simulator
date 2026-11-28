@@ -79,6 +79,28 @@ ratio compares Enzan's analysis and run against the already-built Verilator exec
 separate build time when comparing a fresh build and one run. Its work directory retains compiler
 logs, outputs and generated code for inspection.
 
+`./bench/run-scale.sh <enzan> <iverilog> <width> <work-directory>` runs a synthetic network of
+explicit `LUT6` instances for 20 active clock cycles. The width must be a multiple of 32; each
+bit is one retained cell fed by five neighbouring state bits and a shared phase bit. The script
+compares the low 32 bits at 20 settled states in a 1,024-cell case with Icarus and checks every
+bit of Enzan's final state against the repeated 32-bit state, then reports elapsed time, phase
+times and peak RSS for one run. It retains the logs in a fresh work directory. This is a
+structural stress test, not a representative FPGA design or a post-place device-utilisation
+figure. It needs Python 3 as well as Icarus and its `vvp` runner.
+
+Yosys can independently count the explicitly instantiated cells after RTL optimisation, for
+example at width 1,024:
+
+```sh
+yosys -p "read_verilog -sv -D SYNTHESIS bench/scale/cells.sv; \
+  hierarchy -top network -chparam WIDTH 1024; proc; opt; stat"
+```
+
+The LUTs are black boxes for this count, so it measures retained structural cells and does not
+predict the LUT utilisation of a synthesised RTL design. The timing includes `$countones` once
+at the end, and the short run is intended to expose preparation and memory costs as well as
+simulation cost; it is not a sustained-throughput measurement.
+
 It is a target rather than a test. CI runs it as a job of its own, and a measurement taken on a
 loaded machine alongside three hundred other tests is not comparable with anything.
 
