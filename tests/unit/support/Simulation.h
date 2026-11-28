@@ -78,11 +78,16 @@ public:
         return {SourceBuffer, lineOffset(line) + column};
     }
 
-    Simulation(eir::Design design, std::string_view topName)
-        : Simulation(std::move(design), std::vector<std::string>{std::string(topName)}) {}
+    Simulation(eir::Design design, std::string_view topName,
+               std::unique_ptr<runtime::ExecutionBackend> backend = {},
+               const elab::ResolutionAnswers& resolutions = {})
+        : Simulation(std::move(design), std::vector<std::string>{std::string(topName)},
+                     std::move(backend), resolutions) {}
 
     /// The same with several top levels, each a root.
-    Simulation(eir::Design design, std::vector<std::string> topNames)
+    Simulation(eir::Design design, std::vector<std::string> topNames,
+               std::unique_ptr<runtime::ExecutionBackend> backend = {},
+               const elab::ResolutionAnswers& resolutions = {})
         : engine(sources), analysed(std::move(design)) {
         // Added first, so that `SourceBuffer` names it. Every simulation gets one even when
         // the test does not care, because a fixture whose buffer numbering depends on what
@@ -97,7 +102,7 @@ public:
         valid = eir::verify(analysed, engine);
 
         elab::Elaborator elaborator(analysed, engine);
-        elaborated = elaborator.elaborate(std::span<const std::string>(topNames));
+        elaborated = elaborator.elaborate(std::span<const std::string>(topNames), resolutions);
         if (elaborated == nullptr) return;
 
         codegen::Compiler compiler(engine);
@@ -110,7 +115,7 @@ public:
         options.transcript = &transcriptStream;
         options.deltaLimit = deltaLimit;
         options.callDepthLimit = callDepthLimit;
-        kernel = std::make_unique<runtime::Kernel>(*image, engine, options);
+        kernel = std::make_unique<runtime::Kernel>(*image, engine, options, std::move(backend));
         kernel->initialize();
     }
 

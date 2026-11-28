@@ -7,12 +7,9 @@
 //
 //   ENZAN_OPCODE(Name, mnemonic, hasResult, sourceCount, llvmLowering)
 //
-// `llvmLowering` is not documentation for its own sake. DESIGN_GUIDE.md section
-// 6.1 makes it a standing invariant that **every opcode MUST have an obvious,
-// documented lowering to LLVM IR**, because the JIT backend is intended to be a
-// mechanical translation of the interpreter, and an opcode that cannot be
-// lowered mechanically blocks it. An opcode added without a lowering sketch is
-// incomplete work, and a unit test enforces that the string is not empty.
+// `llvmLowering` sketches a possible native translation for each opcode; a unit
+// test enforces that the string is not empty. A sketch does not mean that the
+// experimental JIT implements every opcode or operand form.
 //
 // The lowering sketches assume the arena base address is available as an LLVM
 // value and that a virtual register of 64 bits or fewer lives in an `alloca` that
@@ -68,12 +65,11 @@ ENZAN_OPCODE(Encode, "encode", true, 3,
 
 // --- State access ----------------------------------------------------------
 //
-// Every access names its object by an index that elaboration has already resolved
-// to a byte offset in the state arena, so a JIT can burn the offset into the
-// generated code as a constant.
+// Every access names an object by index. The instance binding resolves it to an
+// arena offset; optional per-instance specialisation may make that offset constant.
 
 ENZAN_OPCODE(ReadObject, "read", true, 1,
-             "getelementptr on the arena base with a constant offset, then a load "
+             "getelementptr on the arena base with the bound offset, then a load "
              "of each plane")
 ENZAN_OPCODE(ReadObjectPart, "readpart", true, 2,
              "getelementptr on the arena base to the object, then a load of the words "
@@ -85,8 +81,8 @@ ENZAN_OPCODE(Store, "store", false, 2,
              "against the old and schedules the processes sensitive to it; the "
              "comparison inlines to an icmp pair for widths up to 64. Where the bound "
              "process's route for the object names drivers, a call to the driver "
-             "helper instead, which resolves; a JIT specialises per instance and so "
-             "emits only the call that applies")
+             "helper instead, which resolves; shared code reads the bound route, "
+             "and optional instance specialisation may choose the call ahead of time")
 ENZAN_OPCODE(StorePart, "storepart", false, 3,
              "as Store, with a mask and shift computed from the offset operand so "
              "that only the selected bits change; through drivers, the offset also "
@@ -167,8 +163,8 @@ ENZAN_OPCODE(Release, "release", false, 1,
 ENZAN_OPCODE(Override, "override", false, 2,
              "a call to the runtime helper that writes the value as Store does when the running "
              "process holds the signal's force, or holds its assign and nothing its force; the "
-             "holder check is two loads and compares against the process's own index, a "
-             "constant once a JIT specialises the body per instance")
+             "holder check compares against the bound process's index, which may become "
+             "constant when a body is specialised per instance")
 
 // --- Bitwise, element by element -------------------------------------------
 

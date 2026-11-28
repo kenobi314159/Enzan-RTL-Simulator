@@ -2,5 +2,6 @@
 
 enzan_add_unit_test(
   runtime
-  SOURCES FormatTests.cpp KernelTests.cpp ReadMemTests.cpp SchedulerTests.cpp TimeTests.cpp
+  SOURCES ExecutionTests.cpp FormatTests.cpp KernelTests.cpp ReadMemTests.cpp SchedulerTests.cpp
+          TimeTests.cpp
   DEPENDS enzan::runtime)

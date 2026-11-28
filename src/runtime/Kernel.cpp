@@ -9,8 +9,8 @@
 #include "common/SourceManager.h"
 #include "eir/BitOps.h"
 #include "eir/Process.h"
+#include "runtime/Execution.h"
 #include "runtime/Format.h"
-#include "runtime/Interpreter.h"
 #include "runtime/ReadMem.h"
 
 #include <algorithm>
@@ -197,7 +197,8 @@ std::size_t callStackWordsFor(const CallStackShape& shape, std::uint32_t limit) 
 
 } // namespace
 
-Kernel::Kernel(const Image& designImageToRun, DiagnosticEngine& engine, KernelOptions kernelOptions)
+Kernel::Kernel(const Image& designImageToRun, DiagnosticEngine& engine, KernelOptions kernelOptions,
+               std::unique_ptr<ExecutionBackend> backend)
     : designImage(&designImageToRun),
       diagnostics(engine),
       options(kernelOptions),
@@ -217,7 +218,8 @@ Kernel::Kernel(const Image& designImageToRun, DiagnosticEngine& engine, KernelOp
       weakScratch(resolvedScratch.size(), 0),
       classScratch(resolvedScratch.size(), 0),
       windowScratch(windowScratchWords(designImageToRun), 0),
-      edgeWaiters(designImageToRun.signals().size()) {
+      edgeWaiters(designImageToRun.signals().size()),
+      executor(backend != nullptr ? std::move(backend) : makeInterpreterBackend()) {
     callsInProgress.reserve(callDepthCapacity);
 
     // One projected waveform per object each process writes, which is one per driver a VHDL
@@ -518,16 +520,32 @@ bool Kernel::countDelta() {
     return false;
 }
 
-void Kernel::drain(Region region) {
-    Interpreter interpreter(*this);
+// The kernel dispatches this for every activation. Keep the context on the caller's stack;
+// the measured pipeline spends millions of activations in these two dispatch paths.
+[[gnu::always_inline]] inline ExecutionResult Kernel::executeProcess(std::uint32_t processIndex) {
+    ProcessState& state = processes[processIndex];
+    const Activation activation{.body = &designImage->compiledDesign().body(state.bodyIndex),
+                                .frameOffset = state.frameOffset,
+                                .objectSignals = state.objectSignals,
+                                .writeSignals = state.writeSignals,
+                                .writeRoutes = state.writeRoutes,
+                                .calls = state.calls};
+    const std::uint32_t pc = std::exchange(state.resumePc, 0);
+    ExecutionContext context(*this, processIndex, activation, pc);
+    const ExecutionResult result = executor->run(context);
+    // Process-local strings must not survive completion or suspension, for every backend.
+    releaseScratch(0);
+    return result;
+}
 
+void Kernel::drain(Region region) {
     while (!scheduler.empty(region)) {
         const std::uint32_t processIndex = scheduler.take(region);
         processes[processIndex].queued = false;
 
         runningProcess = processIndex;
         if (options.collectActivity) ++activity.processRuns;
-        const ExecutionResult result = interpreter.run(processIndex);
+        const ExecutionResult result = executeProcess(processIndex);
         runningProcess = NoProcess;
 
         if (result == ExecutionResult::Stopped || stopping()) return;
@@ -677,7 +695,6 @@ void Kernel::enqueue(std::uint32_t processIndex) {
 }
 
 void Kernel::runConnections() {
-    Interpreter interpreter(*this);
     while (!connectionsDue.empty()) {
         // Only what the connections drive is applied now; what the cycle's processes have
         // assigned so far stays for the next cycle.
@@ -689,7 +706,7 @@ void Kernel::runConnections() {
                 ++activity.processRuns;
                 ++activity.connectionRuns;
             }
-            const ExecutionResult result = interpreter.run(processIndex);
+            const ExecutionResult result = executeProcess(processIndex);
             runningProcess = NoProcess;
             if (result == ExecutionResult::Stopped || stopping()) return;
         }
@@ -952,14 +969,14 @@ bool Kernel::callResolution(std::uint32_t processIndex, std::uint32_t subprogram
     const codegen::CompiledBody::Parameter& parameter = body.parameters.front();
     bitops::copy(frameAt(frame + parameter.offset, parameter.bitWidth), drivers);
 
-    Interpreter interpreter(*this);
-    const ExecutionResult outcome =
-        interpreter.call(processIndex, Activation{.body = &body,
-                                                  .frameOffset = frame,
-                                                  .objectSignals = callee.objectSignals,
-                                                  .writeSignals = callee.writeSignals,
-                                                  .writeRoutes = callee.writeRoutes,
-                                                  .calls = callee.calls});
+    const Activation activation{.body = &body,
+                                .frameOffset = frame,
+                                .objectSignals = callee.objectSignals,
+                                .writeSignals = callee.writeSignals,
+                                .writeRoutes = callee.writeRoutes,
+                                .calls = callee.calls};
+    ExecutionContext context(*this, processIndex, activation, 0);
+    const ExecutionResult outcome = executor->call(context);
     const bool returned = outcome == ExecutionResult::Completed;
     if (returned) bitops::copy(resolved, frameAt(frame + body.resultOffset, body.resultWidth));
     callStackTop = frame;

@@ -11,6 +11,7 @@
 
 #include <cmath>
 #include <functional>
+#include <memory>
 #include <optional>
 #include <span>
 #include <utility>
@@ -233,32 +234,31 @@ private:
     Word* frame;
 };
 
+class InterpreterBackend final : public ExecutionBackend {
+public:
+    ExecutionResult run(ExecutionContext& context) override {
+        return Interpreter(context.kernel()).run(context);
+    }
+
+    ExecutionResult call(ExecutionContext& context) override {
+        return Interpreter(context.kernel()).call(context);
+    }
+};
+
 } // namespace
+
+std::unique_ptr<ExecutionBackend> makeInterpreterBackend() {
+    return std::make_unique<InterpreterBackend>();
+}
 
 Interpreter::Interpreter(Kernel& owner) noexcept : kernel(owner) {}
 
-ExecutionResult Interpreter::run(std::uint32_t processIndex) {
-    ProcessState& state = kernel.processes[processIndex];
-
-    // The body running and what it is bound to: the process's own, until it calls a subprogram
-    // and while it is in one. Everything below reaches registers, objects and routes through
-    // this, so a subprogram's body runs as a process's does.
-    const Activation own{.body = &kernel.designImage->compiledDesign().body(state.bodyIndex),
-                         .frameOffset = state.frameOffset,
-                         .objectSignals = state.objectSignals,
-                         .writeSignals = state.writeSignals,
-                         .writeRoutes = state.writeRoutes,
-                         .calls = state.calls};
-    const std::uint32_t pc = state.resumePc;
-    state.resumePc = 0;
-    const ExecutionResult result = execute(processIndex, own, pc, 0);
-    // Whatever strings of run-time length it made are gone once it has suspended.
-    kernel.releaseScratch(0);
-    return result;
+ExecutionResult Interpreter::run(const ExecutionContext& context) {
+    return execute(context.processIndex(), context.activation(), context.resumePc(), 0);
 }
 
-ExecutionResult Interpreter::call(std::uint32_t processIndex, const Activation& callee) {
-    return execute(processIndex, callee, 0, kernel.callsInProgress.size());
+ExecutionResult Interpreter::call(const ExecutionContext& context) {
+    return execute(context.processIndex(), context.activation(), 0, kernel.callsInProgress.size());
 }
 
 ExecutionResult Interpreter::execute(std::uint32_t processIndex, Activation current,

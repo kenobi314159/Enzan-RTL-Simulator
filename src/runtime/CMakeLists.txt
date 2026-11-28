@@ -4,6 +4,7 @@ enzan_add_component(
   runtime
   SOURCES Format.cpp Image.cpp Interpreter.cpp Kernel.cpp ReadMem.cpp Scheduler.cpp Time.cpp
   HEADERS Arena.h
+          Execution.h
           Format.h
           Image.h
           Interpreter.h

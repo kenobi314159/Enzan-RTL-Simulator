@@ -13,6 +13,8 @@ elaborated, compiled design.
 - **The scheduler** (`Scheduler.h`) — IEEE 1800's stratified event queue, the time
   wheel, and the non-blocking update queue. Holds ordering, not policy.
 - **The interpreter** (`Interpreter.h`) — executes compiled bodies.
+- **The execution boundary** (`Execution.h`) — selects the backend once per kernel, for process
+  activations and kernel-invoked subprograms. The default backend delegates to the interpreter.
 - **The kernel** (`Kernel.h`) — drives the regions, applies updates, detects value changes,
   resolves drivers, enforces the delta limit and performs system tasks. It also keeps each
   VHDL driver's projected waveform, which is what a VHDL signal assignment acts on: the
@@ -26,6 +28,15 @@ elaborated, compiled design.
 **One kernel, one event queue.** VHDL and SystemVerilog are not simulated by separate
 engines that synchronise. Nothing here is specific to a source language; the kernel sees
 signals, slots and compiled bodies and has no idea which frontend produced them.
+
+**One backend per kernel.** Normal process dispatch, connection-queue dispatch and resolution
+calls use the same backend. It can be re-entered by a callback or resolution call during an
+activation. The kernel owns it and destroys it before its frames; the image and compiled bodies
+outlive the kernel. Restart reuses the backend and resets the simulation state as before.
+Each synchronous invocation receives a distinct `ExecutionContext` naming its process, bound
+body and frame, and resume PC. The kernel consumes a process's resume point before dispatch
+and releases its scratch after the backend returns, so those rules do not depend on the backend.
+Neither a backend nor generated code may retain the context past that invocation.
 
 **Determinism.** Process execution order within a region is strictly FIFO. No container
 whose iteration order is unspecified may influence which process runs first, which value is

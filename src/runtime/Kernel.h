@@ -5,6 +5,7 @@
 #include "eir/BitVector.h"
 #include "eir/Instruction.h"
 #include "runtime/Arena.h"
+#include "runtime/Execution.h"
 #include "runtime/Format.h"
 #include "runtime/Image.h"
 #include "runtime/Scheduler.h"
@@ -196,22 +197,6 @@ struct ActivityStats {
     std::uint64_t resolutionCalls = 0;
 };
 
-/// The body the interpreter is running and what it is bound to: a process's own, or that of a
-/// subprogram the process called.
-struct Activation {
-    const codegen::CompiledBody* body = nullptr;
-
-    /// Word offset of the body's registers in the kernel's frame storage.
-    std::uint32_t frameOffset = 0;
-
-    std::span<const std::uint32_t> objectSignals;
-    std::span<const std::uint32_t> writeSignals;
-    std::span<const WriteRoute> writeRoutes;
-
-    /// For each of the body's call sites, the bound subprogram it calls.
-    std::span<const std::uint32_t> calls;
-};
-
 /// The simulation kernel: one time wheel, one event queue, one arena.
 ///
 /// There is exactly one of each whatever the languages — VHDL and SystemVerilog are not simulated
@@ -222,9 +207,9 @@ struct Activation {
 /// single-threaded loop outperforms a naively parallel one, and determinism comes free.
 class Kernel {
 public:
-    /// `image` and `diagnostics` must outlive the kernel.
+    /// `image` and `diagnostics` must outlive the kernel. A null backend selects the interpreter.
     Kernel(const Image& designImageToRun, DiagnosticEngine& engine,
-           KernelOptions kernelOptions = {});
+           KernelOptions kernelOptions = {}, std::unique_ptr<ExecutionBackend> backend = {});
 
     Kernel(const Kernel&) = delete;
     Kernel& operator=(const Kernel&) = delete;
@@ -535,6 +520,9 @@ private:
 
     /// Drains one region completely, executing each process.
     void drain(Region region);
+
+    /// Prepares one process activation and releases its scratch after the backend returns.
+    ExecutionResult executeProcess(std::uint32_t processIndex);
 
     /// Applies every pending non-blocking update.
     void applyNonBlockingUpdates();
@@ -993,6 +981,9 @@ private:
     std::uint64_t instructionCount = 0;
     std::uint64_t deltaTotal = 0;
     ActivityStats activity;
+
+    /// Destroyed first, while the kernel's frames and its borrowed image still exist.
+    std::unique_ptr<ExecutionBackend> executor;
 
     /// How many process names a delta-limit report lists before abbreviating. Enough to
     /// identify a loop, few enough that the message stays readable.
