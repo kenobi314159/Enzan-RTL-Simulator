@@ -20,18 +20,7 @@ enum class ExecutionResult : std::uint8_t {
     Stopped,
 };
 
-/// Executes compiled bodies.
-///
-/// A bytecode interpreter, and deliberately the *only* execution engine until M8. The
-/// interpreter must exist before the JIT both to validate the semantics and to serve as
-/// the reference the JIT is differentially tested against, so anything clever belongs in
-/// the JIT rather than here.
-///
-/// Dispatch is a `switch`. Computed goto is a recommendation rather than an invariant,
-/// and nothing is optimised without a measurement (DESIGN_GUIDE.md section 13.4).
-/// Threaded dispatch arrives with M8's profiling, when there is a benchmark to show
-/// what it buys; the `switch` is what keeps the semantics readable while they are still
-/// being pinned down by tests.
+/// Executes compiled bodies using switch dispatch.
 class Interpreter {
 public:
     /// `kernel` must outlive the interpreter.

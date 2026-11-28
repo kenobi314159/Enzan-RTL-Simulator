@@ -16,14 +16,13 @@ executes.
   arguments are and where the result goes — and the callee's body keeps where its parameters and
   result live; which binding of the callee a call reaches is elaboration's to say, so nothing here
   resolves one to the other.
+- Keep the process and subprogram body indices in definition order, so image preparation can
+  find each body's index by binary search without changing the compiled bodies' order.
 
 ## What this component deliberately does not do
 
 **No optimisation at all** — no constant folding, no dead code elimination, no register
-coalescing. Optimisation belongs in elaboration or in the JIT. While the interpreter is
-still the reference the JIT will be differentially tested against, an optimising
-bytecode compiler would be a third place for a semantic bug to hide, and correctness
-comes before performance.
+coalescing. Optimisations require measurement and semantic tests.
 
 **No knowledge of instances.** A compiled body refers to state by EIR object index, and
 the runtime resolves those per instance. That is what keeps compiled code proportional

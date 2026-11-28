@@ -73,7 +73,6 @@ cmake --preset gcc-debug -DENZAN_ENABLE_SYSTEMVERILOG=OFF -DENZAN_ENABLE_VHDL=OF
 | `ENZAN_ENABLE_SYSTEMVERILOG` | `ON` | build the slang-based frontend |
 | `ENZAN_ENABLE_VHDL` | `ON` | build the NVC-based frontend; needs flex, zstd and the `third_party/nvc` submodule |
 | `ENZAN_BUILD_GUI` | `ON` | build the Qt 6 front end; needs Qt 6 and Tcl |
-| `ENZAN_ENABLE_JIT` | `OFF` | build the LLVM JIT backend, which is not written yet |
 | `ENZAN_WERROR` | `OFF` | treat warnings as errors, as CI does |
 | `ENZAN_ALLOW_FETCH` | `ON` | allow missing dependencies to be built from source |
 | `ENZAN_SANITIZERS` | empty | semicolon-separated sanitizer list |

@@ -15,22 +15,7 @@ class DiagnosticEngine;
 
 namespace enzan::codegen {
 
-/// Lowers EIR-B to the bytecode the virtual machine executes.
-///
-/// The bytecode is register-based rather than stack-based: it produces fewer
-/// instructions per operation and maps far more directly onto both real registers and
-/// LLVM IR.
-///
-/// The lowering is deliberately simple and does no optimisation at all — no constant
-/// folding, no dead code elimination, no register coalescing. Optimisation belongs in
-/// elaboration or in the JIT, and an optimising bytecode compiler would be a third
-/// place for a semantic bug to hide while the interpreter is still the reference the
-/// JIT will be differentially tested against.
-///
-/// What it does do is resolve: virtual registers become Word offsets into a frame,
-/// blocks become instruction indices, constants are flattened into one array, and
-/// every width the operation needs is written into the instruction. After this, the
-/// interpreter's inner loop needs nothing but the instruction and the data.
+/// Lowers EIR-B to register-based bytecode without optimizing it.
 class Compiler {
 public:
     /// `diagnostics` must outlive the compiler.

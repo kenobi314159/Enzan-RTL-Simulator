@@ -61,6 +61,8 @@ to understand: into the port's object for an input, out of it for an output. A s
 another width than its port is connected the same way, since elaboration joins a port only to
 a signal as wide as it; the assignment extends or truncates as one written out would (IEEE
 1800 section 23.3.3.7). An `inout` cannot be, since its assignment would run both ways.
+An initialized output variable uses its own object and a continuous assignment even at equal
+widths: the variable's value and the resolved value of the net it drives can differ.
 
 **A construct that is not supported abandons the whole process.** A partially translated
 body would produce a design that simulates and gives the wrong answer, which is the worst

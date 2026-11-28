@@ -64,15 +64,16 @@ the runtime.
 ## Port collapsing
 
 A connected port of the same width as the object it binds to becomes **the same
-storage under two names**. Both hierarchical paths resolve to one slot, and the user
-may use either.
+storage under two names** when its frontend has not materialised a connection. Both
+hierarchical paths resolve to one slot, and the user may use either. In particular, an
+initialized SystemVerilog output variable is connected through its own continuous assignment, so
+its value remains separate from the net it drives.
 
 This is what commercial tools do, and the alternative — an implicit continuous
 assignment per port — would add a process and a delta cycle to every port in the design.
 It also means an object's storage may live in an ancestor's part of the arena, which is
 why an instance holds a slot index per object rather than a base offset plus a fixed
-displacement. The interpreter pays one extra load per state access; a JIT specialises a
-process per instance and burns the absolute offsets in as constants.
+displacement. The interpreter pays one extra load per state access.
 
 **A port may drive another slot than it reads.** A connection that names a separate object
 for the port's drivers (`eir::PortConnection::driveObjectIndex`) binds the child's port to two

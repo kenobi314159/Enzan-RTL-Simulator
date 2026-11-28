@@ -180,6 +180,20 @@ struct KernelOptions {
     /// assertion ends the run with a failing status: failure, as GHDL's default has it, unless
     /// `--assert-level` says otherwise; 4 never ends it.
     std::uint8_t stopSeverity = 3;
+
+    /// Collect activity counters, including kernel initialization, for profiling.
+    bool collectActivity = false;
+};
+
+/// Optional counts accumulated over a kernel's lifetime, including initialization and restarts.
+struct ActivityStats {
+    std::uint64_t processRuns = 0;
+    std::uint64_t connectionRuns = 0;
+    std::uint64_t enqueues = 0;
+    std::uint64_t signalChanges = 0;
+    std::uint64_t nbaUpdates = 0;
+    std::uint64_t transactions = 0;
+    std::uint64_t resolutionCalls = 0;
 };
 
 /// The body the interpreter is running and what it is bound to: a process's own, or that of a
@@ -337,18 +351,13 @@ public:
     /// diagnosing a design that almost fails to settle.
     [[nodiscard]] std::uint64_t totalDeltaCycles() const noexcept { return deltaTotal; }
 
+    /// Activity counters, zero when collection is disabled.
+    [[nodiscard]] const ActivityStats& activityStats() const noexcept { return activity; }
+
     /// The waits armed on `signalIndex` by `@` and `wait`, stale ones not yet swept included.
     [[nodiscard]] std::size_t armedWaits(std::uint32_t signalIndex) const noexcept {
         return edgeWaiters[signalIndex].waiters.size();
     }
-
-    // -----------------------------------------------------------------------
-    // Operations the interpreter performs through the kernel
-    // -----------------------------------------------------------------------
-    //
-    // Public because the interpreter is a separate class rather than because anything
-    // else should call them. They are the kernel's contract with the execution engine,
-    // and they are what a JIT will call too.
 
     /// Returns a mutable view of a process's register frame.
     [[nodiscard]] eir::BitRef frameAt(std::uint32_t wordOffset, std::uint32_t bitWidth) noexcept {
@@ -975,6 +984,7 @@ private:
 
     std::uint64_t instructionCount = 0;
     std::uint64_t deltaTotal = 0;
+    ActivityStats activity;
 
     /// How many process names a delta-limit report lists before abbreviating. Enough to
     /// identify a loop, few enough that the message stays readable.

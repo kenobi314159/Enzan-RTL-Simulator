@@ -63,6 +63,11 @@ is chosen for that reason and not for convenience — an interruption part-way t
 region would make a waveform depend on when the user clicked, which is the least debuggable
 form determinism could be violated in.
 
+**Activity counters are opt-in.** `KernelOptions::collectActivity` counts process and port
+connection-queue activations, wake/resume enqueues, changes, applied updates and kernel-invoked
+resolution calls. They include initialization and accumulate over this kernel's lifetime;
+they do not change the existing instruction or delta counts.
+
 ## Allowed dependencies
 
 `common`, `eir`, `elab` and `codegen`.
@@ -77,10 +82,7 @@ with nothing loaded pays one null test per hook.
 
 ## Deliberate deferrals
 
-- **Dispatch is a `switch`, not computed goto.** Threaded dispatch is a SHOULD, and nothing
-  is optimised without a measurement. It arrives with M8's profiling. Until then the
-  interpreter is the reference the JIT will be differentially tested against, and readable
-  semantics are worth more than a dispatch win nobody has measured.
+- **Dispatch is a `switch`.** Optimize it only when measurements justify a change.
 - **The time wheel is an ordered map.** A hierarchical or calendar queue is for when there
   is a benchmark to justify one.
 - **Preponed and the PLI-specific regions are not separate queues.** They may be callback

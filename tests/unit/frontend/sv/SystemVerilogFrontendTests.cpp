@@ -1013,6 +1013,36 @@ TEST_F(FrontendTest, EachInstanceOfAGeneratedArrayDrivesItsOwnBit) {
                                        }));
 }
 
+TEST_F(FrontendTest, GeneratedConnectionsKeepUniqueNamesAndReuseHoistedNames) {
+    const std::unique_ptr<Design> design = analyse(R"(
+        module child(input logic a, output logic y);
+            assign y = a;
+        endmodule
+        module top;
+            logic [3:0] q;
+            logic u$a$1;
+            for (genvar i = 0; i < 4; i++) begin : g
+                logic x;
+                child u (.a(q[i]), .y(x));
+            end
+            logic x;
+        endmodule
+    )",
+                                                   "top");
+    ASSERT_NE(design, nullptr);
+    const ModuleDefinition* top = design->findModule("top");
+    ASSERT_NE(top, nullptr);
+
+    std::set<std::string_view> names;
+    for (const auto& object : top->objects)
+        EXPECT_TRUE(names.insert(object.name).second) << object.name;
+
+    for (const std::string_view name :
+         {"x", "g[0].x", "g[1].x", "g[2].x", "g[3].x", "u$a", "u$a$1", "u$a$2", "u$a$3", "u$a$4"})
+        EXPECT_TRUE(top->findObject(name).has_value()) << name;
+    EXPECT_FALSE(top->findObject("u$a$5").has_value());
+}
+
 // ---------------------------------------------------------------------------
 // Error paths
 // ---------------------------------------------------------------------------
@@ -2392,6 +2422,23 @@ TEST_F(FrontendTest, ReportsAPortHoldingRealsByName) {
                       "m"),
               nullptr);
     EXPECT_TRUE(reported("the port 'levels', which holds reals,"));
+}
+
+TEST_F(FrontendTest, AnOutputVariableKeepsItsPortDeclarationInitializer) {
+    const std::unique_ptr<Design> design = analyse(R"(
+        module m(input logic input_value = 1'b1,
+                 output logic [7:0] output_value = 8'ha5);
+        endmodule
+    )",
+                                                   "m");
+    ASSERT_NE(design, nullptr);
+    const ModuleDefinition* found = design->findModule("m");
+    ASSERT_NE(found, nullptr);
+    const auto& output = found->objects[require(found->findObject("output_value"))];
+    EXPECT_EQ(output.initialValue, std::optional(enzan::test::literal("8'ha5")));
+    // An input's default is not an initializer for an actual connected to it.
+    const auto& input = found->objects[require(found->findObject("input_value"))];
+    EXPECT_FALSE(input.initialValue.has_value());
 }
 
 TEST_F(FrontendTest, AnArrayOrAStructOfRealsIsStoredFlatAsTheirDoubles) {

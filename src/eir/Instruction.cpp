@@ -10,14 +10,13 @@ struct OpcodeInfo {
     std::string_view mnemonic;
     bool hasResult;
     std::uint8_t sourceCount;
-    std::string_view llvmLowering;
 };
 
 // One table, generated from the catalogue, so that a new opcode cannot be added
 // without every property being supplied.
 constexpr OpcodeInfo OpcodeTable[] = {
-#define ENZAN_OPCODE(name, mnemonicText, resultFlag, sources, lowering) \
-    OpcodeInfo{mnemonicText, resultFlag, sources, lowering},
+#define ENZAN_OPCODE(name, mnemonicText, resultFlag, sources) \
+    OpcodeInfo{mnemonicText, resultFlag, sources},
 #include "eir/Opcodes.def"
 #undef ENZAN_OPCODE
 };
@@ -39,10 +38,6 @@ bool hasResult(Opcode opcode) noexcept {
 
 std::uint8_t sourceCount(Opcode opcode) noexcept {
     return info(opcode).sourceCount;
-}
-
-std::string_view llvmLowering(Opcode opcode) noexcept {
-    return info(opcode).llvmLowering;
 }
 
 bool suspends(Opcode opcode) noexcept {

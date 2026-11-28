@@ -31,12 +31,7 @@ std::string_view sourceRevision() noexcept;
 /// human-readable detail belongs in the lines that follow it.
 std::string versionLine();
 
-/// Returns a multi-line description of the build: compiler, build type and
-/// enabled optional components.
-///
-/// Intended for `enzan --version` and for inclusion in bug reports, where
-/// knowing whether sanitizers or the JIT were active usually explains the
-/// behaviour being reported.
+/// Describes the compiler, build type and enabled components for diagnostics.
 std::string buildDescription();
 
 /// Returns everything `--version` prints: the version line, the build

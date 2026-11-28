@@ -21,6 +21,7 @@ fi
 
 enzan=$1
 front_end=$2
+golden_dir=$(cd "$(dirname "$0")" && pwd)
 
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
@@ -103,6 +104,14 @@ expect 1 "'--run' and '--seed' apply" "$enzan" analyse --run 10 --seed 3 tb.sv
 expect 1 "\`elaborate\` runs none" "$enzan" elaborate --in-lib libs/none --fst a.fst tb
 expect 1 "'--gui' applies" "$enzan" elaborate --in-lib libs/none --gui tb
 expect 1 "'--listen' applies" "$enzan" analyse --listen k.sock tb.sv
+expect 1 "'--phase-timings' applies" "$enzan" analyse --phase-timings tb.sv
+expect 1 "cannot measure a simulation already running" "$enzan" --gui --attach k.sock --phase-timings
+expect 1 "'--phase-timings' needs a simulation" "$enzan" --phase-timings --dry-run tb.sv
+expect 1 "'--phase-timings' needs a simulation" "$enzan" lib list --phase-timings libs/none
+expect 1 "'--activity-stats' applies" "$enzan" analyse --activity-stats tb.sv
+expect 1 "cannot measure a simulation already running" "$enzan" --gui --attach k.sock --activity-stats
+expect 1 "'--activity-stats' needs a simulation" "$enzan" --activity-stats --dry-run tb.sv
+expect 1 "'--activity-stats' needs a simulation" "$enzan" lib list --activity-stats libs/none
 
 # --- an option given twice ------------------------------------------------------------------------
 
@@ -136,8 +145,39 @@ expect 1 "'10xs' is not a length of time" "$enzan" --run 10xs tb.sv
 expect 1 "'ALL' is not a length of time" "$enzan" --run ALL tb.sv
 if [[ ${#sources[@]} -gt 0 ]]; then
     expect 0 "PASS cli tb" "$enzan" --run all "${sources[0]}"
+    "$enzan" --phase-timings "${sources[0]}" >timing-out.txt 2>timing-err.txt \
+        || fail "a run with phase timings failed"
+    grep -q 'PASS cli tb' timing-out.txt timing-err.txt \
+        || fail "timing changed the design transcript"
+    grep -Eq '^-- phase timings \(ns\): analysis=[0-9]+ elaboration=[0-9]+ bytecode=[0-9]+ image=[0-9]+ simulation=[0-9]+$' timing-err.txt \
+        || fail "phase timing fields are missing or malformed"
+    "$enzan" "${sources[0]}" >untimed-out.txt 2>untimed-err.txt \
+        || fail "a run without phase timings failed"
+    cmp -s timing-out.txt untimed-out.txt || fail "timing changed the transcript"
+    ! grep -q 'phase timings' untimed-err.txt || fail "timing is not opt-in"
 fi
 if has systemverilog; then
+    cat >activity.sv <<'EOF'
+`timescale 1ns/1ns
+module activity;
+  reg q = 0;
+  initial begin
+    #1 q <= 1;
+    #1 q <= 1;
+    #1 $display("activity q=%b", q);
+    $finish;
+  end
+endmodule
+EOF
+    "$enzan" --activity-stats activity.sv >activity-out.txt 2>activity-err.txt \
+        || fail "a run with activity counters failed"
+    "$enzan" activity.sv >activity-plain-out.txt 2>activity-plain-err.txt \
+        || fail "a run without activity counters failed"
+    cmp -s activity-out.txt activity-plain-out.txt || fail "activity counters changed the transcript"
+    ! grep -q '^-- activity:' activity-plain-err.txt || fail "activity counters are not opt-in"
+    grep -Fxq -- '-- activity: process_runs=4 connection_runs=0 enqueues=1 signal_changes=1 nba_updates=2 transactions=0 resolution_calls=0' activity-err.txt \
+        || fail "activity counters did not reflect the known process and update sequence"
+
     printf '`timescale 1ns/1ps\nmodule clock;\n  reg c = 0;\n  always #5 c = ~c;\nendmodule\n' \
         >clock.sv
     expect 0 "ended at 1500000ps" "$enzan" --dump-stats --run 1.5us clock.sv
@@ -148,6 +188,16 @@ elif has vhdl; then
     printf 'entity clock is end entity;\narchitecture a of clock is\n  signal c : bit;\n' >clock.vhd
     printf 'begin\n  c <= not c after 5 ns;\nend architecture;\n' >>clock.vhd
     expect 0 "ended at 1500000000fs" "$enzan" --dump-stats --run 1.5us clock.vhd
+fi
+if has vhdl; then
+    "$enzan" --activity-stats --top tb "$golden_dir/vhdl/ports.vhd" \
+        >connection-out.txt 2>connection-err.txt || fail "an instrumented port connection run failed"
+    grep -Eq '^-- activity: process_runs=[0-9]+ connection_runs=[1-9][0-9]* ' connection-err.txt \
+        || fail "activity counters missed port connection activations"
+    "$enzan" --activity-stats --top tb "$golden_dir/vhdl/local_resolution.vhd" \
+        >resolution-out.txt 2>resolution-err.txt || fail "an instrumented VHDL resolution run failed"
+    grep -Eq ' transactions=[1-9][0-9]* resolution_calls=[1-9][0-9]*$' resolution-err.txt \
+        || fail "activity counters missed transactions or resolution calls"
 fi
 
 # --- what reaches the window ----------------------------------------------------------------------

@@ -2,6 +2,7 @@
 
 #include "frontend/sv/SystemVerilogFrontend.h"
 
+#include "common/Assert.h"
 #include "common/Diagnostics.h"
 #include "common/Names.h"
 #include "common/SourceManager.h"
@@ -52,6 +53,7 @@
 
 #include <algorithm>
 #include <bit>
+#include <cstddef>
 #include <format>
 #include <limits>
 #include <map>
@@ -492,6 +494,12 @@ private:
     /// Returns a name not already used by an object in this module.
     std::string uniqueObjectName(std::string_view preferred);
 
+    /// Adds an object while keeping the name index in step with the definition.
+    std::uint32_t addObject(eir::Object object);
+
+    /// Renames an object, making its previous name available to the next declaration.
+    void renameObject(std::uint32_t index, std::string name);
+
     /// Records `type`'s enumeration in this definition and returns its index, or `NoEnum`
     /// when the type is not an enumeration.
     std::uint32_t enumFor(const ast::Type& type);
@@ -613,6 +621,11 @@ private:
         });
     }
 
+    /// Names currently in the definition and the next suffix worth checking for a collision.
+    /// Renaming can free an earlier suffix, so renameObject clears the suffix hints.
+    std::map<std::string, std::size_t, std::less<>> objectNameCounts;
+    std::map<std::string, unsigned, std::less<>> nextObjectSuffix;
+
     /// Nets declared with an assignment, `wire w = a & b;`, which is a continuous assignment
     /// written in the declaration rather than a time-zero value.
     std::vector<const ast::NetSymbol*> netAssignments;
@@ -633,12 +646,28 @@ public:
 
 std::string ModuleBuilder::uniqueObjectName(std::string_view preferred) {
     std::string candidate(preferred.empty() ? "unnamed" : preferred);
-    if (!definitionValue.findObject(candidate).has_value()) return candidate;
+    if (!objectNameCounts.contains(candidate)) return candidate;
 
-    for (unsigned suffix = 1;; ++suffix) {
+    unsigned& suffix = nextObjectSuffix.try_emplace(candidate, 1).first->second;
+    for (;; ++suffix) {
         std::string attempt = std::format("{}${}", candidate, suffix);
-        if (!definitionValue.findObject(attempt).has_value()) return attempt;
+        if (!objectNameCounts.contains(attempt)) return attempt;
     }
+}
+
+std::uint32_t ModuleBuilder::addObject(eir::Object object) {
+    ++objectNameCounts[object.name];
+    return definitionValue.addObject(std::move(object));
+}
+
+void ModuleBuilder::renameObject(std::uint32_t index, std::string name) {
+    std::string& previous = definitionValue.objects[index].name;
+    const auto found = objectNameCounts.find(previous);
+    ENZAN_ALWAYS_ASSERT(found != objectNameCounts.end(), "every object name is indexed");
+    if (--found->second == 0) objectNameCounts.erase(found);
+    ++objectNameCounts[name];
+    previous = std::move(name);
+    nextObjectSuffix.clear();
 }
 
 std::uint32_t ModuleBuilder::enumFor(const ast::Type& type) {
@@ -831,7 +860,7 @@ std::optional<std::uint32_t> ModuleBuilder::addEventValue(const ast::Expression&
     object.type = *type;
     object.kind = eir::ObjectKind::Variable;
     object.location = convertLocation(location);
-    const std::uint32_t objectIndex = definitionValue.addObject(std::move(object));
+    const std::uint32_t objectIndex = addObject(std::move(object));
 
     ProcessTranslator translator(*this, eir::ProcessKind::ContinuousAssign,
                                  std::format("event@{}:{}",
@@ -858,7 +887,7 @@ std::optional<std::uint32_t> ModuleBuilder::sampledCopyOf(std::uint32_t objectIn
     // Until the first slot ends, the value the run begins with (IEEE 1800 section 16.5.1).
     object.initialValue = source.initialValue;
     const SourceLocation location = source.location;
-    const std::uint32_t copy = definitionValue.addObject(std::move(object));
+    const std::uint32_t copy = addObject(std::move(object));
 
     // At the end of each time slot the object changed in, the first among them, which leaves
     // the copy holding the value the next slot begins with until the object next changes.
@@ -1025,7 +1054,7 @@ std::optional<std::uint32_t> ModuleBuilder::objectFor(const ast::ValueSymbol& sy
         }
     }
 
-    const std::uint32_t index = definitionValue.addObject(std::move(object));
+    const std::uint32_t index = addObject(std::move(object));
     objectBySymbol.emplace(&symbol, index);
     if (symbol.kind == slang::ast::SymbolKind::Net) {
         const auto& net = symbol.as<ast::NetSymbol>();
@@ -1048,8 +1077,7 @@ bool ModuleBuilder::collectScope(const ast::Scope& scope, const std::string& pre
             // blocks declaring `q` do not collide and the user can still recognise it.
             if (!prefix.empty()) {
                 const std::uint32_t index = objectBySymbol.at(&value);
-                definitionValue.objects[index].name =
-                    uniqueObjectName(prefix + std::string(value.name));
+                renameObject(index, uniqueObjectName(prefix + std::string(value.name)));
             }
             break;
         }
@@ -1398,7 +1426,7 @@ bool ModuleBuilder::translateModulePaths() {
                 state.name = uniqueObjectName(std::format("{}${}", stem, suffix));
                 state.type = type;
                 state.location = port.location;
-                return definitionValue.addObject(std::move(state));
+                return addObject(std::move(state));
             };
             paths.sourcesSeen = addState("seen", eir::Type::bits(seenWidth, false, true));
             paths.changedAt = addState(
@@ -1465,7 +1493,7 @@ bool ModuleBuilder::translateModulePaths() {
         eir::Object internal = port;
         internal.name = uniqueObjectName(std::format("{}$path", port.name));
         definitionValue.objects[output].initialValue.reset();
-        const std::uint32_t internalIndex = definitionValue.addObject(std::move(internal));
+        const std::uint32_t internalIndex = addObject(std::move(internal));
         delayedOutputs.emplace(output, internalIndex);
 
         const std::vector<Arc> none;
@@ -1511,7 +1539,7 @@ bool ModuleBuilder::translateNetDelays() {
 
         eir::Object undelayed = visible;
         undelayed.name = uniqueObjectName(std::format("{}$undelayed", visible.name));
-        const std::uint32_t undelayedIndex = definitionValue.addObject(std::move(undelayed));
+        const std::uint32_t undelayedIndex = addObject(std::move(undelayed));
         delayedOutputs.emplace(visibleIndex, undelayedIndex);
 
         // Resolution and an undriven net's pull or supply value belong before the delay. The
@@ -1615,6 +1643,24 @@ bool ModuleBuilder::collectDeclarations() {
         case slang::ast::ArgumentDirection::Ref:
             reportUnsupported(port.location, "`ref` ports");
             continue;
+        }
+
+        // An ANSI output variable's initializer belongs to the port symbol in slang,
+        // not to its internal variable. An input default instead applies only when
+        // its connection is omitted, and must not initialize a connected signal.
+        if (direction == eir::PortDirection::Output
+            && port.internalSymbol->kind == ast::SymbolKind::Variable && port.hasInitializer()) {
+            const ast::Expression* initializer = port.getInitializer();
+            ast::EvalContext context(port);
+            const slang::ConstantValue value = initializer->eval(context);
+            std::optional<eir::BitVector> initial = constantBits(value, port.getType());
+            if (!initial.has_value()) {
+                reportUnsupported(
+                    port.location,
+                    std::format("the initialiser of '{}', which is not a constant", port.name));
+                continue;
+            }
+            definitionValue.objects[*objectIndex].initialValue = std::move(*initial);
         }
 
         portIndexByName.emplace(std::string(port.name),
@@ -1789,7 +1835,7 @@ bool ModuleBuilder::translateProcesses() {
                     initial.set(0, bit.value != 0 ? eir::Logic::One : eir::Logic::Zero);
             }
             object.initialValue = std::move(initial);
-            held = definitionValue.addObject(std::move(object));
+            held = addObject(std::move(object));
         }
 
         ProcessTranslator translator(
@@ -1925,7 +1971,7 @@ std::optional<std::uint32_t> ModuleBuilder::referenceThrough(const ast::ValueSym
     object.hierarchicalPath = std::move(path);
     object.subroutineStatic = staticSubroutineOf(symbol) != nullptr;
 
-    const std::uint32_t index = definitionValue.addObject(std::move(object));
+    const std::uint32_t index = addObject(std::move(object));
     objectBySymbol.emplace(&symbol, index);
     return index;
 }
@@ -2214,7 +2260,7 @@ ModuleBuilder::materialiseConnection(const ast::InstanceSymbol& instance,
         object.netKind = *netKind;
     }
     object.location = convertLocation(expression.sourceRange.start());
-    const std::uint32_t objectIndex = definitionValue.addObject(std::move(object));
+    const std::uint32_t objectIndex = addObject(std::move(object));
 
     ProcessTranslator translator(*this, eir::ProcessKind::ContinuousAssign,
                                  std::format("connection@{}:{}",
@@ -2274,17 +2320,25 @@ bool ModuleBuilder::addInstance(
         const ast::Expression& reference = externalSideOf(*expression, port.direction);
 
         std::optional<std::uint32_t> objectIndex;
+        const bool initializedOutput =
+            port.direction == ast::ArgumentDirection::Out && port.internalSymbol != nullptr
+            && port.internalSymbol->kind == ast::SymbolKind::Variable
+            && (port.hasInitializer()
+                || port.internalSymbol->as<ast::ValueSymbol>().getInitializer() != nullptr);
+
         if (reference.kind == ast::ExpressionKind::NamedValue
             || reference.kind == ast::ExpressionKind::HierarchicalValue) {
             objectIndex = objectFor(reference.as<ast::ValueExpressionBase>().symbol);
             // A hierarchical reference has no storage until elaboration binds it, so a port
             // cannot be collapsed onto it; it is connected through an assignment instead. So is
             // a signal of another width than the port, which elaboration can only collapse onto
-            // a port as wide as it: the assignment extends or truncates as one written out would
-            // (IEEE 1800 section 23.3.3.7).
+            // a port as wide as it. An initialized output variable also needs an independent
+            // value: its actual is driven through a continuous assignment, so other drivers
+            // resolve with it and forcing the net does not change it (IEEE 1800 section 6.5).
             if (objectIndex.has_value()
                 && (!definitionValue.objects[*objectIndex].hierarchicalPath.empty()
-                    || !hasPortStorage(port, definitionValue.objects[*objectIndex].type)))
+                    || !hasPortStorage(port, definitionValue.objects[*objectIndex].type)
+                    || initializedOutput))
                 objectIndex = materialiseConnection(instance, port, reference);
         } else {
             objectIndex = materialiseConnection(instance, port, reference);

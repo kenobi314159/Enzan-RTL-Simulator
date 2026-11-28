@@ -40,6 +40,25 @@ namespace enzan::session {
 
 namespace {
 
+/// Accumulates elapsed time only when timing has been requested.
+class PhaseTimer {
+public:
+    explicit PhaseTimer(std::chrono::nanoseconds* destination) noexcept
+        : total(destination), start(total != nullptr ? Clock::now() : Clock::time_point{}) {}
+
+    ~PhaseTimer() {
+        if (total != nullptr) *total += Clock::now() - start;
+    }
+
+    PhaseTimer(const PhaseTimer&) = delete;
+    PhaseTimer& operator=(const PhaseTimer&) = delete;
+
+private:
+    using Clock = std::chrono::steady_clock;
+    std::chrono::nanoseconds* total;
+    Clock::time_point start;
+};
+
 /// True when `file` is named as a VHDL source is: `.vhd` or `.vhdl`, in any case.
 bool isVhdlSource(const std::filesystem::path& file) {
     std::string extension = file.extension().string();
@@ -228,6 +247,7 @@ std::ostream& Session::transcriptStream() const {
 // ---------------------------------------------------------------------------
 
 bool Session::analyse(const AnalysisRequest& request) {
+    const PhaseTimer timer(timingEnabled ? &timings.analysis : nullptr);
     for (const std::filesystem::path& file : request.contextFiles) contextFiles.push_back(file);
     for (const std::filesystem::path& file : request.libraryFiles) libraryFiles.push_back(file);
     for (const std::filesystem::path& file : request.files) files.push_back(file);
@@ -1343,6 +1363,7 @@ bool Session::elaborate(std::string_view topModule) {
 }
 
 bool Session::elaborate(std::span<const std::string> topModules) {
+    const PhaseTimer timer(timingEnabled ? &timings.elaboration : nullptr);
     // A run may be given nothing but libraries to resolve against, so the design to elaborate
     // is whatever was analysed here plus every unit the input libraries hold. Merged in the
     // order the libraries were given, which is the order 8.2 says they are searched and the
@@ -1406,10 +1427,15 @@ bool Session::elaborate(std::span<const std::string> topModules) {
         }
     }
 
-    codegen::Compiler compiler(diagnostics);
-    std::unique_ptr<codegen::CompiledDesign> bodies = compiler.compile(*design);
+    std::unique_ptr<codegen::CompiledDesign> bodies;
+    {
+        const PhaseTimer bytecodeTimer(timingEnabled ? &timings.bytecode : nullptr);
+        codegen::Compiler compiler(diagnostics);
+        bodies = compiler.compile(*design);
+    }
     if (bodies == nullptr) return false;
 
+    const PhaseTimer imageTimer(timingEnabled ? &timings.image : nullptr);
     elaborated = std::move(tree);
     compiled = std::move(bodies);
     image = std::make_unique<runtime::Image>(*design, *elaborated, *compiled);
@@ -1420,6 +1446,7 @@ bool Session::elaborate(std::span<const std::string> topModules) {
     options.transcript = transcript;
     options.seed = seed;
     options.stopSeverity = stopSeverity;
+    options.collectActivity = collectActivity;
 
     kernel = std::make_unique<runtime::Kernel>(*image, diagnostics, options);
     kernel->initialize();
@@ -1472,7 +1499,10 @@ runtime::RunStatus Session::run(std::optional<runtime::SimTime> until) {
         return runtime::RunStatus::Error;
     }
 
-    status = kernel->run(until.value_or(runtime::NoTime));
+    {
+        const PhaseTimer timer(timingEnabled ? &timings.simulation : nullptr);
+        status = kernel->run(until.value_or(runtime::NoTime));
+    }
 
     // A run that stopped at a time limit or was interrupted can continue; one that finished,
     // ran out of events or failed cannot, and an application is told so now rather than when

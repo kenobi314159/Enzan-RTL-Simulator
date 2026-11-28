@@ -93,14 +93,11 @@ set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY "${PROJECT_BINARY_DIR}/lib")
 
 # Both frontends and the graphical front end are on by default, since together they are the
 # simulator a user builds; each can be switched off for work that does not need it, sparing its
-# dependencies: slang's build, NVC's submodule with flex and zstd, or Qt 6 and Tcl. The JIT
-# belongs to a later milestone and stays off until it has something to build. The milestone each
-# component belongs to is named here.
+# dependencies: slang's build, NVC's submodule with flex and zstd, or Qt 6 and Tcl.
 option(ENZAN_BUILD_TESTS "Build the unit test suites" ON)
 option(ENZAN_ENABLE_SYSTEMVERILOG "Build the slang-based SystemVerilog frontend" ON)
 option(ENZAN_ENABLE_VHDL "Build the NVC-based VHDL frontend" ON)
 option(ENZAN_BUILD_GUI "Build the Qt 6 graphical front end" ON)
-option(ENZAN_ENABLE_JIT "Build the LLVM JIT backend (M8)" OFF)
 
 option(ENZAN_WERROR "Treat compiler warnings as errors" OFF)
 option(ENZAN_ALLOW_FETCH
@@ -172,5 +169,4 @@ message(STATUS "  Unit tests ......... ${ENZAN_BUILD_TESTS}")
 message(STATUS "  SystemVerilog ...... ${ENZAN_ENABLE_SYSTEMVERILOG}")
 message(STATUS "  VHDL ............... ${ENZAN_ENABLE_VHDL}")
 message(STATUS "  GUI ................ ${ENZAN_BUILD_GUI}")
-message(STATUS "  JIT ................ ${ENZAN_ENABLE_JIT}")
 message(STATUS "")

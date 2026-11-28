@@ -338,20 +338,3 @@ if(ENZAN_BUILD_GUI)
   endif()
   message(STATUS "Using Qt ${Qt6_VERSION}")
 endif()
-
-# ---------------------------------------------------------------------------
-# LLVM — JIT backend, milestone M8
-# ---------------------------------------------------------------------------
-
-if(ENZAN_ENABLE_JIT)
-  find_package(LLVM 17 QUIET CONFIG)
-  if(NOT LLVM_FOUND)
-    enzan_dependency_missing(
-      NAME LLVM
-      PURPOSE "the ORC JIT execution backend"
-      ARCH llvm
-      DEBIAN llvm-dev
-      FEDORA llvm-devel)
-  endif()
-  message(STATUS "Using LLVM ${LLVM_PACKAGE_VERSION}")
-endif()

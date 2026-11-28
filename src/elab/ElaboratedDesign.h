@@ -25,12 +25,7 @@ namespace enzan::elab {
 /// several objects share one slot when elaboration collapses a port connection, which
 /// is why the scheduler works in slots and the frontends work in objects.
 struct Slot {
-    /// Offset of this slot's storage in the state arena, in Words.
-    ///
-    /// Words rather than bytes because every value is Word-aligned by construction and a Word index
-    /// keeps the arithmetic in the value engine's units. State is addressed by offset and never by
-    /// pointer (DESIGN_GUIDE.md section 4.3), so that checkpointing is a memcpy and a JIT can burn
-    /// the offset in as a constant.
+    /// Offset of this slot in the state arena, in words.
     std::uint32_t wordOffset = 0;
 
     eir::Type type;
@@ -128,13 +123,7 @@ struct Instance {
 
     std::vector<std::uint32_t> children;
 
-    /// Slot index for each object of the definition, indexed by object index.
-    ///
-    /// An indirection rather than a base offset plus a fixed per-object displacement,
-    /// because a collapsed port makes an object's storage live in an ancestor's block
-    /// rather than in this instance's. The interpreter pays one extra load per state
-    /// access; a JIT specialises a process per instance and burns the resulting
-    /// absolute offsets in as constants.
+    /// Slot per object; collapsed ports can name storage in an ancestor.
     std::vector<std::uint32_t> objectSlots;
 
     /// Slot index the instance's drivers of each object write, indexed by object index: the

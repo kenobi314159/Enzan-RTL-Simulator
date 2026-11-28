@@ -7,7 +7,7 @@
 # the first simulation onwards. A performance goal without continuous measurement is
 # decoration, and a regression is invisible without a baseline.
 #
-# Usage: run-bench.sh [--check <reference>] <enzan-binary> [results-file]
+# Usage: run-bench.sh [--check <reference>] [--phases <file>] <enzan-binary> [results-file]
 #
 # The results file is tab separated, one row per design and run:
 #
@@ -22,25 +22,33 @@
 set -euo pipefail
 
 usage() {
-    printf 'usage: %s [--check <reference>] <enzan-binary> [results-file]\n' "$0" >&2
+    printf 'usage: %s [--check <reference>] [--phases <file>] <enzan-binary> [results-file]\n' "$0" >&2
     exit 2
 }
 
 reference=""
-if [[ "${1:-}" == --check ]]; then
-    [[ $# -ge 2 ]] || usage
-    reference="$2"
+phases=""
+while [[ "${1:-}" == --check || "${1:-}" == --phases ]]; do
+    [[ $# -ge 2 && -n "$2" ]] || usage
+    case "$1" in
+        --check) [[ -z "$reference" ]] || usage; reference="$2" ;;
+        --phases) [[ -z "$phases" ]] || usage; phases="$2" ;;
+    esac
     shift 2
-    if [[ ! -f "$reference" ]]; then
-        printf '%s does not exist\n' "$reference" >&2
-        exit 1
-    fi
+done
+if [[ -n "$reference" && ! -f "$reference" ]]; then
+    printf '%s does not exist\n' "$reference" >&2
+    exit 1
 fi
 [[ $# -ge 1 && $# -le 2 ]] || usage
 
 readonly enzan="$1"
 readonly here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 readonly results="${2:-$here/results.tsv}"
+if [[ -n "$phases" && ( "$(realpath -m "$phases")" == "$(realpath -m "$results")" ) ]]; then
+    printf 'phase timings and benchmark results need separate files\n' >&2
+    exit 2
+fi
 
 # Each design runs this many times and the fastest is recorded: what slows a run down besides
 # Enzan, another process or a cold cache, only ever slows it down.
@@ -70,6 +78,12 @@ if [[ ! -f "$results" ]]; then
     printf 'timestamp\trevision\tdesign\tcycles\tseconds\tcycles_per_second\tinstructions\tdeltas\n' \
         >"$results"
 fi
+if [[ -n "$phases" && ! -f "$phases" ]]; then
+    printf 'timestamp\trevision\tdesign\tseconds\tanalysis_ns\telaboration_ns\tbytecode_ns\timage_ns\tsimulation_ns\n' >"$phases"
+fi
+
+phase_option=()
+[[ -z "$phases" ]] || phase_option=(--phase-timings)
 
 printf '%-16s %12s %12s %14s\n' design cycles seconds cycles/sec
 
@@ -118,12 +132,13 @@ for design in "$here"/designs/*.sv "$here"/designs/*.vhd "$here"/designs/*.f; do
     failed=0
     instructions=""
     deltas=""
+    best_phases=""
     for ((run = 0; run < repeats; run++)); do
         # The elapsed time covers analysis, elaboration and the run, which is what a user
         # waits for. Separating them is worth doing once there is something to tune;
         # conflating them now at least never flatters the result.
         start="$(date +%s.%N)"
-        if ! "$enzan" --top bench --timescale ns --dump-stats "${sources[@]}" >"$output" 2>&1; then
+        if ! "$enzan" --top bench --timescale ns --dump-stats "${phase_option[@]}" "${sources[@]}" >"$output" 2>&1; then
             failed=1
             break
         fi
@@ -132,8 +147,17 @@ for design in "$here"/designs/*.sv "$here"/designs/*.vhd "$here"/designs/*.f; do
         # The printf arguments are parenthesised: awk reads an unparenthesised `printf x, y > 0`
         # as a redirection to the file named "0" rather than as a comparison.
         seconds="$(awk -v a="$start" -v b="$finish" 'BEGIN { printf("%.3f", b - a) }')"
+        if [[ -n "$phases" ]]; then
+            phase_counts="$(sed -n 's/^-- phase timings (ns): analysis=\([0-9]*\) elaboration=\([0-9]*\) bytecode=\([0-9]*\) image=\([0-9]*\) simulation=\([0-9]*\)$/\1 \2 \3 \4 \5/p' "$output")"
+            if [[ ! "$phase_counts" =~ ^[0-9]+\ [0-9]+\ [0-9]+\ [0-9]+\ [0-9]+$ ]]; then
+                printf '%-16s FAILED: missing or malformed phase timings\n' "$name" >&2
+                failed=2
+                break
+            fi
+        fi
         if [[ -z "$best" ]] || over "$best" "$seconds" 0; then
             best="$seconds"
+            [[ -z "$phases" ]] || best_phases="$phase_counts"
         fi
 
         # SystemVerilog's $display prints the count at the start of its line, and VHDL's report
@@ -174,6 +198,11 @@ for design in "$here"/designs/*.sv "$here"/designs/*.vhd "$here"/designs/*.f; do
     printf '%-16s %12s %12s %14s\n' "$name" "$cycles" "$best" "$rate"
     printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$(date -Iseconds)" "$revision" "$name" "$cycles" \
         "$best" "$rate" "${instructions:-0}" "${deltas:-0}" >>"$results"
+    if [[ -n "$phases" ]]; then
+        read -r analysis_ns elaboration_ns bytecode_ns image_ns simulation_ns <<<"$best_phases"
+        printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$(date -Iseconds)" "$revision" "$name" \
+            "$best" "$analysis_ns" "$elaboration_ns" "$bytecode_ns" "$image_ns" "$simulation_ns" >>"$phases"
+    fi
 
     [[ -n "$reference" ]] || continue
     measured+="$(printf '%s\t%s\t%s\t%s' "$name" "$instructions" "$deltas" "$rate")"$'\n'

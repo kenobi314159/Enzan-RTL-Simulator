@@ -74,7 +74,7 @@ TEST(Version, BuildDescriptionAgreesWithTheFeatureMacros) {
     EXPECT_EQ(description.find("systemverilog"), std::string::npos);
 #endif
 
-#if !defined(ENZAN_WITH_SYSTEMVERILOG) && !defined(ENZAN_WITH_VHDL) && !defined(ENZAN_WITH_JIT) \
+#if !defined(ENZAN_WITH_SYSTEMVERILOG) && !defined(ENZAN_WITH_VHDL) \
     && !defined(ENZAN_WITH_SANITIZERS)
     EXPECT_NE(description.find("Optional components: none"), std::string::npos);
 #endif

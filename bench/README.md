@@ -42,8 +42,76 @@ is marked `-dirty`, because a number that cannot be attributed to a commit is wo
 number: it makes the history look trustworthy when it is not.
 
 The elapsed time covers analysis, elaboration and the run, which is what a user waits for.
-Separating them is worth doing once there is something to tune; conflating them at least never
-flatters the result.
+To measure their contributions separately, add `--phase-timings` to a simulation. It prints
+nanoseconds to standard error for analysis, elaboration, bytecode compilation, image preparation
+and kernel execution. Elaboration excludes bytecode and image preparation. The report excludes
+library opening outside analysis, waveform setup and flushing, so its sum is not end-to-end time.
+For a served session, simulation time accumulates over runs and the report appears when it ends.
+To collect those timings for the benchmark designs, run:
+
+```sh
+./bench/run-bench.sh --phases /tmp/enzan-phases.tsv ./build/gcc-release/bin/enzan
+```
+
+The phase file records the five nanosecond counts of the same run selected for its best
+end-to-end time. It is separate from `results.tsv`, so existing benchmark references stay
+comparable. Timed and untimed runs should not be mixed when measuring small differences.
+
+`--activity-stats` prints an opt-in kernel activity report on standard error. `process_runs`
+counts process activations, including resumptions; `connection_runs` is the subset explicitly
+scheduled in the port-connection queue, not every process materialising a port expression.
+`enqueues` counts accepted wake/resume requests through the kernel, excluding timed
+events released directly by the scheduler. `signal_changes` counts actual value changes, rather
+than writes that leave a value unchanged. `nba_updates` counts nonblocking updates taken for
+application, and `transactions` counts applied delayed or delta transactions; either can include
+a write that leaves the signal unchanged. `resolution_calls` counts kernel-invoked resolution
+functions. Counts include initialization and accumulate across runs and restarts of one kernel;
+a new elaboration creates new counters. Instrumentation can affect timing, so compare ordinary
+timings with ordinary timings and use the counters to explain the work.
+
+For a real design, `./bench/run-neorv32.sh <enzan> <ghdl> <work-directory>` runs the pinned
+NEORV32 regression with phase timings. It reports the VHDL and mixed-language testbenches only
+after both match GHDL's reports and CPU/UART logs. It uses the regression's fixed simulation
+window and work directory, including the output files that regression replaces. Each result is
+one run, rather than the best of three; repeat it explicitly when comparing performance.
+
+`./bench/run-cocotb.sh <enzan> <python-with-cocotb> <work-directory>` measures a separate
+10,000-cycle counter workload with Python clock and edge callbacks. It checks the expected
+counter value with Icarus Verilog first and with Enzan, then reports Enzan's end-to-end and
+phase times. Each invocation makes a fresh directory under the work directory and keeps both
+simulators' logs; it records one run. The supplied Python must have the project's pinned cocotb
+version installed, and Icarus Verilog must be on `PATH`.
+
+`./bench/compare-verilator.sh <enzan> <verilator> <iverilog> <work-directory>` compares the
+SystemVerilog pipeline over one million cycles with Verilator. Before timing, it holds settled
+pipeline states and the final result to Icarus Verilog under all three simulators. Verilator runs
+single-threaded without tracing. The script measures its translation and native build separately,
+then alternates three Enzan and Verilator runs and reports the best single-invocation times. The
+ratio compares Enzan's analysis and run against the already-built Verilator executable; use the
+separate build time when comparing a fresh build and one run. Its work directory retains compiler
+logs, outputs and generated code for inspection.
+
+`./bench/run-scale.sh <enzan> <iverilog> <width> <work-directory>` runs a synthetic network of
+explicit `LUT6` instances for 20 active clock cycles. The width must be a multiple of 32; each
+bit is one retained cell fed by five neighbouring state bits and a shared phase bit. The script
+compares the low 32 bits at 20 settled states in a 1,024-cell case with Icarus and checks every
+bit of Enzan's final state against the repeated 32-bit state, then reports elapsed time, phase
+times and peak RSS for one run. It retains the logs in a fresh work directory. This is a
+structural stress test, not a representative FPGA design or a post-place device-utilisation
+figure. It needs Python 3 as well as Icarus and its `vvp` runner.
+
+Yosys can independently count the explicitly instantiated cells after RTL optimisation, for
+example at width 1,024:
+
+```sh
+yosys -p "read_verilog -sv -D SYNTHESIS bench/scale/cells.sv; \
+  hierarchy -top network -chparam WIDTH 1024; proc; opt; stat"
+```
+
+The LUTs are black boxes for this count, so it measures retained structural cells and does not
+predict the LUT utilisation of a synthesised RTL design. The timing includes `$countones` once
+at the end, and the short run is intended to expose preparation and memory costs as well as
+simulation cost; it is not a sustained-throughput measurement.
 
 It is a target rather than a test. CI runs it as a job of its own, and a measurement taken on a
 loaded machine alongside three hundred other tests is not comparable with anything.
@@ -116,6 +184,4 @@ On the order of 10,000 simulated clock cycles per second on a design of roughly
 100k FPGA LUTs on a single core, and within about 5× of Verilator on the purely
 synchronous subset.
 
-The number is **provisional** and will be replaced with a measured, committed
-figure. A tree-walking interpreter would not approach it; the bytecode VM is a
-large step up and the LLVM JIT (M8) is what is expected to reach it.
+The number is **provisional**; benchmark results should include preparation as well as execution.

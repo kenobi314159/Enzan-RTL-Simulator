@@ -438,6 +438,8 @@ driver owns which bit.
   object for the instance's drivers of a port, and elaboration binds the port's reads to one slot
   and its drivers to the other. That is how a VHDL `inout` associated through a conversion or with
   part of a signal keeps its driving value apart from its effective value (5.2).
+- **An initialized SystemVerilog output variable keeps its own value.** Its continuous assignment
+  drives the connected net or variable; forcing the net does not force the output variable.
 
 A per-bit table of owning drivers was rejected because it holds at run time a fact fixed at
 elaboration and pays a lookup on every write. Routing every write through a driver, whether or not
@@ -514,7 +516,7 @@ names it by that definition and its name. Nothing in it is particular to VHDL.
 declared read set and write set.**
 
 This is the single most important structural rule in the project. It keeps later optimisation open:
-static partitioning for threading, JIT compilation, activity-based scheduling and checkpointing all
+static partitioning for threading, activity-based scheduling and checkpointing all
 depend on knowing exactly what a process touches. Code that lets a process reach arbitrary global
 state closes those doors permanently and MUST be rejected.
 
@@ -523,7 +525,7 @@ state closes those doors permanently and MUST be rejected.
 The elaborated design's entire mutable state lives in a **single contiguous arena**. Every signal,
 variable and driver is given a byte offset at elaboration, and EIR and bytecode refer to state by
 offset, never by pointer. Checkpoint and restore become a memcpy; the waveform database reads values
-in place; a JIT burns offsets in as constants; and locality can be tuned by reordering the layout.
+in place; locality can be tuned by reordering the layout.
 
 **Aggregates are stored flat.** A fixed-size unpacked array or struct, like a VHDL array or record,
 is the vector of all its bits, the left element and the first field highest, exactly as its packed
@@ -812,18 +814,14 @@ around.
 ### 6.1 Bytecode virtual machine
 
 EIR-B is compiled to a **register-based bytecode**, not a stack-based one: it takes fewer
-instructions per operation and maps directly onto both real registers and LLVM IR.
+instructions per operation.
 
 - Each process has its own register file, which holds wide values too.
 - A call pushes the callee's register file onto the kernel's one call stack (4.1), and a return pops
-  it. The lowering is an LLVM function per subprogram and a `call` to it, which is why a subprogram
-  never suspends: an LLVM function cannot return to the scheduler half-way and be resumed.
+  it. A subprogram never suspends.
 - A register file starts as its body's image: zero, but for each register whose one writer is a
   constant load, which holds the constant from the start.
 - The dispatch loop SHOULD use computed goto rather than a `switch`.
-- **Every opcode MUST have an obvious, documented lowering to LLVM IR.** The JIT (6.3) is meant to
-  be a mechanical translation of the interpreter, and an opcode that cannot be lowered mechanically
-  blocks it. An opcode added without its lowering sketch is incomplete work.
 - Opcodes address state by arena offset (4.3).
 
 ### 6.2 Scheduler
@@ -836,11 +834,15 @@ The scheduler implements section 3:
   actually changes value, not merely when it is assigned. This is one of the largest single
   performance wins available and MUST be present.
 
-### 6.3 JIT (deferred to M8)
+### 6.3 JIT (deferred to M8; then dropped)
 
-An LLVM ORC-based JIT backend is the intended path to the performance target. The interpreter comes
+An LLVM ORC-based JIT backend was the intended path to the performance target. The interpreter comes
 first, both to validate semantics and to be the reference the JIT is differentially tested against.
-The JIT is a backend behind a flag, never a replacement for the interpreter.
+The JIT would be a backend behind a flag, never a replacement for the interpreter.
+
+Since the M8 has been dropped as a target, there is no need to take it into account in making
+future development decisions. It is only described here to justify some of the design decisions
+made before it was found unviable.
 
 ### 6.4 Parallelism — realistic expectations
 
@@ -1503,7 +1505,6 @@ Adding a dependency requires an entry in 11.3, a `find_package` path with a good
 | Tcl 8.6+ | GUI theme language (M2); signal list syntax (M2.2) | system |
 | Qt 6 | GUI (M2) | system |
 | GoogleTest | unit tests | system, FetchContent fallback |
-| LLVM | JIT backend (M8, optional) | system, off by default |
 | zlib | FST compression | system |
 | cocotb | the cocotb golden test and regression suite (M4); never linked | `pip`, pinned in one requirements file |
 
@@ -1797,7 +1798,7 @@ Frontend fuzzing with mutated HDL input is added once the frontends are stable.
 
 **The target is provisional**: on the order of 10,000 simulated clock cycles per second on a design
 of roughly 100k FPGA LUTs on a single core, and within about 5× of Verilator on the purely
-synchronous subset. It will be replaced with a measured, committed figure (M8).
+synchronous subset. It remains a provisional goal.
 
 **The binding requirement is continuous measurement, not the number**: `bench/` records cycles per
 second per commit. A performance goal without continuous measurement is decoration, and regressions
@@ -1805,9 +1806,9 @@ are invisible without a baseline.
 
 ### 15.2 Honest expectations
 
-A tree-walking interpreter will not approach the target. The bytecode VM is a large step up, and the
-JIT (6.3) is what is expected to reach it. This is why the execution model was decided before
-implementation began: it constrains EIR, and discovering the constraint later means a rewrite.
+The bytecode VM avoids the overhead of a tree-walking interpreter. Measure preparation and
+simulation separately on representative workloads. This execution model was decided mainly to
+enable JIT (6.3), which was later dropped as a target.
 
 ### 15.3 Benchmarks
 
@@ -1932,8 +1933,7 @@ These are the rules most easily broken by accident. Violating one is a defect ev
 - **No flattening in frontends** (5). Flattening is an elaboration-time optimisation only.
 - **Thin frontend adapters** (5.2). slang- and NVC-specific code stays in its own directory and does
   not leak into EIR or downstream.
-- **Opcodes carry their lowering** (6.1). A new opcode without a documented LLVM lowering sketch is
-  incomplete.
+- **Opcodes carry their semantics** (6.1). A new opcode must document its behavior.
 - **No colour literals in GUI code** (10.5). Colours come from the theme.
 - **No allocation on the hot path** (13.4).
 
@@ -1971,38 +1971,17 @@ exit criteria are unmet.
 | M5 | Four-state completion and language breadth: nets, drivers and resolution, packages, interfaces, generate, structs, enums, arrays |
 | M6 | VHDL via NVC, the VHDL simulation cycle and VHPI |
 | M7 | Designs of both languages (3.5) |
+| M7.1 | AMD Xilinx simulation libraries |
+| M7.2 | Altera simulation libraries |
 
-### M7.1 — AMD Xilinx simulation libraries
-
-Designs instantiating AMD Xilinx's simulation models, read from the user's own installation: the
-unisims, unimacro, `glbl` and XPM from SystemVerilog; the same through `unisim` and `xpm` libraries
-of components from VHDL; and 7-series functional-simulation netlists.
-
-**Exit:** self-checking testbenches for the primitives designs use most — flip-flops with `glbl`'s
-reset, LUTs, carry chains, shift registers, block RAM, DSP slices, clock buffers, MMCMs, DDR
-registers, I/O buffers with pulls — match Icarus Verilog, their clock-to-output delays included;
-XPM memories, FIFOs and synchronisers match Verilator; the same checks run from VHDL through the
-component libraries agree with both; and NEORV32's 7-series functional netlists, in Verilog and in
-VHDL, run its program as its RTL does.
-
-### M7.2 — Altera simulation libraries
-
-Designs instantiating Altera's models: `altera_primitives`, LPM, `altera_mf`, `sgate` and the
-Cyclone 10 LP atoms from SystemVerilog, and from VHDL through Altera's component packages or as
-VHDL libraries of their own; and Cyclone 10 LP `.vo` netlists.
-
-**Exit:** testbenches for `altsyncram` with an initialisation file and for the LPM functions match
-Icarus Verilog, and `scfifo` and `dcfifo` match Verilator; the Cyclone 10 LP atoms match Icarus
-Verilog, and `cyclone10lp_pll` Verilator; Altera's VHDL models give GHDL's results; and NEORV32's
-Cyclone 10 LP netlist runs its program as its RTL does.
-
-### M8 — Performance
+### M8 — Performance — Dropped
 
 LLVM JIT backend behind a flag; profiling and hot-path work; activity-based scheduling refinements;
 optional static partitioning for threading; the performance target replaced with a measured,
 committed figure.
 
-**Exit:** the committed performance target is met.
+The JIT was dropped after profiling showed modest speedups, high preparation cost and
+substantial implementation and maintenance effort. Performance work continues independently.
 
 ### M9+ — Verification features
 
@@ -2052,7 +2031,7 @@ mistranslated:
 | NVC's internal APIs drift on an upgrade | High — blocks VHDL | Pinned revision; a thin adapter in one directory; golden tests to catch drift; co-simulation over VHPI as the fallback (5.2) |
 | A defect inherited from NVC's frontend is invisible to differential testing against NVC | High — silent wrong results | GHDL is the primary VHDL reference, and both suites are run (14.3, 14.4) |
 | Mixed-language delta semantics differ from commercial tools | High — silent wrong results | Specified (3.5), documented for users, and tested by moving the boundary, since no free simulator runs both languages |
-| Event-driven interpretation misses the performance target | Medium | Bytecode VM from the start; JIT-ready EIR; continuous benchmarking |
+| Event-driven interpretation misses the performance target | Medium | Bytecode VM from the start; continuous benchmarking |
 | Waveform memory exhaustion on large designs | Medium | Selective capture and a memory budget with disk spill (7.1) |
 | Waveform rendering does not scale when zoomed out | Medium | Pixel-bounded rendering (10.3) |
 | Scope creep into verification features | Medium | Explicit non-goals (1.3) and milestone gating |

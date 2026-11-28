@@ -14,19 +14,7 @@
 
 namespace enzan::codegen {
 
-/// One executable instruction.
-///
-/// The opcode is EIR-B's own, deliberately: the JIT is to be a mechanical translation of the
-/// interpreter, and sharing the opcode space keeps the correspondence one-to-one instead of
-/// introducing a second vocabulary to map between. What the bytecode adds is *resolution*: virtual
-/// registers become Word offsets into the process's frame, blocks become instruction indices, and
-/// every width the operation needs is present in the instruction.
-///
-/// **Nothing here requires a lookup in a side table.** That is what lets the
-/// interpreter's inner loop touch only the instruction and the data, and what lets a
-/// JIT emit code for an instruction in isolation. The cost is 48 bytes per
-/// instruction, which is cache-unfriendly by the standards of a tight bytecode and is
-/// the first thing to revisit when M8 measures the interpreter.
+/// Executable instruction with resolved register offsets, block targets and widths.
 struct Instruction {
     eir::Opcode opcode = eir::Opcode::Nop;
 
@@ -258,8 +246,8 @@ private:
     std::vector<CompiledBody> processes;
 
     /// (definitionIndex, processIndex) to body index. A flat sorted vector rather than
-    /// a hash map: it is built once, queried once per elaborated process, and its
-    /// iteration order must not vary between runs.
+    /// a hash map: it is built in definition and process order, then searched by binary
+    /// search once per elaborated process. Its iteration order must not vary between runs.
     struct Key {
         std::uint32_t definitionIndex;
         std::uint32_t processIndex;

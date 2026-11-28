@@ -199,12 +199,7 @@ struct SysTaskArgument {
     Type type;
 };
 
-/// A system task call, described once and referred to by index from the
-/// instruction stream.
-///
-/// Kept out of the instruction encoding because an instruction is fixed-size and a
-/// call has a variable number of arguments; this is also what lets the JIT lower a
-/// SysTask to a single call with the descriptor index as its argument.
+/// System task descriptor; its variable-length arguments are stored outside instructions.
 struct SysTaskCall {
     SysTaskKind kind = SysTaskKind::Display;
 
@@ -396,20 +391,7 @@ struct CallSite {
     SourceLocation location;
 };
 
-/// What a process and a subprogram both are: a body of EIR-B over registers of its own, as a
-/// control-flow graph, with the read and write sets of everything it touches.
-///
-/// **The core invariant.** A body is expressible as a pure function over an explicit state
-/// arena, with a declared read set and write set (DESIGN_GUIDE.md section 4.2). This is the
-/// single most important structural rule in the project: static partitioning for threading,
-/// JIT compilation, activity-based scheduling and checkpointing all depend on knowing exactly
-/// what a process touches. A body that reaches arbitrary global state closes those doors
-/// permanently.
-///
-/// The invariant is not left to review. `verify()` in Verifier.h checks that every object an
-/// instruction touches appears in the declared sets, and the frontends' output is verified
-/// before it is accepted. A body's sets are its own: what its callees touch is theirs, and
-/// elaboration adds it to a process's when it binds the calls.
+/// EIR control-flow body with explicit read and write sets, checked by the verifier.
 struct Body {
     /// A readable identifier such as `always_ff@counter.sv:14`, used in diagnostics, in the
     /// Processes window and in delta-loop reports. For a subprogram, the name calls name it by.
