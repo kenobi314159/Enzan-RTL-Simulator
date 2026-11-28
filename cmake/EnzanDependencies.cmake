@@ -344,7 +344,9 @@ endif()
 # ---------------------------------------------------------------------------
 
 if(ENZAN_ENABLE_JIT)
-  find_package(LLVM 17 QUIET CONFIG)
+  # LLVM's package version file accepts only its own major and minor version;
+  # requesting 17 here also rejects newer installations such as LLVM 18.
+  find_package(LLVM QUIET CONFIG)
   if(NOT LLVM_FOUND)
     enzan_dependency_missing(
       NAME LLVM
@@ -352,6 +354,9 @@ if(ENZAN_ENABLE_JIT)
       ARCH llvm
       DEBIAN llvm-dev
       FEDORA llvm-devel)
+  endif()
+  if(LLVM_PACKAGE_VERSION VERSION_LESS 17)
+    message(FATAL_ERROR "The JIT requires LLVM 17 or newer; found ${LLVM_PACKAGE_VERSION}")
   endif()
   message(STATUS "Using LLVM ${LLVM_PACKAGE_VERSION}")
 endif()

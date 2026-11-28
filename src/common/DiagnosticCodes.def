@@ -237,6 +237,7 @@ ENZAN_DIAG(GenericsWithoutTop, 6033, Error,
 ENZAN_DIAG(MixedOverridesWithoutTop, 6034, Error,
            "-G sets the parameters or generics of the top level, and in a design of both "
            "SystemVerilog and VHDL it needs --top to say which unit that is")
+ENZAN_DIAG(JitPreparationFailed, 6035, Error, "JIT preparation failed: {}")
 ENZAN_DIAG(TimeScaleConflictsWithLibrary, 6028, Error,
            "`--timescale {}` was given, but library '{}' was analysed in units of {}, and its "
            "delays are counts of that unit; leave `--timescale` out to use it, or analyse the "
