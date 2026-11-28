@@ -21,6 +21,7 @@ fi
 
 enzan=$1
 front_end=$2
+golden_dir=$(cd "$(dirname "$0")" && pwd)
 
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
@@ -68,6 +69,16 @@ expect 1 "unrecognised option '--no-such-option'" "$enzan" --no-such-option
 expect 1 "Usage: enzan" "$enzan"
 expect 1 "no source files were given" "$enzan" --top tb
 expect 1 "option '--top' needs a value" "$enzan" --top
+expect 1 "option '--backend' needs a value" "$enzan" --backend
+expect 1 "takes interpreter or jit" "$enzan" --backend unknown tb.sv
+expect 1 "'--backend' was given twice" "$enzan" --backend interpreter --backend jit tb.sv
+expect 1 "'--backend' applies" "$enzan" analyse --backend interpreter tb.sv
+expect 1 "'--backend' needs a simulation" "$enzan" --backend interpreter --dry-run tb.sv
+expect 1 "cannot select the backend of a running simulation" \
+    "$enzan" --gui --attach k.sock --backend interpreter
+if ! has jit; then
+    expect 1 "JIT backend is not available" "$enzan" --backend jit tb.sv
+fi
 
 # A served session is driven by its client, and a signal list fills a window a headless run does
 # not have: each refused rather than dropped.
@@ -103,6 +114,14 @@ expect 1 "'--run' and '--seed' apply" "$enzan" analyse --run 10 --seed 3 tb.sv
 expect 1 "\`elaborate\` runs none" "$enzan" elaborate --in-lib libs/none --fst a.fst tb
 expect 1 "'--gui' applies" "$enzan" elaborate --in-lib libs/none --gui tb
 expect 1 "'--listen' applies" "$enzan" analyse --listen k.sock tb.sv
+expect 1 "'--phase-timings' applies" "$enzan" analyse --phase-timings tb.sv
+expect 1 "cannot measure a simulation already running" "$enzan" --gui --attach k.sock --phase-timings
+expect 1 "'--phase-timings' needs a simulation" "$enzan" --phase-timings --dry-run tb.sv
+expect 1 "'--phase-timings' needs a simulation" "$enzan" lib list --phase-timings libs/none
+expect 1 "'--activity-stats' applies" "$enzan" analyse --activity-stats tb.sv
+expect 1 "cannot measure a simulation already running" "$enzan" --gui --attach k.sock --activity-stats
+expect 1 "'--activity-stats' needs a simulation" "$enzan" --activity-stats --dry-run tb.sv
+expect 1 "'--activity-stats' needs a simulation" "$enzan" lib list --activity-stats libs/none
 
 # --- an option given twice ------------------------------------------------------------------------
 
@@ -136,8 +155,246 @@ expect 1 "'10xs' is not a length of time" "$enzan" --run 10xs tb.sv
 expect 1 "'ALL' is not a length of time" "$enzan" --run ALL tb.sv
 if [[ ${#sources[@]} -gt 0 ]]; then
     expect 0 "PASS cli tb" "$enzan" --run all "${sources[0]}"
+    expect 0 "PASS cli tb" "$enzan" --backend interpreter "${sources[0]}"
+    "$enzan" --phase-timings "${sources[0]}" >timing-out.txt 2>timing-err.txt \
+        || fail "a run with phase timings failed"
+    grep -q 'PASS cli tb' timing-out.txt timing-err.txt \
+        || fail "timing changed the design transcript"
+    grep -Eq '^-- phase timings \(ns\): analysis=[0-9]+ elaboration=[0-9]+ bytecode=[0-9]+ image=[0-9]+ simulation=[0-9]+$' timing-err.txt \
+        || fail "phase timing fields are missing or malformed"
+    "$enzan" "${sources[0]}" >untimed-out.txt 2>untimed-err.txt \
+        || fail "a run without phase timings failed"
+    cmp -s timing-out.txt untimed-out.txt || fail "timing changed the transcript"
+    ! grep -q 'phase timings' untimed-err.txt || fail "timing is not opt-in"
+fi
+if has systemverilog && has jit; then
+    printf 'module tb; initial begin $display("JIT starts"); #1 $finish; end endmodule\n' >jit.sv
+    "$enzan" --backend jit --phase-timings jit.sv >jit-out.txt 2>jit-err.txt \
+        || fail "a JIT run failed"
+    grep -q 'JIT starts' jit-out.txt || fail "JIT did not run the process"
+    grep -Eq '^-- JIT preparation \(ns\): [0-9]+$' jit-err.txt \
+        || fail "JIT preparation time is missing"
+    printf 'module tb; integer a=2,b=3,c; initial begin $display("must not run"); c=a**b; end endmodule\n' \
+        >jit-unsupported.sv
+    expect 2 "JIT preparation failed" "$enzan" --backend jit jit-unsupported.sv
+    ! "$enzan" --backend jit jit-unsupported.sv >jit-refused.txt 2>&1 \
+        || fail "an unsupported JIT operation ran"
+    ! grep -Fxq 'must not run' jit-refused.txt || fail "JIT failed after simulation began"
+
+    cat >jit-events.sv <<'EOF'
+`timescale 1ns/1ns
+module tb;
+  reg clock = 0;
+  reg value = 0;
+  initial begin #1 clock = 1'b1; #1 $display("event value=%b", value); $finish; end
+  initial begin @(posedge clock); value <= 1'b1; end
+endmodule
+EOF
+    "$enzan" --backend jit --dump-stats jit-events.sv >jit-events-native.txt 2>&1 \
+        || fail "JIT event test failed"
+    "$enzan" --backend interpreter --dump-stats jit-events.sv >jit-events-interpreter.txt 2>&1 \
+        || fail "interpreter event test failed"
+    cmp -s jit-events-native.txt jit-events-interpreter.txt \
+        || fail "JIT event scheduling or work counts differ from the interpreter"
+    grep -q 'event value=1' jit-events-native.txt || fail "nonblocking update did not run"
+
+    cat >jit-bits.sv <<'EOF'
+module tb;
+  reg [3:0] value = 4'b0x1z;
+  reg [3:0] result;
+  initial begin result = ~value; $display("bits=%b", result); $finish; end
+endmodule
+EOF
+    "$enzan" --backend jit --dump-stats jit-bits.sv >jit-bits-native.txt 2>&1 \
+        || fail "JIT bitwise test failed"
+    "$enzan" --backend interpreter --dump-stats jit-bits.sv >jit-bits-interpreter.txt 2>&1 \
+        || fail "interpreter bitwise test failed"
+    cmp -s jit-bits-native.txt jit-bits-interpreter.txt \
+        || fail "JIT bitwise result or work counts differ from the interpreter"
+
+    cat >jit-counter.sv <<'EOF'
+`timescale 1ns/1ns
+module tb;
+  reg [3:0] count = 4'd0;
+  initial begin
+    while (count < 4'd4) begin #1 count = count + 4'd1; end
+    $display("counter=%0d", count);
+    $finish;
+  end
+endmodule
+EOF
+    "$enzan" --backend jit --dump-stats jit-counter.sv >jit-counter-native.txt 2>&1 \
+        || fail "JIT counter test failed"
+    "$enzan" --backend interpreter --dump-stats jit-counter.sv >jit-counter-interpreter.txt 2>&1 \
+        || fail "interpreter counter test failed"
+    cmp -s jit-counter-native.txt jit-counter-interpreter.txt \
+        || fail "JIT counter result or work counts differ from the interpreter"
+    grep -q '^counter=4$' jit-counter-native.txt || fail "counter did not reach four"
+
+    cat >jit-call.sv <<'EOF'
+module tb;
+  function automatic [7:0] twice(input [7:0] value);
+    twice = value + value;
+  endfunction
+  reg [7:0] result;
+  initial begin
+    result = twice(8'd21);
+    $display("call=%d", result);
+    $finish;
+  end
+endmodule
+EOF
+    "$enzan" --backend jit --dump-stats jit-call.sv >jit-call-native.txt 2>&1 \
+        || fail "JIT function call failed"
+    "$enzan" --backend interpreter --dump-stats jit-call.sv >jit-call-interpreter.txt 2>&1 \
+        || fail "interpreter function call failed"
+    cmp -s jit-call-native.txt jit-call-interpreter.txt \
+        || fail "JIT function result or work counts differ from the interpreter"
+    grep -q '^call= *42$' jit-call-native.txt || fail "function did not return 42"
+
+    cat >jit-real.sv <<'EOF'
+module tb;
+  real a = 1.5, b = 2.0;
+  initial begin
+    if (a < b) $display("real comparison passed");
+    $finish;
+  end
+endmodule
+EOF
+    "$enzan" --backend jit --dump-stats jit-real.sv >jit-real-native.txt 2>&1 \
+        || fail "JIT real comparison failed"
+    "$enzan" --backend interpreter --dump-stats jit-real.sv >jit-real-interpreter.txt 2>&1 \
+        || fail "interpreter real comparison failed"
+    cmp -s jit-real-native.txt jit-real-interpreter.txt \
+        || fail "JIT real comparison or work counts differ from the interpreter"
+    grep -q '^real comparison passed$' jit-real-native.txt || fail "real comparison failed"
+
+    cat >jit-select.sv <<'EOF'
+module tb;
+  reg [7:0] value = 8'b1x10z011;
+  reg [3:0] selected;
+  integer index = 3;
+  initial begin
+    selected = value[index +: 4];
+    $display("selected=%b", selected);
+    value[index +: 4] = 4'bz10x;
+    $display("value=%b", value);
+    $finish;
+  end
+endmodule
+EOF
+    "$enzan" --backend jit --dump-stats jit-select.sv >jit-select-native.txt 2>&1 \
+        || fail "JIT partial object access failed"
+    "$enzan" --backend interpreter --dump-stats jit-select.sv >jit-select-interpreter.txt 2>&1 \
+        || fail "interpreter partial object access failed"
+    cmp -s jit-select-native.txt jit-select-interpreter.txt \
+        || fail "JIT partial object access or work counts differ from the interpreter"
+    grep -q '^selected=x10z$' jit-select-native.txt || fail "slice read gave the wrong value"
+    grep -q '^value=1z10x011$' jit-select-native.txt || fail "slice write gave the wrong value"
+
+    cat >jit-div.sv <<'EOF'
+module tb;
+  integer a = -20, b = 3;
+  initial begin
+    $display("division=%0d remainder=%0d", a / b, a % b);
+    $finish;
+  end
+endmodule
+EOF
+    "$enzan" --backend jit --dump-stats jit-div.sv >jit-div-native.txt 2>&1 \
+        || fail "JIT division failed"
+    "$enzan" --backend interpreter --dump-stats jit-div.sv >jit-div-interpreter.txt 2>&1 \
+        || fail "interpreter division failed"
+    cmp -s jit-div-native.txt jit-div-interpreter.txt \
+        || fail "JIT division or work counts differ from the interpreter"
+    grep -q '^division=-6 remainder=-2$' jit-div-native.txt || fail "signed division failed"
+
+    cat >jit-cond.sv <<'EOF'
+module tb;
+  reg [3:0] a = 4'b10xz, b = 4'b1zxx, value;
+  reg condition = 1'bx;
+  initial begin
+    value = condition ? a : b;
+    $display("conditional=%b", value);
+    $finish;
+  end
+endmodule
+EOF
+    "$enzan" --backend jit --dump-stats jit-cond.sv >jit-cond-native.txt 2>&1 \
+        || fail "JIT conditional failed"
+    "$enzan" --backend interpreter --dump-stats jit-cond.sv >jit-cond-interpreter.txt 2>&1 \
+        || fail "interpreter conditional failed"
+    cmp -s jit-cond-native.txt jit-cond-interpreter.txt \
+        || fail "JIT conditional or work counts differ from the interpreter"
+    grep -q '^conditional=1xxx$' jit-cond-native.txt || fail "conditional merge failed"
+
+    cat >jit-random.sv <<'EOF'
+module tb;
+  reg [31:0] value;
+  initial begin
+    value = $urandom;
+    $display("random=%h", value);
+    $finish;
+  end
+endmodule
+EOF
+    "$enzan" --backend jit --dump-stats jit-random.sv >jit-random-native.txt 2>&1 \
+        || fail "JIT system function failed"
+    "$enzan" --backend interpreter --dump-stats jit-random.sv >jit-random-interpreter.txt 2>&1 \
+        || fail "interpreter system function failed"
+    cmp -s jit-random-native.txt jit-random-interpreter.txt \
+        || fail "JIT system function or work counts differ from the interpreter"
+    grep -q '^random=' jit-random-native.txt || fail "system function did not run"
+
+    cat >jit-arith.sv <<'EOF'
+module tb;
+  real a = 1.5, b = 2.0, value;
+  initial begin
+    value = (a + b) * b;
+    $display("real arithmetic=%0.1f", value);
+    $finish;
+  end
+endmodule
+EOF
+    "$enzan" --backend jit --dump-stats jit-arith.sv >jit-arith-native.txt 2>&1 \
+        || fail "JIT real arithmetic failed"
+    "$enzan" --backend interpreter --dump-stats jit-arith.sv >jit-arith-interpreter.txt 2>&1 \
+        || fail "interpreter real arithmetic failed"
+    cmp -s jit-arith-native.txt jit-arith-interpreter.txt \
+        || fail "JIT real arithmetic or work counts differ from the interpreter"
+    grep -Fxq 'real arithmetic=7.0' jit-arith-native.txt || fail "real arithmetic failed"
+
+    pipeline="$golden_dir/../../bench/designs/pipeline.sv"
+    "$enzan" --backend jit --top bench -G CYCLES=20 --timescale ns --dump-stats "$pipeline" \
+        >jit-pipeline-native.txt 2>&1 || fail "JIT pipeline test failed"
+    "$enzan" --backend interpreter --top bench -G CYCLES=20 --timescale ns --dump-stats "$pipeline" \
+        >jit-pipeline-interpreter.txt 2>&1 || fail "interpreter pipeline test failed"
+    cmp -s jit-pipeline-native.txt jit-pipeline-interpreter.txt \
+        || fail "JIT pipeline result or work counts differ from the interpreter"
+    grep -q '^cycles=20 ' jit-pipeline-native.txt || fail "pipeline did not reach 20 cycles"
 fi
 if has systemverilog; then
+    cat >activity.sv <<'EOF'
+`timescale 1ns/1ns
+module activity;
+  reg q = 0;
+  initial begin
+    #1 q <= 1;
+    #1 q <= 1;
+    #1 $display("activity q=%b", q);
+    $finish;
+  end
+endmodule
+EOF
+    "$enzan" --activity-stats activity.sv >activity-out.txt 2>activity-err.txt \
+        || fail "a run with activity counters failed"
+    "$enzan" activity.sv >activity-plain-out.txt 2>activity-plain-err.txt \
+        || fail "a run without activity counters failed"
+    cmp -s activity-out.txt activity-plain-out.txt || fail "activity counters changed the transcript"
+    ! grep -q '^-- activity:' activity-plain-err.txt || fail "activity counters are not opt-in"
+    grep -Fxq -- '-- activity: process_runs=4 connection_runs=0 enqueues=1 signal_changes=1 nba_updates=2 transactions=0 resolution_calls=0' activity-err.txt \
+        || fail "activity counters did not reflect the known process and update sequence"
+
     printf '`timescale 1ns/1ps\nmodule clock;\n  reg c = 0;\n  always #5 c = ~c;\nendmodule\n' \
         >clock.sv
     expect 0 "ended at 1500000ps" "$enzan" --dump-stats --run 1.5us clock.sv
@@ -148,6 +405,77 @@ elif has vhdl; then
     printf 'entity clock is end entity;\narchitecture a of clock is\n  signal c : bit;\n' >clock.vhd
     printf 'begin\n  c <= not c after 5 ns;\nend architecture;\n' >>clock.vhd
     expect 0 "ended at 1500000000fs" "$enzan" --dump-stats --run 1.5us clock.vhd
+fi
+if has vhdl && has jit; then
+    cat >jit-clock.vhd <<'EOF'
+entity clock is end entity;
+architecture a of clock is
+  signal c : bit;
+begin
+  c <= not c after 5 ns;
+end architecture;
+EOF
+    "$enzan" --backend jit --dump-stats --activity-stats --run 20ns jit-clock.vhd \
+        >jit-clock-native.txt 2>&1 || fail "JIT VHDL clock failed"
+    "$enzan" --backend interpreter --dump-stats --activity-stats --run 20ns jit-clock.vhd \
+        >jit-clock-interpreter.txt 2>&1 || fail "interpreter VHDL clock failed"
+    cmp -s jit-clock-native.txt jit-clock-interpreter.txt \
+        || fail "JIT VHDL transactions or work counts differ from the interpreter"
+    grep -Eq ' transactions=[1-9][0-9]* ' jit-clock-native.txt \
+        || fail "VHDL clock did not apply driver transactions"
+
+    cat >jit-attribute.vhd <<'EOF'
+entity tb is end entity;
+architecture a of tb is
+  signal clk : bit := '0';
+begin
+  clk <= '1' after 5 ns;
+  process(clk)
+  begin
+    if clk'event then report "event observed"; end if;
+  end process;
+end architecture;
+EOF
+    "$enzan" --backend jit --dump-stats --run 10ns jit-attribute.vhd \
+        >jit-attribute-native.txt 2>&1 || fail "JIT VHDL event attribute failed"
+    "$enzan" --backend interpreter --dump-stats --run 10ns jit-attribute.vhd \
+        >jit-attribute-interpreter.txt 2>&1 || fail "interpreter VHDL event attribute failed"
+    cmp -s jit-attribute-native.txt jit-attribute-interpreter.txt \
+        || fail "JIT VHDL event attribute or work counts differ from the interpreter"
+    grep -q 'event observed' jit-attribute-native.txt || fail "VHDL event was not observed"
+
+    cat >jit-partial.vhd <<'EOF'
+entity tb is end entity;
+architecture a of tb is
+  signal data : bit_vector(7 downto 0) := (others => '0');
+begin
+  data(3 downto 0) <= "1010" after 5 ns;
+  process
+  begin
+    wait for 6 ns;
+    assert data = "00001010" report "incorrect slice" severity failure;
+    report "slice passed";
+    wait;
+  end process;
+end architecture;
+EOF
+    "$enzan" --backend jit --dump-stats --run 10ns jit-partial.vhd \
+        >jit-partial-native.txt 2>&1 || fail "JIT VHDL slice failed"
+    "$enzan" --backend interpreter --dump-stats --run 10ns jit-partial.vhd \
+        >jit-partial-interpreter.txt 2>&1 || fail "interpreter VHDL slice failed"
+    cmp -s jit-partial-native.txt jit-partial-interpreter.txt \
+        || fail "JIT VHDL slice or work counts differ from the interpreter"
+    grep -q 'slice passed' jit-partial-native.txt || fail "VHDL slice was incorrect"
+fi
+if has vhdl; then
+    "$enzan" --activity-stats --top tb "$golden_dir/vhdl/ports.vhd" \
+        >connection-out.txt 2>connection-err.txt || fail "an instrumented port connection run failed"
+    grep -Eq '^-- activity: process_runs=[0-9]+ connection_runs=[1-9][0-9]* ' connection-err.txt \
+        || fail "activity counters missed port connection activations"
+    "$enzan" --activity-stats --top tb "$golden_dir/vhdl/local_resolution.vhd" \
+        >resolution-out.txt 2>resolution-err.txt || fail "an instrumented VHDL resolution run failed"
+    grep -Eq ' transactions=[1-9][0-9]* resolution_calls=[1-9][0-9]*$' resolution-err.txt \
+        || fail "activity counters missed transactions or resolution calls"
 fi
 
 # --- what reaches the window ----------------------------------------------------------------------

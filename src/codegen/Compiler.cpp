@@ -16,10 +16,12 @@ namespace enzan::codegen {
 
 std::uint32_t CompiledDesign::findBody(const std::vector<Key>& keys, std::uint32_t definitionIndex,
                                        std::uint32_t index) {
-    const auto found = std::ranges::find_if(keys, [&](const Key& key) {
-        return key.definitionIndex == definitionIndex && key.processIndex == index;
-    });
-    return found == keys.end() ? NotCompiled : found->bodyIndex;
+    const auto wanted = std::pair{definitionIndex, index};
+    const auto keyOf = [](const Key& key) {
+        return std::pair{key.definitionIndex, key.processIndex};
+    };
+    const auto found = std::ranges::lower_bound(keys, wanted, {}, keyOf);
+    return found == keys.end() || keyOf(*found) != wanted ? NotCompiled : found->bodyIndex;
 }
 
 std::uint32_t CompiledDesign::bodyIndex(std::uint32_t definitionIndex,

@@ -105,6 +105,58 @@ Process makeCopyProcess() {
 // Frame layout
 // ---------------------------------------------------------------------------
 
+TEST_F(CompilerTest, FindsBodiesAcrossDefinitionsAndMissingIndices) {
+    const auto process = [] {
+        ProcessBuilder builder(ProcessKind::Initial, "process");
+        builder.block("entry");
+        builder.emit(Instruction::make(Opcode::Return));
+        return builder.finish();
+    };
+    const auto subprogram = [] {
+        SubprogramBuilder builder("subprogram");
+        builder.block("entry");
+        builder.emit(Instruction::make(Opcode::Return));
+        return builder.finish();
+    };
+
+    ModuleDefinition first;
+    first.name = "first";
+    first.processes.push_back(process());
+    first.processes.push_back(process());
+    first.subprograms.push_back(subprogram());
+    design.addModule(std::move(first));
+    ModuleDefinition empty;
+    empty.name = "empty";
+    design.addModule(std::move(empty));
+    ModuleDefinition third;
+    third.name = "third";
+    third.subprograms.push_back(subprogram());
+    third.subprograms.push_back(subprogram());
+    design.addModule(std::move(third));
+    ModuleDefinition last;
+    last.name = "last";
+    last.processes.push_back(process());
+    last.processes.push_back(process());
+    design.addModule(std::move(last));
+
+    const std::unique_ptr<CompiledDesign> compiled = compile();
+    ASSERT_NE(compiled, nullptr);
+    EXPECT_EQ(compiled->bodyIndex(0, 0), 0U);
+    EXPECT_EQ(compiled->bodyIndex(0, 1), 1U);
+    EXPECT_EQ(compiled->subprogramBodyIndex(0, 0), 2U);
+    EXPECT_EQ(compiled->subprogramBodyIndex(2, 0), 3U);
+    EXPECT_EQ(compiled->subprogramBodyIndex(2, 1), 4U);
+    EXPECT_EQ(compiled->bodyIndex(3, 0), 5U);
+    EXPECT_EQ(compiled->bodyIndex(3, 1), 6U);
+    EXPECT_EQ(compiled->bodyIndex(0, 2), CompiledDesign::NotCompiled);
+    EXPECT_EQ(compiled->bodyIndex(1, 0), CompiledDesign::NotCompiled);
+    EXPECT_EQ(compiled->bodyIndex(2, 0), CompiledDesign::NotCompiled);
+    EXPECT_EQ(compiled->bodyIndex(4, 0), CompiledDesign::NotCompiled);
+    EXPECT_EQ(compiled->subprogramBodyIndex(1, 0), CompiledDesign::NotCompiled);
+    EXPECT_EQ(compiled->subprogramBodyIndex(2, 2), CompiledDesign::NotCompiled);
+    EXPECT_EQ(compiled->subprogramBodyIndex(3, 0), CompiledDesign::NotCompiled);
+}
+
 TEST_F(CompilerTest, CompilesASimpleBody) {
     design.addModule(makeModule(makeCopyProcess()));
 

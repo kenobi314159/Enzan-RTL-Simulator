@@ -132,9 +132,8 @@ struct Instance {
     ///
     /// An indirection rather than a base offset plus a fixed per-object displacement,
     /// because a collapsed port makes an object's storage live in an ancestor's block
-    /// rather than in this instance's. The interpreter pays one extra load per state
-    /// access; a JIT specialises a process per instance and burns the resulting
-    /// absolute offsets in as constants.
+    /// rather than in this instance's. Shared execution bodies resolve state through their
+    /// instance bindings; native code may later specialise those offsets when measured.
     std::vector<std::uint32_t> objectSlots;
 
     /// Slot index the instance's drivers of each object write, indexed by object index: the

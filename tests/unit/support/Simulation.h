@@ -25,6 +25,7 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <span>
 #include <sstream>
@@ -49,6 +50,10 @@ public:
 /// Verifies, elaborates, compiles and runs a one-module design.
 class Simulation {
 public:
+    /// Prepares a backend against the actual image before the kernel is initialized.
+    using BackendFactory = std::function<std::unique_ptr<runtime::ExecutionBackend>(
+        const runtime::Image&, DiagnosticEngine&)>;
+
     /// The buffer `Simulation` registers its stand-in source text as.
     ///
     /// Always the first buffer of the manager, so that a test can build EIR carrying
@@ -78,11 +83,16 @@ public:
         return {SourceBuffer, lineOffset(line) + column};
     }
 
-    Simulation(eir::Design design, std::string_view topName)
-        : Simulation(std::move(design), std::vector<std::string>{std::string(topName)}) {}
+    Simulation(eir::Design design, std::string_view topName,
+               std::unique_ptr<runtime::ExecutionBackend> backend = {},
+               const elab::ResolutionAnswers& resolutions = {}, const BackendFactory& factory = {})
+        : Simulation(std::move(design), std::vector<std::string>{std::string(topName)},
+                     std::move(backend), resolutions, factory) {}
 
     /// The same with several top levels, each a root.
-    Simulation(eir::Design design, std::vector<std::string> topNames)
+    Simulation(eir::Design design, std::vector<std::string> topNames,
+               std::unique_ptr<runtime::ExecutionBackend> backend = {},
+               const elab::ResolutionAnswers& resolutions = {}, const BackendFactory& factory = {})
         : engine(sources), analysed(std::move(design)) {
         // Added first, so that `SourceBuffer` names it. Every simulation gets one even when
         // the test does not care, because a fixture whose buffer numbering depends on what
@@ -97,7 +107,7 @@ public:
         valid = eir::verify(analysed, engine);
 
         elab::Elaborator elaborator(analysed, engine);
-        elaborated = elaborator.elaborate(std::span<const std::string>(topNames));
+        elaborated = elaborator.elaborate(std::span<const std::string>(topNames), resolutions);
         if (elaborated == nullptr) return;
 
         codegen::Compiler compiler(engine);
@@ -106,11 +116,16 @@ public:
 
         image = std::make_unique<runtime::Image>(analysed, *elaborated, *compiled);
 
+        if (factory) {
+            backend = factory(*image, engine);
+            if (!backend) return;
+        }
+
         runtime::KernelOptions options;
         options.transcript = &transcriptStream;
         options.deltaLimit = deltaLimit;
         options.callDepthLimit = callDepthLimit;
-        kernel = std::make_unique<runtime::Kernel>(*image, engine, options);
+        kernel = std::make_unique<runtime::Kernel>(*image, engine, options, std::move(backend));
         kernel->initialize();
     }
 

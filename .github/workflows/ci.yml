@@ -194,7 +194,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install --no-install-recommends -y \
             cmake ninja-build ccache clang libgtest-dev zlib1g-dev flex libzstd-dev \
-            ghdl ghdl-mcode qt6-base-dev tcl-dev
+            ghdl ghdl-mcode qt6-base-dev tcl-dev llvm-18-dev
 
       - name: Restore compiler cache
         uses: actions/cache@v6
@@ -210,6 +210,8 @@ jobs:
           cmake --preset clang-sanitize
           -DENZAN_WERROR=ON
           -DENZAN_ENABLE_SYSTEMVERILOG=OFF
+          -DENZAN_ENABLE_JIT=ON
+          -DLLVM_DIR=/usr/lib/llvm-18/lib/cmake/llvm
 
       - name: Build
         run: cmake --build --preset clang-sanitize
@@ -236,7 +238,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install --no-install-recommends -y \
             cmake ninja-build ccache clang clang-tidy-18 libgtest-dev zlib1g-dev \
-            qt6-base-dev tcl-dev flex libzstd-dev
+            qt6-base-dev tcl-dev flex libzstd-dev llvm-18-dev
 
       - name: Restore compiler cache
         uses: actions/cache@v6
@@ -245,20 +247,23 @@ jobs:
           key: ccache-tidy-${{ github.sha }}
           restore-keys: ccache-tidy-
 
-      # The defaults, which enable every optional component, even though that makes this the
+      # Enable the optional JIT as well as the defaults, even though that makes this the
       # second job that builds slang. Linting a translation unit that the configured build does
       # not compile does not merely skip it: clang-tidy falls back to default flags, fails to
       # find the slang, NVC or Qt headers, and then reports whatever its half-parsed view of the
       # file suggests. That produced nineteen findings that were not defects, and would have
       # hidden any real one behind them.
       - name: Configure
-        run: cmake --preset clang-debug
+        run: cmake --preset clang-debug -DENZAN_ENABLE_JIT=ON -DLLVM_DIR=/usr/lib/llvm-18/lib/cmake/llvm
 
       # The generated version header is produced at configure time, but
       # GoogleTest's headers may only appear after a build when they were
       # fetched, so the test targets are built before linting them.
       - name: Build
         run: cmake --build --preset clang-debug
+
+      - name: Test native execution
+        run: ctest --preset clang-debug -R '^(unit\.jit\.|golden\.cli$)' --output-on-failure
 
       - name: Run clang-tidy
         run: |

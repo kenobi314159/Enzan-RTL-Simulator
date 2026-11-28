@@ -520,10 +520,9 @@ state closes those doors permanently and MUST be rejected.
 
 ### 4.3 State layout
 
-The elaborated design's entire mutable state lives in a **single contiguous arena**. Every signal,
-variable and driver is given a byte offset at elaboration, and EIR and bytecode refer to state by
-offset, never by pointer. Checkpoint and restore become a memcpy; the waveform database reads values
-in place; a JIT burns offsets in as constants; and locality can be tuned by reordering the layout.
+The elaborated design's signal and driver state lives in a **single contiguous arena**. EIR and
+shared bytecode name objects; instance bindings resolve them to arena slots and offsets. A complete
+checkpoint also needs frames and scheduler state.
 
 **Aggregates are stored flat.** A fixed-size unpacked array or struct, like a VHDL array or record,
 is the vector of all its bits, the left element and the first field highest, exactly as its packed
@@ -816,15 +815,13 @@ instructions per operation and maps directly onto both real registers and LLVM I
 
 - Each process has its own register file, which holds wide values too.
 - A call pushes the callee's register file onto the kernel's one call stack (4.1), and a return pops
-  it. The lowering is an LLVM function per subprogram and a `call` to it, which is why a subprogram
-  never suspends: an LLVM function cannot return to the scheduler half-way and be resumed.
+  it. A subprogram never suspends. Generated code must retain the configured recursion-depth
+  diagnostic without relying on an unbounded native call stack.
 - A register file starts as its body's image: zero, but for each register whose one writer is a
   constant load, which holds the constant from the start.
 - The dispatch loop SHOULD use computed goto rather than a `switch`.
-- **Every opcode MUST have an obvious, documented lowering to LLVM IR.** The JIT (6.3) is meant to
-  be a mechanical translation of the interpreter, and an opcode that cannot be lowered mechanically
-  blocks it. An opcode added without its lowering sketch is incomplete work.
-- Opcodes address state by arena offset (4.3).
+- Opcode definitions document their behavior and, where applicable, their native lowering.
+- Opcodes name state by object index; per-instance bindings resolve it to arena slots (4.3).
 
 ### 6.2 Scheduler
 
@@ -836,11 +833,11 @@ The scheduler implements section 3:
   actually changes value, not merely when it is assigned. This is one of the largest single
   performance wins available and MUST be present.
 
-### 6.3 JIT (deferred to M8)
+### 6.3 JIT experiment
 
-An LLVM ORC-based JIT backend is the intended path to the performance target. The interpreter comes
-first, both to validate semantics and to be the reference the JIT is differentially tested against.
-The JIT is a backend behind a flag, never a replacement for the interpreter.
+The LLVM ORC JIT is experimental and is not an M8 exit requirement. The interpreter remains the
+default and the reference for differential tests. The backend is selected for the whole simulation;
+LLVM types stay out of the runtime interface.
 
 ### 6.4 Parallelism — realistic expectations
 
@@ -1805,9 +1802,8 @@ are invisible without a baseline.
 
 ### 15.2 Honest expectations
 
-A tree-walking interpreter will not approach the target. The bytecode VM is a large step up, and the
-JIT (6.3) is what is expected to reach it. This is why the execution model was decided before
-implementation began: it constrains EIR, and discovering the constraint later means a rewrite.
+The bytecode VM avoids the overhead of a tree-walking interpreter. Performance work must be
+measured against representative workloads, including preparation as well as simulation.
 
 ### 15.3 Benchmarks
 
@@ -1932,8 +1928,7 @@ These are the rules most easily broken by accident. Violating one is a defect ev
 - **No flattening in frontends** (5). Flattening is an elaboration-time optimisation only.
 - **Thin frontend adapters** (5.2). slang- and NVC-specific code stays in its own directory and does
   not leak into EIR or downstream.
-- **Opcodes carry their lowering** (6.1). A new opcode without a documented LLVM lowering sketch is
-  incomplete.
+- **Opcodes carry their semantics** (6.1). A new opcode must document its behavior.
 - **No colour literals in GUI code** (10.5). Colours come from the theme.
 - **No allocation on the hot path** (13.4).
 
@@ -1971,36 +1966,13 @@ exit criteria are unmet.
 | M5 | Four-state completion and language breadth: nets, drivers and resolution, packages, interfaces, generate, structs, enums, arrays |
 | M6 | VHDL via NVC, the VHDL simulation cycle and VHPI |
 | M7 | Designs of both languages (3.5) |
-
-### M7.1 — AMD Xilinx simulation libraries
-
-Designs instantiating AMD Xilinx's simulation models, read from the user's own installation: the
-unisims, unimacro, `glbl` and XPM from SystemVerilog; the same through `unisim` and `xpm` libraries
-of components from VHDL; and 7-series functional-simulation netlists.
-
-**Exit:** self-checking testbenches for the primitives designs use most — flip-flops with `glbl`'s
-reset, LUTs, carry chains, shift registers, block RAM, DSP slices, clock buffers, MMCMs, DDR
-registers, I/O buffers with pulls — match Icarus Verilog, their clock-to-output delays included;
-XPM memories, FIFOs and synchronisers match Verilator; the same checks run from VHDL through the
-component libraries agree with both; and NEORV32's 7-series functional netlists, in Verilog and in
-VHDL, run its program as its RTL does.
-
-### M7.2 — Altera simulation libraries
-
-Designs instantiating Altera's models: `altera_primitives`, LPM, `altera_mf`, `sgate` and the
-Cyclone 10 LP atoms from SystemVerilog, and from VHDL through Altera's component packages or as
-VHDL libraries of their own; and Cyclone 10 LP `.vo` netlists.
-
-**Exit:** testbenches for `altsyncram` with an initialisation file and for the LPM functions match
-Icarus Verilog, and `scfifo` and `dcfifo` match Verilator; the Cyclone 10 LP atoms match Icarus
-Verilog, and `cyclone10lp_pll` Verilator; Altera's VHDL models give GHDL's results; and NEORV32's
-Cyclone 10 LP netlist runs its program as its RTL does.
+| M7.1 | AMD Xilinx simulation libraries |
+| M7.2 | Altera simulation libraries |
 
 ### M8 — Performance
 
-LLVM JIT backend behind a flag; profiling and hot-path work; activity-based scheduling refinements;
-optional static partitioning for threading; the performance target replaced with a measured,
-committed figure.
+Profiling and hot-path work; activity-based scheduling refinements; optional static partitioning
+for threading; the performance target replaced with a measured, committed figure.
 
 **Exit:** the committed performance target is met.
 
