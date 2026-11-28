@@ -64,8 +64,10 @@ the runtime.
 ## Port collapsing
 
 A connected port of the same width as the object it binds to becomes **the same
-storage under two names**. Both hierarchical paths resolve to one slot, and the user
-may use either.
+storage under two names** when its frontend has not materialised a connection. Both
+hierarchical paths resolve to one slot, and the user may use either. In particular, an
+initialized SystemVerilog output variable is connected through its own continuous assignment, so
+its value remains separate from the net it drives.
 
 This is what commercial tools do, and the alternative — an implicit continuous
 assignment per port — would add a process and a delta cycle to every port in the design.

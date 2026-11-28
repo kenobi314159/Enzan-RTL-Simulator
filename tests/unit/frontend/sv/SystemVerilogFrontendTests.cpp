@@ -2424,6 +2424,23 @@ TEST_F(FrontendTest, ReportsAPortHoldingRealsByName) {
     EXPECT_TRUE(reported("the port 'levels', which holds reals,"));
 }
 
+TEST_F(FrontendTest, AnOutputVariableKeepsItsPortDeclarationInitializer) {
+    const std::unique_ptr<Design> design = analyse(R"(
+        module m(input logic input_value = 1'b1,
+                 output logic [7:0] output_value = 8'ha5);
+        endmodule
+    )",
+                                                   "m");
+    ASSERT_NE(design, nullptr);
+    const ModuleDefinition* found = design->findModule("m");
+    ASSERT_NE(found, nullptr);
+    const auto& output = found->objects[require(found->findObject("output_value"))];
+    EXPECT_EQ(output.initialValue, std::optional(enzan::test::literal("8'ha5")));
+    // An input's default is not an initializer for an actual connected to it.
+    const auto& input = found->objects[require(found->findObject("input_value"))];
+    EXPECT_FALSE(input.initialValue.has_value());
+}
+
 TEST_F(FrontendTest, AnArrayOrAStructOfRealsIsStoredFlatAsTheirDoubles) {
     // Two-state, and marked, since VPI shows no real.
     const std::unique_ptr<Design> design = analyse(R"(

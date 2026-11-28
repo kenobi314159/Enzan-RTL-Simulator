@@ -1645,6 +1645,24 @@ bool ModuleBuilder::collectDeclarations() {
             continue;
         }
 
+        // An ANSI output variable's initializer belongs to the port symbol in slang,
+        // not to its internal variable. An input default instead applies only when
+        // its connection is omitted, and must not initialize a connected signal.
+        if (direction == eir::PortDirection::Output
+            && port.internalSymbol->kind == ast::SymbolKind::Variable && port.hasInitializer()) {
+            const ast::Expression* initializer = port.getInitializer();
+            ast::EvalContext context(port);
+            const slang::ConstantValue value = initializer->eval(context);
+            std::optional<eir::BitVector> initial = constantBits(value, port.getType());
+            if (!initial.has_value()) {
+                reportUnsupported(
+                    port.location,
+                    std::format("the initialiser of '{}', which is not a constant", port.name));
+                continue;
+            }
+            definitionValue.objects[*objectIndex].initialValue = std::move(*initial);
+        }
+
         portIndexByName.emplace(std::string(port.name),
                                 static_cast<std::uint32_t>(definitionValue.ports.size()));
         definitionValue.ports.push_back(eir::Port{.name = std::string(port.name),
@@ -2302,17 +2320,25 @@ bool ModuleBuilder::addInstance(
         const ast::Expression& reference = externalSideOf(*expression, port.direction);
 
         std::optional<std::uint32_t> objectIndex;
+        const bool initializedOutput =
+            port.direction == ast::ArgumentDirection::Out && port.internalSymbol != nullptr
+            && port.internalSymbol->kind == ast::SymbolKind::Variable
+            && (port.hasInitializer()
+                || port.internalSymbol->as<ast::ValueSymbol>().getInitializer() != nullptr);
+
         if (reference.kind == ast::ExpressionKind::NamedValue
             || reference.kind == ast::ExpressionKind::HierarchicalValue) {
             objectIndex = objectFor(reference.as<ast::ValueExpressionBase>().symbol);
             // A hierarchical reference has no storage until elaboration binds it, so a port
             // cannot be collapsed onto it; it is connected through an assignment instead. So is
             // a signal of another width than the port, which elaboration can only collapse onto
-            // a port as wide as it: the assignment extends or truncates as one written out would
-            // (IEEE 1800 section 23.3.3.7).
+            // a port as wide as it. An initialized output variable also needs an independent
+            // value: its actual is driven through a continuous assignment, so other drivers
+            // resolve with it and forcing the net does not change it (IEEE 1800 section 6.5).
             if (objectIndex.has_value()
                 && (!definitionValue.objects[*objectIndex].hierarchicalPath.empty()
-                    || !hasPortStorage(port, definitionValue.objects[*objectIndex].type)))
+                    || !hasPortStorage(port, definitionValue.objects[*objectIndex].type)
+                    || initializedOutput))
                 objectIndex = materialiseConnection(instance, port, reference);
         } else {
             objectIndex = materialiseConnection(instance, port, reference);

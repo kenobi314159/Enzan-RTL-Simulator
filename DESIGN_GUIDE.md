@@ -438,6 +438,8 @@ driver owns which bit.
   object for the instance's drivers of a port, and elaboration binds the port's reads to one slot
   and its drivers to the other. That is how a VHDL `inout` associated through a conversion or with
   part of a signal keeps its driving value apart from its effective value (5.2).
+- **An initialized SystemVerilog output variable keeps its own value.** Its continuous assignment
+  drives the connected net or variable; forcing the net does not force the output variable.
 
 A per-bit table of owning drivers was rejected because it holds at run time a fact fixed at
 elaboration and pays a lookup on every write. Routing every write through a driver, whether or not

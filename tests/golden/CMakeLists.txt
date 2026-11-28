@@ -320,6 +320,12 @@ enzan_add_golden_test(dead_code NO_DIFFERENTIAL)
 # Ports connected to signals wider or narrower than themselves.
 enzan_add_golden_test(port_widths)
 
+# Initialized output variables retain their value independently of other drivers.
+enzan_add_golden_test(port_initializers)
+
+# Icarus propagates a force on a singly driven net back into its output variable.
+enzan_add_golden_test(port_initializers_force NO_DIFFERENTIAL)
+
 # A bus shared through inout ports of the signal's own width, connected as the signal itself.
 enzan_add_golden_test(inout)
 
