@@ -63,6 +63,13 @@ after both match GHDL's reports and CPU/UART logs. It uses the regression's fixe
 window and work directory, including the output files that regression replaces. Each result is
 one run, rather than the best of three; repeat it explicitly when comparing performance.
 
+`./bench/run-cocotb.sh <enzan> <python-with-cocotb> <work-directory>` measures a separate
+10,000-cycle counter workload with Python clock and edge callbacks. It checks the expected
+counter value with Icarus Verilog first and with Enzan, then reports Enzan's end-to-end and
+phase times. Each invocation makes a fresh directory under the work directory and keeps both
+simulators' logs; it records one run. The supplied Python must have the project's pinned cocotb
+version installed, and Icarus Verilog must be on `PATH`.
+
 It is a target rather than a test. CI runs it as a job of its own, and a measurement taken on a
 loaded machine alongside three hundred other tests is not comparable with anything.
 
