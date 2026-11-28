@@ -15,6 +15,9 @@ elaborated, compiled design.
 - **The interpreter** (`Interpreter.h`) — executes compiled bodies.
 - **The execution boundary** (`Execution.h`) — selects the backend once per kernel, for process
   activations and kernel-invoked subprograms. The default backend delegates to the interpreter.
+- **Generated-code helpers** (`ExecutionHelpers.h`) — an internal C-callable interface for
+  frame and object access, whole stores, timed waits, system tasks and instruction accounting.
+  This is an initial subset; it does not yet cover every instruction or provide a JIT backend.
 - **The kernel** (`Kernel.h`) — drives the regions, applies updates, detects value changes,
   resolves drivers, enforces the delta limit and performs system tasks. It also keeps each
   VHDL driver's projected waveform, which is what a VHDL signal assignment acts on: the
@@ -37,6 +40,12 @@ Each synchronous invocation receives a distinct `ExecutionContext` naming its pr
 body and frame, and resume PC. The kernel consumes a process's resume point before dispatch
 and releases its scratch after the backend returns, so those rules do not depend on the backend.
 Neither a backend nor generated code may retain the context past that invocation.
+
+**Generated code uses opaque contexts.** Helper arguments use indices and word offsets from
+verified bytecode, not the layout of C++ runtime classes. Frame pointers belong to an activation;
+signal values may change during a helper call that re-enters the kernel. Whole stores share the
+interpreter's direct or resolved-driver route. A generated body accounts for instructions it has
+actually reached before a helper can stop or re-enter execution.
 
 **Determinism.** Process execution order within a region is strictly FIFO. No container
 whose iteration order is unspecified may influence which process runs first, which value is

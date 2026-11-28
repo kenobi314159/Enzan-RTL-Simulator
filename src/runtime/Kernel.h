@@ -398,6 +398,16 @@ public:
     /// as a write through an out-of-range select is.
     void writeThroughDrivers(const WriteRoute& route, eir::ConstBitRef value, std::uint64_t lowBit);
 
+    /// Stores a whole value through an activation's direct signal or resolved-driver route.
+    void storeBound(const Activation& activation, std::uint32_t objectIndex,
+                    std::uint32_t writePosition, eir::ConstBitRef value) {
+        const WriteRoute& route = activation.writeRoutes[writePosition];
+        if (route.direct())
+            writeSignal(activation.writeSignals[objectIndex], value);
+        else
+            writeThroughDrivers(route, value, 0);
+    }
+
     /// Writes `value` into a signal starting at bit `lowBit`, leaving the rest alone.
     void writeSignalPart(std::uint32_t signalIndex, eir::ConstBitRef value, std::uint64_t lowBit);
 
@@ -990,6 +1000,7 @@ private:
     static constexpr unsigned MaxProcessesInDeltaReport = 10;
 
     friend class Interpreter;
+    friend struct ExecutionHelperAccess;
 };
 
 } // namespace enzan::runtime

@@ -412,16 +412,8 @@ ExecutionResult Interpreter::execute(std::uint32_t processIndex, Activation curr
         }
 
         case eir::Opcode::Store: {
-            // A store goes straight into the signal unless what it writes is resolved with
-            // other drivers, in which case it goes through this process's driver. One load
-            // and a compare on the common path.
-            const WriteRoute& route = current.writeRoutes[instruction.dst];
-            if (route.direct()) {
-                kernel.writeSignal(current.writeSignals[instruction.a],
-                                   reg(instruction.b, instruction.bWidth));
-            } else {
-                kernel.writeThroughDrivers(route, reg(instruction.b, instruction.bWidth), 0);
-            }
+            kernel.storeBound(current, instruction.a, instruction.dst,
+                              reg(instruction.b, instruction.bWidth));
             break;
         }
 
