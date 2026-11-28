@@ -152,6 +152,9 @@ public:
     /// The seed random draws start from.
     void setSeed(std::uint32_t value) noexcept { seed = value; }
 
+    /// Collect kernel activity counters from the next elaboration onward.
+    void enableActivityStats() noexcept { collectActivity = true; }
+
     // -----------------------------------------------------------------------
     // Analysis
     // -----------------------------------------------------------------------
@@ -655,6 +658,7 @@ private:
     std::uint32_t seed = 0;
     PhaseTimings timings;
     bool timingEnabled = false;
+    bool collectActivity = false;
 
     /// Bumped by `discardElaboration`, which every path that replaces the simulation goes
     /// through. See `elaborationGeneration`.

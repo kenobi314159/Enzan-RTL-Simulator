@@ -57,6 +57,18 @@ The phase file records the five nanosecond counts of the same run selected for i
 end-to-end time. It is separate from `results.tsv`, so existing benchmark references stay
 comparable. Timed and untimed runs should not be mixed when measuring small differences.
 
+`--activity-stats` prints an opt-in kernel activity report on standard error. `process_runs`
+counts process activations, including resumptions; `connection_runs` is the subset explicitly
+scheduled in the port-connection queue, not every process materialising a port expression.
+`enqueues` counts accepted wake/resume requests through the kernel, excluding timed
+events released directly by the scheduler. `signal_changes` counts actual value changes, rather
+than writes that leave a value unchanged. `nba_updates` counts nonblocking updates taken for
+application, and `transactions` counts applied delayed or delta transactions; either can include
+a write that leaves the signal unchanged. `resolution_calls` counts kernel-invoked resolution
+functions. Counts include initialization and accumulate across runs and restarts of one kernel;
+a new elaboration creates new counters. Instrumentation can affect timing, so compare ordinary
+timings with ordinary timings and use the counters to explain the work.
+
 For a real design, `./bench/run-neorv32.sh <enzan> <ghdl> <work-directory>` runs the pinned
 NEORV32 regression with phase timings. It reports the VHDL and mixed-language testbenches only
 after both match GHDL's reports and CPU/UART logs. It uses the regression's fixed simulation

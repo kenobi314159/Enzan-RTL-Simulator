@@ -235,6 +235,48 @@ TEST_F(SessionTest, PhaseTimingsStayZeroUnlessEnabled) {
     EXPECT_EQ(t.simulation.count(), 0);
 }
 
+TEST_F(SessionTest, ActivityCountsAccumulateUntilTheKernelIsReplaced) {
+    session.enableActivityStats();
+    loadCounter();
+    const auto initial = session.simulationKernel()->activityStats();
+
+    ASSERT_EQ(session.run(30), RunStatus::TimeLimitReached);
+    const auto first = session.simulationKernel()->activityStats();
+    EXPECT_GT(first.processRuns, initial.processRuns);
+    EXPECT_GT(first.signalChanges, initial.signalChanges);
+    EXPECT_GT(first.nbaUpdates, initial.nbaUpdates);
+
+    ASSERT_EQ(session.run(60), RunStatus::TimeLimitReached);
+    const auto second = session.simulationKernel()->activityStats();
+    EXPECT_GT(second.processRuns, first.processRuns);
+    EXPECT_GT(second.signalChanges, first.signalChanges);
+
+    ASSERT_TRUE(session.restart());
+    const auto restarted = session.simulationKernel()->activityStats();
+    EXPECT_GE(restarted.processRuns, second.processRuns);
+    ASSERT_EQ(session.run(30), RunStatus::TimeLimitReached);
+    EXPECT_GT(session.simulationKernel()->activityStats().processRuns, restarted.processRuns);
+
+    ASSERT_TRUE(session.elaborate("tb")) << firstMessage();
+    const auto replacement = session.simulationKernel()->activityStats();
+    EXPECT_EQ(replacement.processRuns, initial.processRuns);
+    EXPECT_EQ(replacement.enqueues, initial.enqueues);
+    EXPECT_EQ(replacement.signalChanges, initial.signalChanges);
+}
+
+TEST_F(SessionTest, ActivityCountsStayZeroUnlessEnabled) {
+    loadCounter();
+    ASSERT_EQ(session.run(30), RunStatus::TimeLimitReached);
+    const auto stats = session.simulationKernel()->activityStats();
+    EXPECT_EQ(stats.processRuns, 0U);
+    EXPECT_EQ(stats.connectionRuns, 0U);
+    EXPECT_EQ(stats.enqueues, 0U);
+    EXPECT_EQ(stats.signalChanges, 0U);
+    EXPECT_EQ(stats.nbaUpdates, 0U);
+    EXPECT_EQ(stats.transactions, 0U);
+    EXPECT_EQ(stats.resolutionCalls, 0U);
+}
+
 TEST_F(SessionTest, SeveralTopLevelsAreElaboratedSideBySide) {
     ASSERT_TRUE(analyse("tops.sv", "module design_top;\n  logic a = 1'b1;\nendmodule\n"
                                    "module glbl;\n  logic GSR = 1'b0;\nendmodule\n"))

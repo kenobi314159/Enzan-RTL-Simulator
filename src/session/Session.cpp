@@ -1446,6 +1446,7 @@ bool Session::elaborate(std::span<const std::string> topModules) {
     options.transcript = transcript;
     options.seed = seed;
     options.stopSeverity = stopSeverity;
+    options.collectActivity = collectActivity;
 
     kernel = std::make_unique<runtime::Kernel>(*image, diagnostics, options);
     kernel->initialize();
