@@ -1,6 +1,6 @@
 # `src/jit` — native code preparation
 
-This optional component owns LLVM ORC and its generated code. `Engine` verifies modules,
+This experimental optional component owns LLVM ORC and its generated code. `Engine` verifies modules,
 installs them for the host target, and resolves the resulting entry points. It explicitly
 registers the runtime helper addresses; it does not make the executable's other symbols
 available to generated code. Preparation errors go through Enzan's diagnostic engine.

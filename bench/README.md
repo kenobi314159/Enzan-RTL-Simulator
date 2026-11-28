@@ -187,5 +187,5 @@ On the order of 10,000 simulated clock cycles per second on a design of roughly
 synchronous subset.
 
 The number is **provisional** and will be replaced with a measured, committed
-figure. A tree-walking interpreter would not approach it; the bytecode VM is a
-large step up and the LLVM JIT (M8) is what is expected to reach it.
+figure. The LLVM JIT remains an experiment; its results are recorded in
+`docs/development/m8_jit_experiment.md`.
