@@ -6,6 +6,10 @@ include(GoogleTest)
 
 add_subdirectory(unit)
 
+add_test(NAME bench.harness COMMAND bash "${CMAKE_CURRENT_SOURCE_DIR}/golden/run-bench-check.sh"
+                                    "${PROJECT_SOURCE_DIR}/bench/run-bench.sh")
+set_tests_properties(bench.harness PROPERTIES TIMEOUT 120)
+
 # The cocotb golden tests, one for each frontend's toplevel, drive Enzan as a user does. Skipped
 # rather than failed when no Python has cocotb installed, so that a contributor without it can
 # still run the suite; CI installs it. ENZAN_COCOTB_PYTHON names the Python to use when the one
