@@ -521,6 +521,7 @@ void Kernel::drain(Region region) {
         processes[processIndex].queued = false;
 
         runningProcess = processIndex;
+        if (options.collectActivity) ++activity.processRuns;
         const ExecutionResult result = interpreter.run(processIndex);
         runningProcess = NoProcess;
 
@@ -547,6 +548,7 @@ void Kernel::applyNonBlockingUpdates() {
     // application's value-change callbacks, and one of those may write with an inertial delay.
     // That update belongs to the next NBA pass, not to this one.
     for (const NonBlockingUpdate& update : scheduler.takeNonBlockingUpdates()) {
+        if (options.collectActivity) ++activity.nbaUpdates;
         if (update.partial) {
             writeSignalPart(update.signalIndex, scheduler.takenValue(update), update.lowBit);
         } else {
@@ -661,6 +663,7 @@ void Kernel::resume(std::uint32_t processIndex, std::uint32_t resumePc) {
 }
 
 void Kernel::enqueue(std::uint32_t processIndex) {
+    if (options.collectActivity) ++activity.enqueues;
     if (designImage->compiledDesign().body(processes[processIndex].bodyIndex).connectsPort) {
         connectionsDue.push_back(processIndex);
         return;
@@ -677,6 +680,10 @@ void Kernel::runConnections() {
         for (const std::uint32_t processIndex : std::exchange(connectionsDue, {})) {
             processes[processIndex].queued = false;
             runningProcess = processIndex;
+            if (options.collectActivity) {
+                ++activity.processRuns;
+                ++activity.connectionRuns;
+            }
             const ExecutionResult result = interpreter.run(processIndex);
             runningProcess = NoProcess;
             if (result == ExecutionResult::Stopped || stopping()) return;
@@ -927,6 +934,7 @@ bool Kernel::resolveByFunction(std::uint32_t processIndex, const elab::Segment& 
 
 bool Kernel::callResolution(std::uint32_t processIndex, std::uint32_t subprogram,
                             eir::ConstBitRef drivers, eir::BitRef resolved) {
+    if (options.collectActivity) ++activity.resolutionCalls;
     const BoundSubprogram& callee = designImage->subprograms()[subprogram];
     const codegen::CompiledBody& body = designImage->compiledDesign().body(callee.bodyIndex);
 
@@ -1078,6 +1086,7 @@ eir::ConstBitRef Kernel::keepPrevious(const Signal& signal, eir::ConstBitRef tar
 
 void Kernel::notifyChange(std::uint32_t signalIndex, eir::Logic before, eir::Logic after,
                           eir::ConstBitRef previous, eir::ConstBitRef current) {
+    if (options.collectActivity) ++activity.signalChanges;
     // A whole-signal entry looks at the lowest bit for an edge and needs nothing for a change;
     // a window looks at its own lowest bit, or compares its bits, against the kept old value.
     const auto matches = [&](eir::EdgeKind edge, std::uint32_t lowBit, std::uint32_t width) {
@@ -1345,6 +1354,7 @@ Kernel::takeTransaction(std::uint32_t processIndex, std::uint32_t position, std:
 
 void Kernel::applyTransaction(std::uint32_t processIndex, std::uint32_t position,
                               std::uint32_t signalIndex, const Transaction& transaction) {
+    if (options.collectActivity) ++activity.transactions;
     // A transaction makes its signal active, whether or not it changes it (IEEE 1076 section
     // 14.7.3.1).
     lastActive[signalIndex] = cycle;

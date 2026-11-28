@@ -63,6 +63,11 @@ is chosen for that reason and not for convenience — an interruption part-way t
 region would make a waveform depend on when the user clicked, which is the least debuggable
 form determinism could be violated in.
 
+**Activity counters are opt-in.** `KernelOptions::collectActivity` counts process and port
+connection-queue activations, wake/resume enqueues, changes, applied updates and kernel-invoked
+resolution calls. They include initialization and accumulate over this kernel's lifetime;
+they do not change the existing instruction or delta counts.
+
 ## Allowed dependencies
 
 `common`, `eir`, `elab` and `codegen`.

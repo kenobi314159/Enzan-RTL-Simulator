@@ -186,6 +186,7 @@ Simulation:
       --seed <n>          The seed random numbers are drawn from. Default 0.
       --dump-stats        Print instruction and delta counts when the run ends.
       --phase-timings     Print elapsed time for each simulation phase.
+      --activity-stats    Print opt-in kernel activity counters.
       --vpi <lib[:entry]> Load a VPI application, such as cocotb's; repeatable.
                           Without an entry, its vlog_startup_routines are run.
       --vhpi <lib[:entry]>
@@ -272,6 +273,7 @@ struct Invocation {
     std::uint32_t seed = 0;
     bool dumpStatistics = false;
     bool phaseTimings = false;
+    bool activityStats = false;
 
     /// VPI and VHPI applications to load, each in the order given.
     std::vector<std::string> vpiApplications;
@@ -614,6 +616,12 @@ ParseOutcome parseCommandLine(std::span<char*> arguments, Invocation& invocation
         if (argument == "--phase-timings") {
             invocation.phaseTimings = true;
             simulationOnly("--phase-timings");
+            continue;
+        }
+
+        if (argument == "--activity-stats") {
+            invocation.activityStats = true;
+            simulationOnly("--activity-stats");
             continue;
         }
 
@@ -1253,6 +1261,7 @@ ExitStatus simulate(const Invocation& invocation, enzan::SourceManager& sources,
                     enzan::DiagnosticEngine& diagnostics) {
     enzan::session::Session session(sources, diagnostics);
     if (invocation.phaseTimings) session.enablePhaseTimings();
+    if (invocation.activityStats) session.enableActivityStats();
 
     const auto reportTimings = [&] {
         if (!invocation.phaseTimings) return;
@@ -1261,6 +1270,18 @@ ExitStatus simulate(const Invocation& invocation, enzan::SourceManager& sources,
                   << " elaboration=" << (t.elaboration - t.bytecode - t.image).count()
                   << " bytecode=" << t.bytecode.count() << " image=" << t.image.count()
                   << " simulation=" << t.simulation.count() << '\n';
+    };
+
+    const auto reportActivity = [&] {
+        if (!invocation.activityStats) return;
+        const auto* kernel = session.simulationKernel();
+        if (kernel == nullptr) return;
+        const auto& stats = kernel->activityStats();
+        std::cerr << "-- activity: process_runs=" << stats.processRuns
+                  << " connection_runs=" << stats.connectionRuns << " enqueues=" << stats.enqueues
+                  << " signal_changes=" << stats.signalChanges
+                  << " nba_updates=" << stats.nbaUpdates << " transactions=" << stats.transactions
+                  << " resolution_calls=" << stats.resolutionCalls << '\n';
     };
 
     // Before analysis, so that a library that cannot be loaded is reported before a long
@@ -1300,12 +1321,14 @@ ExitStatus simulate(const Invocation& invocation, enzan::SourceManager& sources,
 
         const ExitStatus result = serve(invocation, socketPath, session, diagnostics);
         reportTimings();
+        reportActivity();
         return result;
     }
 
     if (!invocation.listenPath.empty()) {
         const ExitStatus result = serve(invocation, invocation.listenPath, session, diagnostics);
         reportTimings();
+        reportActivity();
         return result;
     }
 
@@ -1322,6 +1345,7 @@ ExitStatus simulate(const Invocation& invocation, enzan::SourceManager& sources,
     // so before the run looks successful.
     session.closeWaveforms();
     reportTimings();
+    reportActivity();
 
     if (invocation.dumpStatistics) {
         const enzan::runtime::Kernel* kernel = session.simulationKernel();
@@ -1419,6 +1443,12 @@ int main(int argc, char** argv) {
         std::cerr << "enzan: '--phase-timings' needs a simulation to measure\n";
         return static_cast<int>(ExitStatus::Usage);
     }
+    if (invocation.activityStats
+        && (invocation.dryRun || invocation.command == Command::LibCreate
+            || invocation.command == Command::LibList || invocation.command == Command::LibClean)) {
+        std::cerr << "enzan: '--activity-stats' needs a simulation to measure\n";
+        return static_cast<int>(ExitStatus::Usage);
+    }
 
     // `elaborate` and `run` take the top level as their one positional word; everything else
     // reads its positional words as sources.
@@ -1499,6 +1529,10 @@ int main(int argc, char** argv) {
     // and has already analysed and elaborated whatever it is serving.
     if (invocation.useGui && !invocation.attachPath.empty() && invocation.phaseTimings) {
         std::cerr << "enzan: '--phase-timings' cannot measure a simulation already running\n";
+        return static_cast<int>(ExitStatus::Usage);
+    }
+    if (invocation.useGui && !invocation.attachPath.empty() && invocation.activityStats) {
+        std::cerr << "enzan: '--activity-stats' cannot measure a simulation already running\n";
         return static_cast<int>(ExitStatus::Usage);
     }
     if (invocation.useGui && !invocation.attachPath.empty()) becomeAttachedFrontEnd(invocation);
