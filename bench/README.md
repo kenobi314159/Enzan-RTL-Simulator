@@ -47,6 +47,15 @@ nanoseconds to standard error for analysis, elaboration, bytecode compilation, i
 and kernel execution. Elaboration excludes bytecode and image preparation. The report excludes
 library opening outside analysis, waveform setup and flushing, so its sum is not end-to-end time.
 For a served session, simulation time accumulates over runs and the report appears when it ends.
+To collect those timings for the benchmark designs, run:
+
+```sh
+./bench/run-bench.sh --phases /tmp/enzan-phases.tsv ./build/gcc-release/bin/enzan
+```
+
+The phase file records the five nanosecond counts of the same run selected for its best
+end-to-end time. It is separate from `results.tsv`, so existing benchmark references stay
+comparable. Timed and untimed runs should not be mixed when measuring small differences.
 
 It is a target rather than a test. CI runs it as a job of its own, and a measurement taken on a
 loaded machine alongside three hundred other tests is not comparable with anything.
