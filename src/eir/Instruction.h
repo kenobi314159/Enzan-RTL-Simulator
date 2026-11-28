@@ -11,12 +11,11 @@ namespace enzan::eir {
 
 /// Every EIR-B operation.
 ///
-/// The catalogue, including each opcode's operand convention and its required LLVM
-/// lowering sketch, is Opcodes.def. EIR-B is a control-flow graph of three-address
+/// The opcode catalogue is Opcodes.def. EIR-B is a control-flow graph of three-address
 /// instructions over typed values; it is not the executable form, which `codegen`
 /// produces from it.
 enum class Opcode : std::uint8_t {
-#define ENZAN_OPCODE(name, mnemonic, hasResult, sources, lowering) name,
+#define ENZAN_OPCODE(name, mnemonic, hasResult, sources) name,
 #include "eir/Opcodes.def"
 #undef ENZAN_OPCODE
 };
@@ -54,14 +53,6 @@ bool hasResult(Opcode opcode) noexcept;
 
 /// Number of source operands the opcode uses, in `a`, `b`, `c` order.
 std::uint8_t sourceCount(Opcode opcode) noexcept;
-
-/// Returns the recorded sketch of how this opcode lowers to LLVM IR.
-///
-/// Exposed as an accessor rather than left as a comment so that it can be asserted
-/// non-empty by a test: DESIGN_GUIDE.md section 6.1 makes the sketch a requirement
-/// for adding an opcode, and a requirement nothing checks is a requirement that
-/// erodes.
-std::string_view llvmLowering(Opcode opcode) noexcept;
 
 /// True when executing the opcode suspends the process, so that control returns to
 /// the scheduler and resumes at the block the instruction names.
@@ -180,9 +171,7 @@ private:
 struct Instruction {
     Opcode opcode = Opcode::Nop;
 
-    /// True when the operation treats its operands as signed. Carried on the
-    /// instruction rather than derived from the register types, so that the
-    /// bytecode is self-contained and a JIT never has to consult the type table.
+    /// True when the operation treats its operands as signed.
     bool isSigned = false;
 
     Operand dst;

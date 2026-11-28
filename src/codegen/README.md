@@ -22,10 +22,7 @@ executes.
 ## What this component deliberately does not do
 
 **No optimisation at all** — no constant folding, no dead code elimination, no register
-coalescing. Optimisation belongs in elaboration or in the JIT. While the interpreter is
-still the reference the JIT will be differentially tested against, an optimising
-bytecode compiler would be a third place for a semantic bug to hide, and correctness
-comes before performance.
+coalescing. Optimisations require measurement and semantic tests.
 
 **No knowledge of instances.** A compiled body refers to state by EIR object index, and
 the runtime resolves those per instance. That is what keeps compiled code proportional

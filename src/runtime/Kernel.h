@@ -359,14 +359,6 @@ public:
         return edgeWaiters[signalIndex].waiters.size();
     }
 
-    // -----------------------------------------------------------------------
-    // Operations the interpreter performs through the kernel
-    // -----------------------------------------------------------------------
-    //
-    // Public because the interpreter is a separate class rather than because anything
-    // else should call them. They are the kernel's contract with the execution engine,
-    // and they are what a JIT will call too.
-
     /// Returns a mutable view of a process's register frame.
     [[nodiscard]] eir::BitRef frameAt(std::uint32_t wordOffset, std::uint32_t bitWidth) noexcept {
         return {frameStorage.data() + wordOffset, bitWidth};

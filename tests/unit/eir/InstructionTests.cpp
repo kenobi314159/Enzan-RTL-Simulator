@@ -16,7 +16,7 @@ using enzan::eir::Operand;
 /// Every opcode, generated from the catalogue so that a newly added one is covered
 /// by the checks below without anyone remembering to list it.
 constexpr Opcode AllOpcodes[] = {
-#define ENZAN_OPCODE(name, mnemonic, hasResult, sources, lowering) Opcode::name,
+#define ENZAN_OPCODE(name, mnemonic, hasResult, sources) Opcode::name,
 #include "eir/Opcodes.def"
 #undef ENZAN_OPCODE
 };
@@ -24,20 +24,6 @@ constexpr Opcode AllOpcodes[] = {
 // ---------------------------------------------------------------------------
 // The opcode catalogue
 // ---------------------------------------------------------------------------
-
-TEST(OpcodeCatalogue, EveryOpcodeRecordsAnLlvmLowering) {
-    // A standing invariant: the JIT backend is meant to be a mechanical translation
-    // of the interpreter, and an opcode that cannot be lowered mechanically blocks
-    // it. A requirement nothing checks is a requirement that erodes, so it is
-    // checked here.
-    for (const Opcode opcode : AllOpcodes) {
-        EXPECT_FALSE(enzan::eir::llvmLowering(opcode).empty())
-            << "opcode '" << enzan::eir::mnemonic(opcode) << "' has no recorded LLVM lowering";
-        EXPECT_GT(enzan::eir::llvmLowering(opcode).size(), 10U)
-            << "opcode '" << enzan::eir::mnemonic(opcode)
-            << "' has a lowering sketch too short to be a sketch";
-    }
-}
 
 TEST(OpcodeCatalogue, MnemonicsAreNonEmptyAndUnique) {
     std::set<std::string> seen;

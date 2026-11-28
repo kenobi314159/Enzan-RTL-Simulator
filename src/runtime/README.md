@@ -82,10 +82,7 @@ with nothing loaded pays one null test per hook.
 
 ## Deliberate deferrals
 
-- **Dispatch is a `switch`, not computed goto.** Threaded dispatch is a SHOULD, and nothing
-  is optimised without a measurement. It arrives with M8's profiling. Until then the
-  interpreter is the reference the JIT will be differentially tested against, and readable
-  semantics are worth more than a dispatch win nobody has measured.
+- **Dispatch is a `switch`.** Optimize it only when measurements justify a change.
 - **The time wheel is an ordered map.** A hierarchical or calendar queue is for when there
   is a benchmark to justify one.
 - **Preponed and the PLI-specific regions are not separate queues.** They may be callback

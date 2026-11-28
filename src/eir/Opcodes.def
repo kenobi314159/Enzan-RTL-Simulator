@@ -5,204 +5,79 @@
 // Included more than once with ENZAN_OPCODE defined differently each time, so
 // there is deliberately no include guard.
 //
-//   ENZAN_OPCODE(Name, mnemonic, hasResult, sourceCount, llvmLowering)
-//
-// `llvmLowering` is not documentation for its own sake. DESIGN_GUIDE.md section
-// 6.1 makes it a standing invariant that **every opcode MUST have an obvious,
-// documented lowering to LLVM IR**, because the JIT backend is intended to be a
-// mechanical translation of the interpreter, and an opcode that cannot be
-// lowered mechanically blocks it. An opcode added without a lowering sketch is
-// incomplete work, and a unit test enforces that the string is not empty.
-//
-// The lowering sketches assume the arena base address is available as an LLVM
-// value and that a virtual register of 64 bits or fewer lives in an `alloca` that
-// SROA promotes. Wide values stay in memory and lower to calls into the same
-// runtime helpers the interpreter uses, which is what keeps the two backends
-// differentially testable.
+//   ENZAN_OPCODE(Name, mnemonic, hasResult, sourceCount)
 
 // --- Control flow ----------------------------------------------------------
 
-ENZAN_OPCODE(Nop, "nop", false, 0, "nothing is emitted")
-ENZAN_OPCODE(Jump, "jump", false, 1, "br label %target")
-ENZAN_OPCODE(BranchIf, "br", false, 3,
-             "the condition's four-state truth value becomes an i1 by "
-             "`(aval & ~bval) != 0`, then br i1 %c, label %then, label %else; an "
-             "unknown condition is routed by the compiler to the same target as "
-             "false, which is why truth is computed rather than tested bitwise")
-ENZAN_OPCODE(Return, "ret", false, 0, "ret void; the process has run to suspension")
+ENZAN_OPCODE(Nop, "nop", false, 0)
+ENZAN_OPCODE(Jump, "jump", false, 1)
+ENZAN_OPCODE(BranchIf, "br", false, 3)
+ENZAN_OPCODE(Return, "ret", false, 0)
 
 // --- Constants and movement ------------------------------------------------
 
-ENZAN_OPCODE(LoadConstant, "const", true, 1,
-             "an inline i64 pair for widths up to 64, otherwise a load from a "
-             "private unnamed_addr constant global holding both planes")
-ENZAN_OPCODE(Move, "mov", true, 1,
-             "nothing for narrow values once the register allocator coalesces the "
-             "two registers; a memcpy for wide ones")
-ENZAN_OPCODE(Extend, "ext", true, 1,
-             "zext or sext of the aval plane and the same of bval, so that an "
-             "unknown sign bit replicates; a runtime helper call when wide")
-ENZAN_OPCODE(Truncate, "trunc", true, 1,
-             "trunc of both planes; from a real, fptosi, which drops the fraction toward zero, as "
-             "SystemVerilog's $rtoi does where Convert rounds")
-ENZAN_OPCODE(CoerceTwoState, "twostate", true, 1,
-             "aval := aval & ~bval, bval := 0, which is the X-to-zero conversion an "
-             "assignment into a two-state object performs")
-ENZAN_OPCODE(Convert, "conv", true, 1,
-             "between a real and an integer, one of which the source is: sitofp or uitofp by "
-             "the source's signedness into a real, and llvm.round, halfway away from zero as "
-             "IEEE 1076 section 9.3.6 and IEEE 1800 section 6.12.2 both round, then fptosi "
-             "out of one; an unknown bit of an integer source converts as zero")
-ENZAN_OPCODE(Present, "present", true, 2,
-             "the codes of the encoding the immediate second operand names, a byte each, to "
-             "the four-state bits they stand for, one each: a "
-             "load from a 256-entry table of aval and bval pairs per byte, a shufflevector to "
-             "gather each byte's pair, then a pack of the bits; a runtime helper call when wide")
-ENZAN_OPCODE(Encode, "encode", true, 3,
-             "the inverse of Present, four-state bits to the codes standing for them, an "
-             "unknown or high-impedance bit becoming a bit's or a boolean's 0, and the "
-             "immediate third operand the strengths they are driven with, as eir::WeakZero and "
-             "eir::WeakOne name them, a weak 0 a std_ulogic's L and a weak 1 its H: a select per bit over "
-             "aval and bval of the four codes, a broadcast of each into its byte; a runtime "
-             "helper call when wide")
+ENZAN_OPCODE(LoadConstant, "const", true, 1)
+ENZAN_OPCODE(Move, "mov", true, 1)
+ENZAN_OPCODE(Extend, "ext", true, 1)
+ENZAN_OPCODE(Truncate, "trunc", true, 1)
+ENZAN_OPCODE(CoerceTwoState, "twostate", true, 1)
+ENZAN_OPCODE(Convert, "conv", true, 1)
+ENZAN_OPCODE(Present, "present", true, 2)
+ENZAN_OPCODE(Encode, "encode", true, 3)
 
-// --- State access ----------------------------------------------------------
-//
-// Every access names its object by an index that elaboration has already resolved
-// to a byte offset in the state arena, so a JIT can burn the offset into the
-// generated code as a constant.
 
-ENZAN_OPCODE(ReadObject, "read", true, 1,
-             "getelementptr on the arena base with a constant offset, then a load "
-             "of each plane")
-ENZAN_OPCODE(ReadObjectPart, "readpart", true, 2,
-             "getelementptr on the arena base to the object, then a load of the words "
-             "holding the window at the offset operand and a funnel shift of each plane; "
-             "an offset with an unknown bit, or a window past the object, fills X. This "
-             "is how an element of an array is read without copying the array")
-ENZAN_OPCODE(Store, "store", false, 2,
-             "a call to the runtime update helper, which compares the new value "
-             "against the old and schedules the processes sensitive to it; the "
-             "comparison inlines to an icmp pair for widths up to 64. Where the bound "
-             "process's route for the object names drivers, a call to the driver "
-             "helper instead, which resolves; a JIT specialises per instance and so "
-             "emits only the call that applies")
-ENZAN_OPCODE(StorePart, "storepart", false, 3,
-             "as Store, with a mask and shift computed from the offset operand so "
-             "that only the selected bits change; through drivers, the offset also "
-             "chooses the driver whose range holds it")
-ENZAN_OPCODE(StoreNonBlocking, "nbstore", false, 2,
-             "a call to the runtime helper that appends a non-blocking update "
-             "record to the NBA region's queue")
-ENZAN_OPCODE(StorePartNonBlocking, "nbstorepart", false, 3,
-             "as StoreNonBlocking, with the bit offset and width carried in the "
-             "update record so that two partial updates in one time slot do not "
-             "overwrite each other")
+ENZAN_OPCODE(ReadObject, "read", true, 1)
+ENZAN_OPCODE(ReadObjectPart, "readpart", true, 2)
+ENZAN_OPCODE(Store, "store", false, 2)
+ENZAN_OPCODE(StorePart, "storepart", false, 3)
+ENZAN_OPCODE(StoreNonBlocking, "nbstore", false, 2)
+ENZAN_OPCODE(StorePartNonBlocking, "nbstorepart", false, 3)
 
-ENZAN_OPCODE(StoreDelayed, "dstore", false, 3,
-             "a call to the runtime helper that schedules the write of a continuous "
-             "assignment with a delay, the third operand, replacing the one it scheduled "
-             "before if that has not happened yet; when it happens it is a Store")
-ENZAN_OPCODE(StoreTransport, "tstore", false, 3,
-             "as StoreDelayed through the same helper, replacing nothing it scheduled before: "
-             "the transport delay of a module path whose pulse limits are zero, which lets every "
-             "pulse through")
-ENZAN_OPCODE(StoreNonBlockingDelayed, "nbdstore", false, 3,
-             "a call to the runtime helper that schedules a non-blocking update the "
-             "third operand later, where it joins that time step's NBA region")
-ENZAN_OPCODE(StorePartDelayed, "dstorepart", false, 3,
-             "as StoreDelayed, of the bits from an offset up as wide as the value: the third "
-             "operand holds the offset in its low 64 bits and the delay in the 64 above, as "
-             "DrivePartAfter's does; an extract of each half, then the call StoreDelayed makes, "
-             "which replaces only what the store scheduled at the same offset. An unknown bit in "
-             "either half writes nothing, as an unknown offset does")
-ENZAN_OPCODE(StorePartNonBlockingDelayed, "nbdstorepart", false, 3,
-             "as StorePartDelayed through the helper StoreNonBlockingDelayed calls, the update "
-             "joining the NBA region of its time step as StorePartNonBlocking's does")
-ENZAN_OPCODE(StorePartTransport, "tstorepart", false, 3,
-             "as StorePartDelayed through the helper StoreTransport calls, replacing nothing it "
-             "scheduled before: the transport delay of a module path to some bits of an output")
+ENZAN_OPCODE(StoreDelayed, "dstore", false, 3)
+ENZAN_OPCODE(StoreTransport, "tstore", false, 3)
+ENZAN_OPCODE(StoreNonBlockingDelayed, "nbdstore", false, 3)
+ENZAN_OPCODE(StorePartDelayed, "dstorepart", false, 3)
+ENZAN_OPCODE(StorePartNonBlockingDelayed, "nbdstorepart", false, 3)
+ENZAN_OPCODE(StorePartTransport, "tstorepart", false, 3)
 
 // A VHDL signal assignment: a transaction of the process's driver of the object, the third
 // operand later, and in the next delta cycle when that is zero (IEEE 1076 section 10.5.2.2). It
 // first deletes the driver's transactions at or after its own time, so the last assignment of a
 // process run is the one that happens.
-ENZAN_OPCODE(Drive, "drive", false, 3,
-             "a call to the runtime helper that schedules the transaction on the driver's "
-             "projected waveform; as VHDL's inertial delay, it also deletes the transactions "
-             "within the delay before it, but for a run of its own value ending there")
-ENZAN_OPCODE(DriveTransport, "tdrive", false, 3,
-             "as Drive, rejecting nothing before the new transaction: VHDL's transport delay, "
-             "and every element of a waveform after its first")
-ENZAN_OPCODE(DrivePart, "pdrive", false, 3,
-             "as Drive with no delay, of the bits from the offset the third operand gives up, as "
-             "wide as the value: an assignment to an element or a slice of a signal, which "
-             "deletes only what is pending for those bits")
-ENZAN_OPCODE(DrivePartAfter, "pdrivea", false, 3,
-             "as DrivePart after a delay, inertially: the third operand holds the offset in its "
-             "low 64 bits and the delay in the 64 above, two values one operand carries since "
-             "the instruction's other operands are the object and the value; an extract of each "
-             "half, then the call Drive makes")
-ENZAN_OPCODE(DriveTransportPart, "pdrivet", false, 3,
-             "as DrivePartAfter with transport delay, rejecting nothing before the new "
-             "transaction")
+ENZAN_OPCODE(Drive, "drive", false, 3)
+ENZAN_OPCODE(DriveTransport, "tdrive", false, 3)
+ENZAN_OPCODE(DrivePart, "pdrive", false, 3)
+ENZAN_OPCODE(DrivePartAfter, "pdrivea", false, 3)
+ENZAN_OPCODE(DriveTransportPart, "pdrivet", false, 3)
 
 // SystemVerilog's procedural `assign` and `force` of the first operand to the second, which
 // outrank the design's own writes of it until `deassign` or `release` ends them (IEEE 1800
 // section 10.6). The third operand is the definition's process that evaluates the value again
 // whenever what it reads changes; an override names that process as its holder.
-ENZAN_OPCODE(Assign, "passign", false, 3,
-             "a call to the runtime override helper with the arena base, the object's signal, "
-             "the value and the holder's process index, the instance's first process plus the "
-             "immediate; the helper records the holder and writes the value as Store does, "
-             "unless a force holds the signal")
-ENZAN_OPCODE(Force, "force", false, 3,
-             "as Assign, through the same helper, as the holder of the signal's force, so the "
-             "value is written whatever holds it")
-ENZAN_OPCODE(Deassign, "deassign", false, 1,
-             "a call to the runtime helper that clears the signal's assign; nothing is written")
-ENZAN_OPCODE(Release, "release", false, 1,
-             "a call to the runtime helper that clears the signal's force and, where an assign "
-             "holds it, wakes the assign's holder, or else writes what its drivers resolve to")
-ENZAN_OPCODE(Override, "override", false, 2,
-             "a call to the runtime helper that writes the value as Store does when the running "
-             "process holds the signal's force, or holds its assign and nothing its force; the "
-             "holder check is two loads and compares against the process's own index, a "
-             "constant once a JIT specialises the body per instance")
+ENZAN_OPCODE(Assign, "passign", false, 3)
+ENZAN_OPCODE(Force, "force", false, 3)
+ENZAN_OPCODE(Deassign, "deassign", false, 1)
+ENZAN_OPCODE(Release, "release", false, 1)
+ENZAN_OPCODE(Override, "override", false, 2)
 
 // --- Bitwise, element by element -------------------------------------------
 
-ENZAN_OPCODE(And, "and", true, 2,
-             "the four-state table as six `and`/`or`/`not` instructions per plane "
-             "pair; a single `and` when both operands are statically two-state")
-ENZAN_OPCODE(Or, "or", true, 2, "as And, with the dual table")
-ENZAN_OPCODE(Xor, "xor", true, 2,
-             "bval := bval_a | bval_b; aval := (aval_a ^ aval_b) | bval")
-ENZAN_OPCODE(Xnor, "xnor", true, 2, "as Xor with the aval expression complemented")
-ENZAN_OPCODE(Not, "not", true, 1, "bval := bval_a; aval := ~aval_a | bval_a")
+ENZAN_OPCODE(And, "and", true, 2)
+ENZAN_OPCODE(Or, "or", true, 2)
+ENZAN_OPCODE(Xor, "xor", true, 2)
+ENZAN_OPCODE(Xnor, "xnor", true, 2)
+ENZAN_OPCODE(Not, "not", true, 1)
 
 // --- Reduction and truth ---------------------------------------------------
 
-ENZAN_OPCODE(ReduceAnd, "rand", true, 1,
-             "icmp eq of the aval plane against all-ones, combined with an "
-             "unknown-present test; a llvm.vector.reduce.and for wide values")
-ENZAN_OPCODE(ReduceOr, "ror", true, 1, "as ReduceAnd against zero")
-ENZAN_OPCODE(ReduceXor, "rxor", true, 1,
-             "llvm.ctpop on the aval plane and 1, guarded by an unknown-present "
-             "test that forces X")
-ENZAN_OPCODE(CountOnes, "cntones", true, 1,
-             "llvm.ctpop of `aval & ~bval` per limb, summed, which counts the bits that are "
-             "exactly 1 and so leaves X and Z out, as `$countones` does")
-ENZAN_OPCODE(CeilLog2, "clog2", true, 1,
-             "the position of the highest set bit, found by llvm.ctlz per limb, plus one "
-             "unless the operand is a power of two; 0 for 0 and 1, and X for an operand "
-             "with an X or Z bit, as `$clog2` does")
-ENZAN_OPCODE(LogicalAnd, "land", true, 2,
-             "the truth values of both operands combined by the three-valued AND "
-             "table; the compiler emits branches for short-circuit evaluation and "
-             "reaches this only when both operands are already available")
-ENZAN_OPCODE(LogicalOr, "lor", true, 2, "as LogicalAnd with the dual table")
-ENZAN_OPCODE(LogicalNot, "lnot", true, 1, "the three-valued negation of the truth value")
+ENZAN_OPCODE(ReduceAnd, "rand", true, 1)
+ENZAN_OPCODE(ReduceOr, "ror", true, 1)
+ENZAN_OPCODE(ReduceXor, "rxor", true, 1)
+ENZAN_OPCODE(CountOnes, "cntones", true, 1)
+ENZAN_OPCODE(CeilLog2, "clog2", true, 1)
+ENZAN_OPCODE(LogicalAnd, "land", true, 2)
+ENZAN_OPCODE(LogicalOr, "lor", true, 2)
+ENZAN_OPCODE(LogicalNot, "lnot", true, 1)
 
 // --- Arithmetic ------------------------------------------------------------
 //
@@ -212,162 +87,66 @@ ENZAN_OPCODE(LogicalNot, "lnot", true, 1, "the three-valued negation of the trut
 // "either operand has an unknown bit" rather than tracking unknowns per bit, which
 // is both correct and the faster shape.
 
-ENZAN_OPCODE(Add, "add", true, 2,
-             "a branch on the combined bval planes; the known path is `add` with "
-             "llvm.uadd.with.overflow chaining across limbs, the unknown path stores "
-             "all-ones to both planes; on reals, fadd of the aval planes as doubles, as "
-             "Subtract, Multiply, Divide, Negate and Power are fsub, fmul, fdiv, fneg and "
-             "llvm.powi")
-ENZAN_OPCODE(Subtract, "sub", true, 2, "as Add with `sub` and borrow chaining")
-ENZAN_OPCODE(Multiply, "mul", true, 2,
-             "as Add with `mul`; wide values call the runtime helper, since LLVM has "
-             "no arbitrary-precision multiply")
-ENZAN_OPCODE(Divide, "div", true, 2,
-             "as Add with `udiv` or `sdiv`, additionally branching on a zero divisor "
-             "to the all-X path, because the language defines division by zero as X "
-             "rather than as undefined behaviour")
-ENZAN_OPCODE(Modulo, "mod", true, 2, "as Divide with `urem` or `srem`")
-ENZAN_OPCODE(Negate, "neg", true, 1, "as Add with `sub` from zero")
-ENZAN_OPCODE(Power, "pow", true, 3,
-             "a branch on either operand's bval plane to the all-X path, a branch on the "
-             "exponent's sign when the immediate third operand says it is signed to the "
-             "table of IEEE 1800 section 11.4.3 for a negative exponent, then square and "
-             "multiply over the exponent's bits with `mul`; wide values call the runtime "
-             "helper, as Multiply does")
-ENZAN_OPCODE(RealPower, "rpow", true, 2,
-             "llvm.pow on the aval planes interpreted as doubles; real values have no bval "
-             "plane")
-ENZAN_OPCODE(RealUnaryMath, "rmath1", true, 2,
-             "the second, immediate operand selects llvm.log, llvm.log10, llvm.exp, llvm.sqrt, "
-             "llvm.floor, llvm.ceil, llvm.sin or llvm.cos where applicable, and the matching "
-             "libm call for the other IEEE 1800 real math functions")
-ENZAN_OPCODE(RealBinaryMath, "rmath2", true, 3,
-             "the third, immediate operand selects llvm.pow or the libm atan2 or hypot call on "
-             "the first two operands as doubles")
+ENZAN_OPCODE(Add, "add", true, 2)
+ENZAN_OPCODE(Subtract, "sub", true, 2)
+ENZAN_OPCODE(Multiply, "mul", true, 2)
+ENZAN_OPCODE(Divide, "div", true, 2)
+ENZAN_OPCODE(Modulo, "mod", true, 2)
+ENZAN_OPCODE(Negate, "neg", true, 1)
+ENZAN_OPCODE(Power, "pow", true, 3)
+ENZAN_OPCODE(RealPower, "rpow", true, 2)
+ENZAN_OPCODE(RealUnaryMath, "rmath1", true, 2)
+ENZAN_OPCODE(RealBinaryMath, "rmath2", true, 3)
 
 // --- Shifts ----------------------------------------------------------------
 
-ENZAN_OPCODE(ShiftLeft, "shl", true, 2,
-             "a branch on the amount's bval plane to the all-X path, a compare "
-             "against the width to the all-zero path, then `shl` on both planes")
-ENZAN_OPCODE(ShiftRightLogical, "shr", true, 2, "as ShiftLeft with `lshr`")
-ENZAN_OPCODE(ShiftRightArithmetic, "sar", true, 2,
-             "as ShiftLeft with `ashr` on aval and on bval, so that an unknown sign "
-             "bit replicates as X rather than as zero")
+ENZAN_OPCODE(ShiftLeft, "shl", true, 2)
+ENZAN_OPCODE(ShiftRightLogical, "shr", true, 2)
+ENZAN_OPCODE(ShiftRightArithmetic, "sar", true, 2)
 
 // --- Comparison ------------------------------------------------------------
 
-ENZAN_OPCODE(Equal, "eq", true, 2,
-             "icmp eq of the aval planes masked to the bits known on both sides; a "
-             "mismatch there is 0, otherwise a branch on the combined bval planes to "
-             "the X result, otherwise 1")
-ENZAN_OPCODE(NotEqual, "ne", true, 2, "as Equal with icmp ne")
-ENZAN_OPCODE(CaseEqual, "ceq", true, 2,
-             "icmp eq on both planes with no unknown check at all; this is `===`, "
-             "which never yields X")
-ENZAN_OPCODE(CaseNotEqual, "cne", true, 2, "as CaseEqual negated")
-ENZAN_OPCODE(WildcardEqual, "weq", true, 2,
-             "as Equal with both planes masked to the bits where the right operand's "
-             "bval is clear, so that its X and Z bits compare as anything; `==?`")
-ENZAN_OPCODE(WildcardNotEqual, "wne", true, 2, "as WildcardEqual negated; `!=?`")
-ENZAN_OPCODE(CaseZMatch, "czmatch", true, 2,
-             "icmp eq of both planes masked to the bits that are Z in neither operand, "
-             "which is how `casez` compares an item with its selector")
-ENZAN_OPCODE(CaseXMatch, "cxmatch", true, 2,
-             "icmp eq of the aval planes masked to the bits where neither operand's bval "
-             "is set, which is how `casex` compares an item with its selector")
-ENZAN_OPCODE(LessThan, "lt", true, 2,
-             "a branch on the combined bval planes to the X result, then icmp ult or "
-             "icmp slt on the aval planes according to the signed flag; on reals, fcmp olt "
-             "of the aval planes as doubles, as Equal, NotEqual and LessEqual are fcmp oeq, "
-             "une and ole")
-ENZAN_OPCODE(LessEqual, "le", true, 2, "as LessThan with icmp ule or icmp sle")
+ENZAN_OPCODE(Equal, "eq", true, 2)
+ENZAN_OPCODE(NotEqual, "ne", true, 2)
+ENZAN_OPCODE(CaseEqual, "ceq", true, 2)
+ENZAN_OPCODE(CaseNotEqual, "cne", true, 2)
+ENZAN_OPCODE(WildcardEqual, "weq", true, 2)
+ENZAN_OPCODE(WildcardNotEqual, "wne", true, 2)
+ENZAN_OPCODE(CaseZMatch, "czmatch", true, 2)
+ENZAN_OPCODE(CaseXMatch, "cxmatch", true, 2)
+ENZAN_OPCODE(LessThan, "lt", true, 2)
+ENZAN_OPCODE(LessEqual, "le", true, 2)
 
 // --- Selection and splicing ------------------------------------------------
 
-ENZAN_OPCODE(BitSelect, "bitsel", true, 2,
-             "a range check against the width branching to the X result, then lshr "
-             "by the index and mask to one bit on each plane")
-ENZAN_OPCODE(PartSelect, "partsel", true, 2,
-             "as BitSelect with a mask of the destination width, and the "
-             "out-of-range bits filled with X")
-ENZAN_OPCODE(SplicePart, "splice", true, 2,
-             "a mask-and-merge on both planes of the destination register, which the "
-             "compiler uses to build concatenations and to read-modify-write a part "
-             "select; the destination register is both read and written")
-ENZAN_OPCODE(Conditional, "sel", true, 3,
-             "a branch on the condition's truth value to a plain select, plus a "
-             "merge path for the unknown case that keeps the bits where the arms "
-             "agree")
+ENZAN_OPCODE(BitSelect, "bitsel", true, 2)
+ENZAN_OPCODE(PartSelect, "partsel", true, 2)
+ENZAN_OPCODE(SplicePart, "splice", true, 2)
+ENZAN_OPCODE(Conditional, "sel", true, 3)
 
 // A user-defined primitive's table (IEEE 1800 section 29), a constant laid out as eir/Udp.h
 // describes, matched against its inputs, the first the most significant bit of the first operand.
-ENZAN_OPCODE(UdpCombinational, "udp", true, 2,
-             "a call to the runtime helper that matches the inputs against the table, a private "
-             "constant global, and returns the one-bit output")
-ENZAN_OPCODE(UdpSequential, "sudp", true, 3,
-             "as UdpCombinational, through the sequential helper, with the inputs as they were "
-             "above the current state as its second operand and the table as its third; the "
-             "helper returns the next state")
+ENZAN_OPCODE(UdpCombinational, "udp", true, 2)
+ENZAN_OPCODE(UdpSequential, "sudp", true, 3)
 
 // --- Time and system tasks -------------------------------------------------
 
-ENZAN_OPCODE(ReadEvent, "event", true, 1,
-             "a compare of the signal's last-change cycle, an array of the kernel's indexed by "
-             "the signal, against the kernel's current cycle: VHDL's 'event, true when the "
-             "signal changed in the update this cycle began with")
-ENZAN_OPCODE(ReadActive, "active", true, 1,
-             "as ReadEvent, of the cycle the signal last had a transaction or a change in: "
-             "VHDL's 'active, true when the signal was active in the update this cycle began "
-             "with, whether or not its value changed")
-ENZAN_OPCODE(ReadLastValue, "lastvalue", true, 1,
-             "a load from the shadow copy the kernel keeps of the signal's value before its last "
-             "change, for the signals a body reads it of: VHDL's 'last_value")
-ENZAN_OPCODE(ReadTime, "time", true, 0,
-             "a load of the kernel's current-time field; the JIT keeps the arena "
-             "base and the time field in the same structure so this is one load")
-ENZAN_OPCODE(SysTask, "systask", false, 1,
-             "a call to the runtime with the call descriptor's index; system tasks "
-             "are never inlined, because their cost is dominated by formatting and "
-             "I/O rather than by the call")
-ENZAN_OPCODE(SysFunction, "sysfunc", true, 1,
-             "as SysTask, with a pointer to the result register as a second argument; "
-             "a system function's result depends on state the runtime keeps, such as "
-             "a random generator")
+ENZAN_OPCODE(ReadEvent, "event", true, 1)
+ENZAN_OPCODE(ReadActive, "active", true, 1)
+ENZAN_OPCODE(ReadLastValue, "lastvalue", true, 1)
+ENZAN_OPCODE(ReadTime, "time", true, 0)
+ENZAN_OPCODE(SysTask, "systask", false, 1)
+ENZAN_OPCODE(SysFunction, "sysfunc", true, 1)
 
 // --- Calls -----------------------------------------------------------------
 //
 // A call runs a subprogram's body to its return. It never suspends: a subprogram that waits is
-// inlined into its caller instead, which is what lets the callee be an ordinary LLVM function
-// and its registers live on one stack.
+// inlined into its caller instead.
 
-ENZAN_OPCODE(Call, "call", false, 1,
-             "a `call` of the LLVM function the callee's body is compiled to, the call site "
-             "the first operand names giving its in arguments by value and pointers to the "
-             "caller's registers for its out and inout ones; the callee's registers are an "
-             "`alloca` of that function, as they are the kernel's call stack in the "
-             "interpreter, and a function's result is copied into the call site's register "
-             "after the `ret`")
+ENZAN_OPCODE(Call, "call", false, 1)
 
-// --- Suspension ------------------------------------------------------------
-//
-// A process suspends by returning to the scheduler. The lowering of a suspension
-// point is therefore a store of the resume block's index followed by `ret void`,
-// and the process body becomes a state machine over a switch on that index. This
-// is the standard resumable-coroutine shape and is why the interpreter and the JIT
-// can share the scheduler unchanged.
 
-ENZAN_OPCODE(WaitTime, "waittime", false, 2,
-             "a call to the scheduler to re-arm this process after the given delay, "
-             "a store of the resume index, then ret void")
-ENZAN_OPCODE(WaitEvents, "waitevents", false, 2,
-             "a call to the scheduler to subscribe to every entry of the event list the "
-             "immediate first operand names, under one wait generation so that the first "
-             "to fire discards the rest, a store of the resume index, then ret void")
-ENZAN_OPCODE(WaitEdge, "waitedge", false, 3,
-             "a call to the scheduler to subscribe to the given edge on the given "
-             "object, a store of the resume index, then ret void")
-ENZAN_OPCODE(WaitEventsFor, "waitfor", false, 3,
-             "as WaitEvents, and a call to the scheduler to resume the process after the delay "
-             "the third operand holds should none of the events come first, under the same wait "
-             "generation: VHDL's wait with a timeout and a sensitivity or a condition")
+ENZAN_OPCODE(WaitTime, "waittime", false, 2)
+ENZAN_OPCODE(WaitEvents, "waitevents", false, 2)
+ENZAN_OPCODE(WaitEdge, "waitedge", false, 3)
+ENZAN_OPCODE(WaitEventsFor, "waitfor", false, 3)

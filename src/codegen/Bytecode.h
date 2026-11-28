@@ -14,19 +14,7 @@
 
 namespace enzan::codegen {
 
-/// One executable instruction.
-///
-/// The opcode is EIR-B's own, deliberately: the JIT is to be a mechanical translation of the
-/// interpreter, and sharing the opcode space keeps the correspondence one-to-one instead of
-/// introducing a second vocabulary to map between. What the bytecode adds is *resolution*: virtual
-/// registers become Word offsets into the process's frame, blocks become instruction indices, and
-/// every width the operation needs is present in the instruction.
-///
-/// **Nothing here requires a lookup in a side table.** That is what lets the
-/// interpreter's inner loop touch only the instruction and the data, and what lets a
-/// JIT emit code for an instruction in isolation. The cost is 48 bytes per
-/// instruction, which is cache-unfriendly by the standards of a tight bytecode and is
-/// the first thing to revisit when M8 measures the interpreter.
+/// Executable instruction with resolved register offsets, block targets and widths.
 struct Instruction {
     eir::Opcode opcode = eir::Opcode::Nop;
 

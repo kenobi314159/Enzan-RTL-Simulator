@@ -184,6 +184,4 @@ On the order of 10,000 simulated clock cycles per second on a design of roughly
 100k FPGA LUTs on a single core, and within about 5× of Verilator on the purely
 synchronous subset.
 
-The number is **provisional** and will be replaced with a measured, committed
-figure. A tree-walking interpreter would not approach it; the bytecode VM is a
-large step up and the LLVM JIT (M8) is what is expected to reach it.
+The number is **provisional**; benchmark results should include preparation as well as execution.

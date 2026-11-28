@@ -11,17 +11,7 @@
 
 namespace enzan::runtime {
 
-/// The single contiguous allocation holding all mutable simulation state.
-///
-/// DESIGN_GUIDE.md section 4.3 requires exactly this, and the consequences are all
-/// deliberate: checkpoint and restore become a memcpy of the arena; the waveform
-/// database reads values straight out of it with no indirection; a JIT can burn offsets
-/// into generated code as constants; and cache locality becomes something that can be
-/// improved by reordering the layout rather than by chasing pointers.
-///
-/// Every access is by Word offset. Nothing in the simulator holds a pointer into the
-/// arena across a step, because the arena may be reallocated between runs and because a
-/// stored pointer is what makes checkpointing impossible.
+/// Contiguous simulation state, addressed by word offset rather than retained pointers.
 class Arena {
 public:
     Arena() = default;
