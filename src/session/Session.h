@@ -8,6 +8,7 @@
 #include "runtime/Kernel.h"
 #include "runtime/Time.h"
 
+#include <chrono>
 #include <cstdint>
 #include <filesystem>
 #include <iosfwd>
@@ -76,6 +77,21 @@ namespace enzan::session {
 /// carry on after one is entitled to.
 class Session {
 public:
+    /// Wall time spent in the pipeline, accumulated over calls to this session.
+    struct PhaseTimings {
+        std::chrono::nanoseconds analysis{};
+        std::chrono::nanoseconds elaboration{};
+        std::chrono::nanoseconds bytecode{};
+        std::chrono::nanoseconds image{};
+        std::chrono::nanoseconds simulation{};
+    };
+
+    /// Enables timing from this point onward; ordinary sessions do not read the clock.
+    void enablePhaseTimings() noexcept { timingEnabled = true; }
+
+    /// Returns accumulated timings. Elaboration includes bytecode and image preparation.
+    [[nodiscard]] const PhaseTimings& phaseTimings() const noexcept { return timings; }
+
     /// `sources` and `diagnostics` must outlive the session.
     Session(SourceManager& sourceManager, DiagnosticEngine& engine);
 
@@ -637,6 +653,8 @@ private:
     std::uint32_t deltaLimit = 10'000;
     std::uint8_t stopSeverity = 3;
     std::uint32_t seed = 0;
+    PhaseTimings timings;
+    bool timingEnabled = false;
 
     /// Bumped by `discardElaboration`, which every path that replaces the simulation goes
     /// through. See `elaborationGeneration`.
