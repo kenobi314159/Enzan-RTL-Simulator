@@ -33,6 +33,19 @@ if(NOT ENZAN_HAVE_COCOTB)
   message(STATUS "cocotb not found; the cocotb golden tests are skipped")
 endif()
 
+if(ENZAN_ENABLE_SYSTEMVERILOG AND ENZAN_HAVE_COCOTB)
+  find_program(ENZAN_BENCH_IVERILOG iverilog)
+  find_program(ENZAN_BENCH_VVP vvp)
+  if(ENZAN_BENCH_IVERILOG AND ENZAN_BENCH_VVP)
+    add_test(NAME bench.cocotb
+             COMMAND "${PROJECT_SOURCE_DIR}/bench/run-cocotb.sh" $<TARGET_FILE:enzan>
+                     "${ENZAN_COCOTB_PYTHON}" "${PROJECT_BINARY_DIR}/bench-cocotb")
+    set_tests_properties(bench.cocotb PROPERTIES TIMEOUT 120)
+  else()
+    message(STATUS "Icarus Verilog not found; the cocotb benchmark check is skipped")
+  endif()
+endif()
+
 # What the cocotb golden tests change in a sanitiser run's environment. Each runs CPython inside
 # Enzan, and neither CPython nor cocotb frees everything it allocated before the process exits,
 # so leak checking is off for those runs alone; ASan and UBSan still check everything else. A
