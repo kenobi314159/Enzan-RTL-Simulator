@@ -24,6 +24,7 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <array>
 #include <bit>
 #include <cstdint>
 #include <format>
@@ -475,6 +476,63 @@ TEST(Kernel, NegedgeFiresOnATransitionTowardsZero) {
 
     simulation.run();
     EXPECT_EQ(simulation.value("/tb/count", Radix::Decimal), "1");
+}
+
+TEST(Kernel, EveryFourStateEdgeUsesTheLowestBit) {
+    constexpr std::array<std::string_view, 4> Values{"1'b0", "1'b1", "1'bx", "1'bz"};
+    const auto matches = [](EdgeKind edge, char before, char after) {
+        if (before == after) return false;
+        return edge == EdgeKind::Posedge ? before == '0' || after == '1'
+                                         : before == '1' || after == '0';
+    };
+    for (const auto edge : {EdgeKind::Posedge, EdgeKind::Negedge}) {
+        for (const auto first : Values) {
+            for (const auto second : Values) {
+                Simulation simulation(makeClockedDesign(edge, first, second), "tb");
+                ASSERT_TRUE(simulation.ready());
+                simulation.run();
+                const int expected = static_cast<int>(matches(edge, 'x', first.back()))
+                                     + static_cast<int>(matches(edge, first.back(), second.back()));
+                EXPECT_EQ(simulation.value("/tb/count", Radix::Decimal), std::to_string(expected))
+                    << first << " -> " << second;
+            }
+        }
+    }
+}
+
+TEST(Kernel, NonblockingPartWriteDetectsAnEdgeOnTheLowestBit) {
+    ProcessBuilder driver(ProcessKind::Initial, "driver");
+    const auto bit = driver.reg(Type::logic());
+    const auto index = driver.reg(Type::bits(32, false, true));
+    const auto one = driver.constant("1'b1");
+    const auto zero = driver.constant("32'd0");
+    driver.block("entry");
+    driver.emit(Instruction::make(Opcode::LoadConstant, Operand::reg(bit), Operand::constant(one)));
+    driver.emit(
+        Instruction::make(Opcode::LoadConstant, Operand::reg(index), Operand::constant(zero)));
+    driver.storePartNonBlocking(0, bit, index, 2);
+    driver.emit(Instruction::make(Opcode::Return));
+
+    ProcessBuilder watcher(ProcessKind::AlwaysFf, "watcher");
+    const auto seen = watcher.reg(Type::logic());
+    const auto seenValue = watcher.constant("1'b1");
+    watcher.sensitive(0, EdgeKind::Posedge);
+    watcher.block("entry");
+    watcher.emit(
+        Instruction::make(Opcode::LoadConstant, Operand::reg(seen), Operand::constant(seenValue)));
+    watcher.store(1, seen);
+    watcher.emit(Instruction::make(Opcode::Return));
+
+    auto design = designOf(makeTop(
+        {driver.finish(), watcher.finish()},
+        {Object{
+             .name = "clock", .type = Type::bits(2, false, true), .initialValue = literal("2'b0z")},
+         Object{.name = "seen", .type = Type::logic(), .initialValue = literal("1'b0")}}));
+    Simulation simulation(std::move(design), "tb");
+    ASSERT_TRUE(simulation.ready());
+    EXPECT_EQ(simulation.run(), RunStatus::Quiescent);
+    EXPECT_EQ(simulation.value("/tb/clock"), "01");
+    EXPECT_EQ(simulation.value("/tb/seen"), "1");
 }
 
 TEST(Kernel, AWriteOfTheSameValueWakesNothing) {
